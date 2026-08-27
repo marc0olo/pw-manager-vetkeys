@@ -153,6 +153,41 @@ describe("idle timeout (open tab)", () => {
     session.stop();
   });
 
+  // The live half used to compute a negative elapsed time and simply wait, so a
+  // backwards jump meant the vault never locked at all.
+  it("locks when the clock moves backwards under a running session", () => {
+    const onIdle = vi.fn();
+    const session = startSession(PRINCIPAL, { onIdle, onRemoteLock: vi.fn() });
+
+    vi.setSystemTime(Date.now() - 60 * 60_000);
+    vi.advanceTimersByTime(IDLE_CHECK_INTERVAL_MS);
+
+    expect(onIdle).toHaveBeenCalledTimes(1);
+    session.stop();
+  });
+
+  it("does not lock on clock skew within tolerance", () => {
+    const onIdle = vi.fn();
+    const session = startSession(PRINCIPAL, { onIdle, onRemoteLock: vi.fn() });
+
+    vi.setSystemTime(Date.now() - 5_000);
+    vi.advanceTimersByTime(IDLE_CHECK_INTERVAL_MS);
+
+    expect(onIdle).not.toHaveBeenCalled();
+    session.stop();
+  });
+
+  it("checks the deadline on a bfcache restore (pageshow)", () => {
+    const onIdle = vi.fn();
+    const session = startSession(PRINCIPAL, { onIdle, onRemoteLock: vi.fn() });
+
+    vi.setSystemTime(Date.now() + 60 * 60_000);
+    window.dispatchEvent(new Event("pageshow")); // no timer tick at all
+    expect(onIdle).toHaveBeenCalledTimes(1);
+
+    session.stop();
+  });
+
   it("ignores events after stop() when a listener would otherwise re-arm", () => {
     const onIdle = vi.fn();
     const session = startSession(PRINCIPAL, { onIdle, onRemoteLock: vi.fn() });
@@ -216,10 +251,30 @@ describe("the persisted mark (closed tab)", () => {
     expect(idleElapsedMs()).toBeNull();
   });
 
-  it("never reports negative elapsed time if the clock moves backwards", () => {
+  it("tolerates small clock skew rather than logging the user out", () => {
+    // NTP corrections and resume-from-sleep step the clock a little; that must
+    // not end the session.
     markActive(PRINCIPAL);
-    vi.setSystemTime(Date.now() - 60_000);
+    vi.setSystemTime(Date.now() - 5_000);
     expect(idleElapsedMs()).toBe(0);
+  });
+
+  // The load-time half used to clamp a future mark to 0, i.e. report "just
+  // active" for a session that could be hours stale — fail-open in the one
+  // function every other decision trusts.
+  it("refuses a mark from the future beyond tolerable skew", () => {
+    markActive(PRINCIPAL);
+    vi.setSystemTime(Date.now() - 20 * 60_000);
+    expect(idleElapsedMs()).toBeNull();
+  });
+
+  it("refuses a session whose mark was already stale before a backwards jump", () => {
+    markActive(PRINCIPAL);
+    vi.setSystemTime(Date.now() + 10 * 60_000); // now genuinely stale
+    expect(idleElapsedMs()).toBeGreaterThan(IDLE_TIMEOUT_MS);
+
+    vi.setSystemTime(Date.now() - 20 * 60_000); // clock wound back past the mark
+    expect(idleElapsedMs()).toBeNull(); // not 0 — staleness is unknowable, so refuse
   });
 });
 

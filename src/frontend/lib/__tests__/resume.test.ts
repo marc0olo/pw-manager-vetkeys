@@ -146,6 +146,27 @@ describe("resumeSession", () => {
     expect(lockReason).toBeNull(); // nothing was torn down; do not alarm the user
   });
 
+  // The reviewer's demonstration: a mark already past the timeout, then a
+  // backwards clock jump, used to resume a session that should have been refused.
+  it("refuses a session whose staleness a backwards clock has hidden", async () => {
+    await given({ markAgeMs: -20 * 60_000, authenticated: true }); // mark in the future
+
+    const { identity, lockReason } = await resumeSession();
+
+    expect(identity).toBeNull();
+    expect(lockReason).toBe("expired");
+    expect(await keyStoreExists(PRINCIPAL)).toBe(false);
+  });
+
+  it("still resumes across clock skew within tolerance", async () => {
+    await given({ markAgeMs: -5_000, authenticated: true });
+
+    const { identity, lockReason } = await resumeSession();
+
+    expect(identity).not.toBeNull();
+    expect(lockReason).toBeNull();
+  });
+
   it("refuses when the mark belongs to a different principal", async () => {
     await given({ markAgeMs: 60_000, markPrincipal: OTHER, authenticated: true });
 

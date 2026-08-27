@@ -38,6 +38,18 @@ export const SESSION_POLICY = {
 export const IDLE_TIMEOUT_MS = SESSION_POLICY.idleMinutes * 60_000;
 export const IDLE_TIMEOUT_LABEL = `${SESSION_POLICY.idleMinutes} minutes`;
 
+/**
+ * How far the clock may move, in either direction, before a timestamp is treated
+ * as untrustworthy rather than merely skewed.
+ *
+ * NTP corrections and resume-from-sleep can step a device's clock by a small
+ * amount, and locking someone out over a few hundred milliseconds of skew would
+ * be its own bug. Anything larger is either a deliberate change or a clock wrong
+ * enough that the honest answer is "this session cannot be vouched for" — and
+ * that answer must fail closed, which is the whole premise of this module.
+ */
+const CLOCK_SKEW_TOLERANCE_MS = 30_000;
+
 const ACTIVITY_KEY = "vetvault:last-active";
 const PRINCIPAL_KEY = "vetvault:principal";
 
@@ -95,8 +107,14 @@ export function idleElapsedMs(): number | null {
     const raw = window.localStorage.getItem(ACTIVITY_KEY);
     const at = raw === null ? Number.NaN : Number(raw);
     if (!Number.isFinite(at)) return null;
-    // A clock moved backwards would otherwise read as "just active".
-    return Math.max(0, Date.now() - at);
+
+    const elapsed = Date.now() - at;
+    // A mark in the future means the clock moved backwards since it was written,
+    // so the age of this session is unknowable. Returning null refuses it;
+    // clamping to 0 would report "just active" and resume a session that may be
+    // hours stale — fail-open, in the one function everything else trusts.
+    if (elapsed < -CLOCK_SKEW_TOLERANCE_MS) return null;
+    return Math.max(0, elapsed);
   } catch {
     return null;
   }
@@ -215,7 +233,11 @@ export function startSession(
   /** Lock if the wall clock says the deadline has passed. Fires at most once. */
   const checkDeadline = () => {
     if (stopped || fired) return;
-    if (Date.now() - lastActivity < IDLE_TIMEOUT_MS) return;
+    const elapsed = Date.now() - lastActivity;
+    // Past the deadline, or the clock moved backwards under us so the deadline
+    // can no longer be measured. Both lock; waiting out an unmeasurable deadline
+    // is the fail-open answer.
+    if (elapsed < IDLE_TIMEOUT_MS && elapsed >= -CLOCK_SKEW_TOLERANCE_MS) return;
     fired = true;
     onIdle();
   };
@@ -269,6 +291,9 @@ export function startSession(
     window.addEventListener(event, onActivity, { passive: true, capture: true });
   }
   window.addEventListener("pagehide", flush);
+  // Symmetric counterpart: a bfcache restore does not always fire
+  // visibilitychange, and the poll would otherwise take up to one interval.
+  window.addEventListener("pageshow", checkDeadline);
   document.addEventListener("visibilitychange", onVisibilityChange);
 
   return {
@@ -279,6 +304,7 @@ export function startSession(
         window.removeEventListener(event, onActivity, { capture: true });
       }
       window.removeEventListener("pagehide", flush);
+      window.removeEventListener("pageshow", checkDeadline);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       channel?.close();
     },
