@@ -1,4 +1,4 @@
-import { CheckIcon, LockIcon, ShieldIcon } from "./Icons";
+import { CheckIcon, ExternalIcon, LockIcon, ShieldIcon } from "./Icons";
 import { IDENTITY_PROVIDER, USING_LOCAL_II, type LockReason } from "../lib/auth";
 import { IDLE_TIMEOUT_LABEL } from "../lib/session";
 
@@ -31,11 +31,37 @@ const LOCK_STATE: Record<LockReason, { title: string; detail: string }> = {
   },
 };
 
-/** First visit only. Someone re-unlocking their own vault already knows this. */
-const WHAT_THIS_IS = [
-  "No master password — your key is derived for your Internet Identity.",
-  "Secrets are encrypted here in the browser; the canister only ever holds ciphertext.",
-  `Locks itself after ${IDLE_TIMEOUT_LABEL} of inactivity.`,
+const VETKEYS_DOCS = "https://docs.internetcomputer.org/concepts/vetkeys/";
+
+/**
+ * First visit only — someone re-unlocking their own vault already knows this.
+ *
+ * Three claims, each one defensible: ciphertext-only storage, key derivation with
+ * no master password, and revocable sharing. The idle timeout used to sit here,
+ * but it is an operating detail rather than a reason to care, and it already
+ * appears on the locked screen where it explains something.
+ */
+const WHAT_THIS_IS: { lead: string; detail: React.ReactNode }[] = [
+  {
+    lead: "Encrypted before it leaves your browser.",
+    detail: "The canister stores ciphertext and nothing else — no node, no operator and no backup holds a readable copy of your secrets.",
+  },
+  {
+    lead: "No master password to remember, or lose.",
+    detail: (
+      <>
+        Your key is derived on demand for your Internet Identity through{" "}
+        <a href={VETKEYS_DOCS} target="_blank" rel="noreferrer noopener">
+          vetKeys
+        </a>
+        , where no node or canister ever sees the raw key.
+      </>
+    ),
+  },
+  {
+    lead: "Share a vault — and take it back.",
+    detail: "A colleague gets the vault key re-encrypted for them alone. Revoke it and the canister stops deriving that key for them: no password to rotate, nothing to chase.",
+  },
 ];
 
 export function LockScreen({ onSignIn, busy, error, lockReason }: Props) {
@@ -43,7 +69,7 @@ export function LockScreen({ onSignIn, busy, error, lockReason }: Props) {
 
   return (
     <main className="lock">
-      <div className="lock__card">
+      <div className={`lock__card ${locked ? "" : "lock__card--intro"}`}>
         <div className="lock__brand">
           <span className={`lock__mark ${locked ? "lock__mark--locked" : ""}`}>
             {locked ? <LockIcon /> : <ShieldIcon />}
@@ -58,12 +84,14 @@ export function LockScreen({ onSignIn, busy, error, lockReason }: Props) {
           </div>
         ) : (
           <>
-            <p className="lock__tagline">End-to-end encrypted passwords on the Internet Computer.</p>
+            <h2 className="lock__headline">Passwords only you can read.</h2>
             <ul className="lock__points">
-              {WHAT_THIS_IS.map((point) => (
-                <li key={point}>
+              {WHAT_THIS_IS.map(({ lead, detail }) => (
+                <li key={lead}>
                   <CheckIcon />
-                  <span>{point}</span>
+                  <span>
+                    <strong>{lead}</strong> {detail}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -78,6 +106,15 @@ export function LockScreen({ onSignIn, busy, error, lockReason }: Props) {
         {error && (
           <p className="lock__error" role="alert">
             {error}
+          </p>
+        )}
+
+        {!locked && (
+          <p className="lock__credit">
+            <a href={VETKEYS_DOCS} target="_blank" rel="noreferrer noopener">
+              How vetKeys derives and shares keys
+              <ExternalIcon />
+            </a>
           </p>
         )}
 

@@ -206,10 +206,16 @@ code,
   color: #fff;
 }
 
-.lock__tagline {
-  margin: 0 0 18px;
-  color: var(--muted);
-  font-size: 14px;
+/* The first-visit card has more to say, so it gets more room. */
+.lock__card--intro {
+  width: min(520px, 100%);
+}
+
+.lock__headline {
+  margin: 0 0 20px;
+  font-size: 21px;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
   text-align: left;
 }
 
@@ -225,10 +231,44 @@ code,
   display: flex;
   align-items: flex-start;
   gap: 9px;
-  margin-bottom: 9px;
+  margin-bottom: 13px;
   color: var(--muted);
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.5;
+}
+
+.lock__points strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.lock__points a,
+.lock__credit a {
+  color: var(--blue);
+  text-decoration: none;
+}
+
+.lock__points a:hover,
+.lock__credit a:hover {
+  text-decoration: underline;
+}
+
+/* Attribution under the button — the differentiator, not fine print. */
+.lock__credit {
+  margin: 14px 0 0;
+  font-size: 12px;
+  text-align: center;
+}
+
+.lock__credit a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lock__credit svg {
+  width: 13px;
+  height: 13px;
 }
 
 .lock__points svg {
