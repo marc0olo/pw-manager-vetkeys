@@ -37,7 +37,6 @@ export const SESSION_POLICY = {
 
 export const IDLE_TIMEOUT_MS = SESSION_POLICY.idleMinutes * 60_000;
 export const IDLE_TIMEOUT_LABEL = `${SESSION_POLICY.idleMinutes} minutes`;
-export const SESSION_LIFETIME_LABEL = `${SESSION_POLICY.delegationHours}-hour`;
 
 const ACTIVITY_KEY = "vetvault:last-active";
 const PRINCIPAL_KEY = "vetvault:principal";
@@ -163,8 +162,24 @@ const ACTIVITY_EVENTS = [
   "touchstart",
 ] as const;
 
-/** At most one localStorage write per this interval; the timer re-arms freely. */
+/** At most one localStorage write per this interval. */
 const MARK_THROTTLE_MS = 15_000;
+
+/**
+ * How often the idle deadline is re-checked against the wall clock.
+ *
+ * The check is a comparison against `Date.now()`, not a `setTimeout` that is
+ * expected to fire on time: timers do not run while a page is frozen or the
+ * machine is asleep, and on resume a pending timeout keeps its *original*
+ * remaining delay. A lid closed for an hour would otherwise reopen on a
+ * decrypted vault with minutes still to run — the same "a timer cannot measure
+ * time it did not run for" failure this module fixes for the closed case.
+ *
+ * Worst-case overshoot is one interval, and browsers throttle timers in
+ * background tabs, so the visibility handler also checks on return to make the
+ * lock immediate whenever the user is actually looking.
+ */
+export const IDLE_CHECK_INTERVAL_MS = 15_000;
 
 const LOCK_CHANNEL = "vetvault:session";
 
@@ -192,23 +207,25 @@ export function startSession(
 ): RunningSession {
   let lastActivity = Date.now();
   let lastWrite = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
+  let fired = false;
 
   writeMark(lastActivity, principal);
 
-  const arm = () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      if (!stopped) onIdle();
-    }, IDLE_TIMEOUT_MS);
+  /** Lock if the wall clock says the deadline has passed. Fires at most once. */
+  const checkDeadline = () => {
+    if (stopped || fired) return;
+    if (Date.now() - lastActivity < IDLE_TIMEOUT_MS) return;
+    fired = true;
+    onIdle();
   };
 
+  const ticker = setInterval(checkDeadline, IDLE_CHECK_INTERVAL_MS);
+
   const onActivity = () => {
-    if (stopped) return;
+    if (stopped || fired) return;
     const now = Date.now();
     lastActivity = now;
-    arm();
     // Throttle only the write. The mark is therefore at most MARK_THROTTLE_MS
     // stale, and `flush` below makes it exact when the page goes away.
     if (now - lastWrite >= MARK_THROTTLE_MS) {
@@ -228,6 +245,16 @@ export function startSession(
     if (!stopped) writeMark(lastActivity, principal);
   };
 
+  const onVisibilityChange = () => {
+    if (stopped) return;
+    if (document.visibilityState === "visible") {
+      // Back in view, possibly after a freeze or a suspend that paused timers.
+      checkDeadline();
+    } else {
+      flush();
+    }
+  };
+
   let channel: BroadcastChannel | undefined;
   try {
     channel = new BroadcastChannel(LOCK_CHANNEL);
@@ -242,18 +269,17 @@ export function startSession(
     window.addEventListener(event, onActivity, { passive: true, capture: true });
   }
   window.addEventListener("pagehide", flush);
-  document.addEventListener("visibilitychange", flush);
-  arm();
+  document.addEventListener("visibilitychange", onVisibilityChange);
 
   return {
     stop: () => {
       stopped = true;
-      clearTimeout(timer);
+      clearInterval(ticker);
       for (const event of ACTIVITY_EVENTS) {
         window.removeEventListener(event, onActivity, { capture: true });
       }
       window.removeEventListener("pagehide", flush);
-      document.removeEventListener("visibilitychange", flush);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       channel?.close();
     },
     broadcastLock: () => {

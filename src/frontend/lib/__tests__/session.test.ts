@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  IDLE_CHECK_INTERVAL_MS,
   IDLE_TIMEOUT_MS,
   idleElapsedMs,
   keyCacheName,
@@ -51,10 +52,12 @@ describe("idle timeout (open tab)", () => {
     const onIdle = vi.fn();
     const session = startSession(PRINCIPAL, { onIdle, onRemoteLock: vi.fn() });
 
-    vi.advanceTimersByTime(IDLE_TIMEOUT_MS - 1);
+    // Checked on an interval, so allow one tick of grain either side rather than
+    // depending on IDLE_TIMEOUT_MS being an exact multiple of it.
+    vi.advanceTimersByTime(IDLE_TIMEOUT_MS - IDLE_CHECK_INTERVAL_MS - 1);
     expect(onIdle).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(1);
+    vi.advanceTimersByTime(IDLE_CHECK_INTERVAL_MS + 1);
     expect(onIdle).toHaveBeenCalledTimes(1);
 
     session.stop();
@@ -72,7 +75,7 @@ describe("idle timeout (open tab)", () => {
     expect(onIdle).not.toHaveBeenCalled();
 
     // Then stop interacting.
-    vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+    vi.advanceTimersByTime(IDLE_TIMEOUT_MS + IDLE_CHECK_INTERVAL_MS);
     expect(onIdle).toHaveBeenCalledTimes(1);
 
     session.stop();
@@ -82,7 +85,7 @@ describe("idle timeout (open tab)", () => {
     const onIdle = vi.fn();
     const session = startSession(PRINCIPAL, { onIdle, onRemoteLock: vi.fn() });
 
-    vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+    vi.advanceTimersByTime(IDLE_TIMEOUT_MS + IDLE_CHECK_INTERVAL_MS);
     expect(onIdle).toHaveBeenCalledTimes(1);
 
     session.stop();
@@ -96,15 +99,58 @@ describe("idle timeout (open tab)", () => {
   it("re-arms for a fresh session after the previous one locked", () => {
     const first = vi.fn();
     const one = startSession(PRINCIPAL, { onIdle: first, onRemoteLock: vi.fn() });
-    vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+    vi.advanceTimersByTime(IDLE_TIMEOUT_MS + IDLE_CHECK_INTERVAL_MS);
     one.stop();
     expect(first).toHaveBeenCalledTimes(1);
 
     const second = vi.fn();
     const two = startSession(PRINCIPAL, { onIdle: second, onRemoteLock: vi.fn() });
-    vi.advanceTimersByTime(IDLE_TIMEOUT_MS);
+    vi.advanceTimersByTime(IDLE_TIMEOUT_MS + IDLE_CHECK_INTERVAL_MS);
     expect(second).toHaveBeenCalledTimes(1);
     two.stop();
+  });
+
+  // A setTimeout cannot measure time it did not run for. Timers are paused while
+  // a page is frozen or the machine is asleep, and on resume a pending timeout
+  // keeps its ORIGINAL remaining delay — so a lid closed for an hour would
+  // reopen on a decrypted vault with minutes still to run. The deadline is
+  // therefore compared against the wall clock, not awaited.
+  it("locks after a suspend that paused timers", () => {
+    const onIdle = vi.fn();
+    const session = startSession(PRINCIPAL, { onIdle, onRemoteLock: vi.fn() });
+
+    // Machine sleeps for an hour: wall clock advances, timers do not run.
+    vi.setSystemTime(Date.now() + 60 * 60_000);
+    expect(onIdle).not.toHaveBeenCalled(); // nothing has ticked yet
+
+    // The very first tick after resume must lock, not wait out the old delay.
+    vi.advanceTimersByTime(IDLE_CHECK_INTERVAL_MS);
+    expect(onIdle).toHaveBeenCalledTimes(1);
+
+    session.stop();
+  });
+
+  it("locks immediately on return to visibility after a suspend", () => {
+    const onIdle = vi.fn();
+    const session = startSession(PRINCIPAL, { onIdle, onRemoteLock: vi.fn() });
+
+    vi.setSystemTime(Date.now() + 60 * 60_000);
+    // No timer tick at all — the user simply switches back to the tab.
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(onIdle).toHaveBeenCalledTimes(1);
+
+    session.stop();
+  });
+
+  it("does not lock on return to visibility while still inside the window", () => {
+    const onIdle = vi.fn();
+    const session = startSession(PRINCIPAL, { onIdle, onRemoteLock: vi.fn() });
+
+    vi.setSystemTime(Date.now() + 60_000); // one minute, well inside 5
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(onIdle).not.toHaveBeenCalled();
+
+    session.stop();
   });
 
   it("ignores events after stop() when a listener would otherwise re-arm", () => {

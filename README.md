@@ -155,6 +155,11 @@ construction never runs, and it is single-shot. Owning it also means the in-page
 timer and the persisted mark are driven by the same activity events, so the two
 halves of the timeout cannot disagree.
 
+Both halves compare against the **wall clock** rather than waiting for a timer to
+fire. Timers do not run while a page is frozen or the machine is asleep, and a
+pending timeout resumes with its original remaining delay — so a lid closed for an
+hour would otherwise reopen on a decrypted vault with minutes still to run.
+
 > **Principals are per origin.** `http://localhost:5173` (`npm run dev`),
 > `http://frontend.local.localhost:8100` (deployed locally) and mainnet are three
 > different users with three different vaults.

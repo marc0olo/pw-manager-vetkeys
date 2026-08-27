@@ -132,6 +132,28 @@ export function App() {
 
   const lock = useCallback(
     async (reason: LockReason) => {
+      const session = sessionRef.current;
+      sessionRef.current = null;
+
+      // Take the UI out of the unlocked state FIRST, so nothing can start new
+      // work against the vault while the teardown runs — a save landing
+      // mid-purge would re-create the key store after it was deleted.
+      setIdentity(null);
+      setClient(null);
+      setVaults(null);
+      setSelectedVaultId(null);
+      setSelectedItemId(null);
+      setPane({ mode: "view" });
+      setQuery("");
+      setSharing(false);
+      setError(null);
+      setLockReason(reason);
+
+      session?.stop();
+      // Locking anywhere locks everywhere, except when this lock *came* from
+      // another tab — that would bounce the message back and forth.
+      if (reason !== "elsewhere") session?.broadcastLock();
+
       // Each step is independent and must run even if an earlier one throws:
       // failing halfway would leave the delegation or the persisted key store
       // behind, which is the dangerous direction.
@@ -143,24 +165,8 @@ export function App() {
       try {
         await signOut();
       } catch {
-        /* fall through: the UI must still lock */
+        /* the UI is already locked; nothing further to do */
       }
-      sessionRef.current?.stop();
-      // Locking anywhere locks everywhere, except when this lock *came* from
-      // another tab — that would bounce the message back and forth.
-      if (reason !== "elsewhere") sessionRef.current?.broadcastLock();
-      sessionRef.current = null;
-
-      setIdentity(null);
-      setClient(null);
-      setVaults(null);
-      setSelectedVaultId(null);
-      setSelectedItemId(null);
-      setPane({ mode: "view" });
-      setQuery("");
-      setSharing(false);
-      setError(null);
-      setLockReason(reason);
     },
     [client],
   );
