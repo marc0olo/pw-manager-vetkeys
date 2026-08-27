@@ -1,12 +1,27 @@
 import { LockIcon, ShieldIcon } from "./Icons";
+import {
+  IDENTITY_PROVIDER,
+  IDLE_TIMEOUT_LABEL,
+  SESSION_LIFETIME_LABEL,
+  USING_LOCAL_II,
+  type LockReason,
+} from "../lib/auth";
 
 interface Props {
   onSignIn: () => void;
   busy: boolean;
   error: string | null;
+  /** Set when this screen is the result of a lock, not a first visit. */
+  lockReason: LockReason | null;
 }
 
-export function LockScreen({ onSignIn, busy, error }: Props) {
+const LOCK_MESSAGE: Record<LockReason, string> = {
+  manual: "Vault locked. Your keys were discarded.",
+  idle: `Locked after ${IDLE_TIMEOUT_LABEL} of inactivity.`,
+  expired: `Your ${SESSION_LIFETIME_LABEL} session expired. Sign in again to unlock.`,
+};
+
+export function LockScreen({ onSignIn, busy, error, lockReason }: Props) {
   return (
     <main className="lock">
       <div className="lock__card">
@@ -16,6 +31,12 @@ export function LockScreen({ onSignIn, busy, error }: Props) {
           </span>
           <h1>vetVault</h1>
         </div>
+
+        {lockReason && (
+          <p className="lock__notice" role="status">
+            {LOCK_MESSAGE[lockReason]}
+          </p>
+        )}
 
         <p className="lock__lede">
           Your passwords are encrypted in this browser and stored on the Internet Computer. The
@@ -31,6 +52,14 @@ export function LockScreen({ onSignIn, busy, error }: Props) {
         {error && (
           <p className="lock__error" role="alert">
             {error}
+          </p>
+        )}
+
+        {USING_LOCAL_II && (
+          <p className="lock__env" title={IDENTITY_PROVIDER}>
+            Signing in against <strong>local Internet Identity</strong>, found from this page's
+            origin. This principal is local only — a mainnet deployment is a different user with a
+            different vault.
           </p>
         )}
       </div>
