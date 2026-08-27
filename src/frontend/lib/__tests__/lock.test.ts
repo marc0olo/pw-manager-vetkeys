@@ -22,6 +22,7 @@ function harness({
   const session: RunningSession = {
     stop: vi.fn(() => void order.push("stop")),
     broadcastLock: vi.fn(() => void order.push("broadcast")),
+    remainingMs: vi.fn(() => 0),
   };
 
   const steps = {

@@ -164,11 +164,12 @@ code,
 .lock,
 .loading {
   min-height: 100vh;
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   padding: 24px;
   gap: 16px;
-  align-content: center;
 }
 
 .lock__card {
@@ -178,15 +179,13 @@ code,
   border-radius: 16px;
   background: var(--surface);
   box-shadow: var(--shadow);
-  text-align: center;
+  text-align: left;
 }
 
 .lock__brand {
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 10px;
-  margin-bottom: 14px;
 }
 
 .lock__brand h1 {
@@ -206,12 +205,85 @@ code,
   color: #fff;
 }
 
-.lock__lede {
-  margin: 0 0 24px;
-  color: var(--muted);
-  font-size: 14px;
+/* The first-visit card has more to say, so it gets more room. */
+.lock__card--intro {
+  width: min(520px, 100%);
+}
+
+.lock__headline {
+  margin: 0 0 20px;
+  font-size: 21px;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
   text-align: left;
 }
+
+/* First visit: what this is, scannable rather than a paragraph. */
+.lock__points {
+  margin: 0 0 24px;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+
+.lock__points li {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 13px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.lock__points strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.lock__points a {
+  color: var(--blue);
+  text-decoration: none;
+}
+
+.lock__points a:hover {
+  text-decoration: underline;
+}
+
+
+.lock__points svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--blue);
+}
+
+/* Returning after a lock: state and reassurance, no first-run explanation. */
+.lock__status {
+  margin: 0 0 22px;
+  text-align: left;
+}
+
+.lock__status h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}
+
+.lock__status h2 svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.lock__status p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 
 .lock__error,
 .modal__error {
@@ -835,22 +907,88 @@ code,
 
 /* Development-build marker: shown only when wired to a local II. */
 .lock__env {
-  margin: 18px 0 0;
-  padding: 8px 12px;
-  border: 1px dashed var(--line);
-  border-radius: 8px;
+  margin: 16px 0 0;
+  text-align: center;
   color: var(--muted);
-  font-size: 12px;
-  text-align: left;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  cursor: help;
 }
 
-/* Why the vault is locked — inactivity, expiry, or the Lock button. */
-.lock__notice {
-  margin: 0 0 16px;
-  padding: 9px 12px;
-  border-radius: 8px;
-  background: var(--active);
+
+/* Time remaining before the idle lock, in the sidebar footer. */
+.countdown {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.countdown strong {
   color: var(--text);
-  font-size: 13px;
-  text-align: left;
+  font-weight: 600;
+}
+
+.countdown--warn {
+  color: var(--fair);
+}
+
+.countdown--warn strong {
+  color: var(--fair);
+}
+
+/* Principal plus its copy button. */
+.sidebar__whoRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar__whoRow code {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* "Shared with N" on an owned vault row. */
+.vaultRow__meta--shared {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  color: var(--blue);
+}
+
+.vaultRow__meta--shared svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* The fixed sign-in expiry, under the sliding idle countdown. */
+.sessionStatus {
+  margin: 0 0 10px;
+}
+
+.sessionStatus .countdown {
+  margin: 0;
+}
+
+.sessionStatus__expiry {
+  margin: 3px 0 0 23px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sessionStatus__expiry strong {
+  font-weight: 600;
+}
+
+.sessionStatus__expiry--warn {
+  color: var(--fair);
 }

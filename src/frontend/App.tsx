@@ -26,7 +26,7 @@ import { ItemList } from "./components/ItemList";
 import { LockScreen } from "./components/LockScreen";
 import { ShareDialog } from "./components/ShareDialog";
 import { Sidebar } from "./components/Sidebar";
-import { CheckIcon, CopyIcon, ShareIcon } from "./components/Icons";
+import { CheckIcon, ShareIcon } from "./components/Icons";
 
 type Pane = { mode: "view" } | { mode: "edit"; item: VaultItem; isNew: boolean };
 
@@ -129,7 +129,10 @@ export function App() {
    * delegation, then every trace of the vault in component state. Key material
    * must never outlive the session that authorised it.
    */
+  // The ref is what `lock()` reads — it must see the current session synchronously
+  // to avoid tearing one down twice. The state copy is what renders the countdown.
   const sessionRef = useRef<RunningSession | null>(null);
+  const [session, setSession] = useState<RunningSession | null>(null);
 
   const lock = useCallback(
     async (reason: LockReason) => {
@@ -169,25 +172,27 @@ export function App() {
   // cross-tab lock signal — see lib/session.
   useEffect(() => {
     if (!identity) return;
-    const session = startSession(identity.getPrincipal().toText(), {
+    const running = startSession(identity.getPrincipal().toText(), {
       onIdle: () => void lockRef.current("idle"),
       onRemoteLock: () => void lockRef.current("elsewhere"),
     });
-    sessionRef.current = session;
+    sessionRef.current = running;
+    setSession(running);
     return () => {
-      session.stop();
-      if (sessionRef.current === session) sessionRef.current = null;
+      running.stop();
+      if (sessionRef.current === running) sessionRef.current = null;
     };
   }, [identity]);
 
+  // Read once: the timer below and the sidebar's read-out must agree on it.
+  const expiresAt = useMemo(() => (identity ? sessionExpiresAt(identity) : null), [identity]);
+
   // Lock exactly when the delegation stops being valid.
   useEffect(() => {
-    if (!identity) return;
-    const expiresAt = sessionExpiresAt(identity);
     if (expiresAt === null) return;
     const timer = setTimeout(() => void lockRef.current("expired"), Math.max(0, expiresAt - Date.now()));
     return () => clearTimeout(timer);
-  }, [identity]);
+  }, [expiresAt]);
 
   const vault = useMemo(() => {
     if (!vaults?.length) return null;
@@ -245,7 +250,15 @@ export function App() {
           setQuery("");
         }}
         principal={client?.me.toText() ?? ""}
+        onCopyPrincipal={() =>
+          void copyPlain(client?.me.toText() ?? "").then(
+            () => notify("Your principal is on the clipboard"),
+            () => setError("The browser blocked clipboard access."),
+          )
+        }
         onSignOut={() => void lock("manual")}
+        remainingMs={session ? session.remainingMs : null}
+        sessionExpiresAt={expiresAt}
       />
 
       <ItemList
@@ -269,23 +282,18 @@ export function App() {
             {!vault.isOwned && <span className="tag">shared by {vault.owner.toText().slice(0, 8)}…</span>}
           </div>
           <div className="pane__tools">
-            <button
-              className="btn btn--ghost btn--sm"
-              onClick={() =>
-                void copyPlain(client?.me.toText() ?? "").then(
-                  () => notify("Your principal is on the clipboard"),
-                  () => setError("The browser blocked clipboard access."),
-                )
-              }
-              title="Copy your principal so someone can share a vault with you"
-            >
-              <CopyIcon />
-              My principal
-            </button>
             {canManage(vault) && (
-              <button className="btn btn--ghost btn--sm" onClick={() => setSharing(true)}>
+              <button
+                className="btn btn--ghost btn--sm"
+                onClick={() => setSharing(true)}
+                title={
+                  vault.sharedWith.length > 0
+                    ? "Manage who can open this vault"
+                    : "Give someone else access to this vault"
+                }
+              >
                 <ShareIcon />
-                Share
+                {vault.sharedWith.length > 0 ? `Shared with ${vault.sharedWith.length}` : "Share"}
               </button>
             )}
           </div>
