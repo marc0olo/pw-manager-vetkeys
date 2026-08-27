@@ -99,16 +99,27 @@ export async function resumeSession(): Promise<{ identity: Identity | null; lock
   // it. `getIdentity()` is the only method that awaits that restore;
   // `signOut()` does not, so the refusals below would otherwise delete storage
   // while the constructor's restore is still reading it, and both paths would
-  // open their own IndexedDB connection (the second leaks).
+  // open their own IndexedDB connection (the second leaks). Both are fixed
+  // upstream in dfinity/icp-js-auth#137, merged but absent from 8.0.3 — see
+  // issue #6 for what to remove once a release carries it.
   //
-  // Both are fixed upstream in dfinity/icp-js-auth#137, which is merged but not
-  // in any release — 8.0.3 is the newest published. Drop this line once a
-  // release contains it; see issue #6.
-  await authClient.getIdentity();
+  // The restore can also *reject*: restoreKey's storage read sits outside its
+  // try/catch, and `#initPromise` memoizes the rejection so every later
+  // `getIdentity()` rejects too. That must inform the decision, not gate it —
+  // letting it propagate would abort `resumeSession` and skip the purge, and a
+  // failing store is exactly when the purge matters most. It is also the failure
+  // mode of the very bug this workaround is for.
+  const hydrated = await authClient.getIdentity().then(
+    () => true,
+    () => false,
+  );
 
   const idleFor = idleElapsedMs();
   const hadMark = idleFor !== null;
-  const hadDelegation = authClient.isAuthenticated();
+  // A delegation that cannot be read is not a delegation. `isAuthenticated()`
+  // only consults a localStorage mirror, so on its own it would happily report
+  // one that no longer loads.
+  const hadDelegation = hydrated && authClient.isAuthenticated();
 
   // A missing mark is never treated as fresh: no recorded activity means no live
   // session to resume.

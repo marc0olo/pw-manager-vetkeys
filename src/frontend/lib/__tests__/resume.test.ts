@@ -18,6 +18,7 @@ const authState = {
   signOutCalls: 0,
   signOutThrows: false,
   signInOptions: undefined as SignInOptions | undefined,
+  getIdentityThrows: false,
 };
 
 vi.mock("@icp-sdk/auth/client", () => ({
@@ -27,6 +28,10 @@ vi.mock("@icp-sdk/auth/client", () => ({
       return authState.authenticated;
     }
     async getIdentity() {
+      // @icp-sdk/auth's #hydrate() can reject: restoreKey()'s storage read sits
+      // outside its try/catch, and #initPromise memoizes the rejection so every
+      // later call rejects too.
+      if (authState.getIdentityThrows) throw new Error("The database connection is closing");
       return {
         getPrincipal: () => ({
           toText: () => authState.principal,
@@ -93,6 +98,7 @@ async function given({
   authState.principal = PRINCIPAL;
   authState.signOutCalls = 0;
   authState.signOutThrows = false;
+  authState.getIdentityThrows = false;
   await openKeyStore(PRINCIPAL);
 }
 
@@ -172,6 +178,33 @@ describe("resumeSession", () => {
 
     expect(identity).not.toBeNull();
     expect(lockReason).toBeNull();
+  });
+
+  // A storage failure is exactly when the purge matters most, and it is the
+  // failure mode of the unreleased upstream bug this workaround exists for
+  // (dfinity/icp-js-auth#137). It must not abort the decision.
+  it("still purges when reading the delegation store fails", async () => {
+    await given({ markAgeMs: 60 * 60_000, authenticated: true }); // stale mark
+    authState.getIdentityThrows = true;
+
+    const { identity, lockReason } = await resumeSession();
+
+    expect(identity).toBeNull();
+    expect(lockReason).toBe("idle");
+    expect(await keyStoreExists(PRINCIPAL)).toBe(false);
+    expect(window.localStorage.getItem("vetvault:last-active")).toBeNull();
+  });
+
+  it("refuses rather than resuming when the delegation store cannot be read", async () => {
+    await given({ markAgeMs: 60_000, authenticated: true }); // mark is fresh
+    authState.getIdentityThrows = true;
+
+    const { identity, lockReason } = await resumeSession();
+
+    // A delegation that cannot be read is not a delegation.
+    expect(identity).toBeNull();
+    expect(lockReason).toBe("expired");
+    expect(await keyStoreExists(PRINCIPAL)).toBe(false);
   });
 
   it("refuses when the mark belongs to a different principal", async () => {
