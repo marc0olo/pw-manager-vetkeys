@@ -136,9 +136,12 @@ function deleteDatabase(name: string): Promise<void> {
       // Resolve on every outcome: a purge must never block sign-in.
       request.onsuccess = () => resolve();
       request.onerror = () => resolve();
-      // `blocked` means another tab still holds the store open. The delete is
-      // queued and completes when that connection closes, so the store does go
-      // away — just not before this resolves.
+      // `blocked` means another connection still holds the store open. The delete
+      // is queued and completes when that connection closes, so the store does go
+      // away — just not before this resolves. Note that @icp-sdk/auth can leak a
+      // duplicate connection to its *own* store on concurrent first access
+      // (dfinity/icp-js-auth#137, merged but unreleased as of 8.0.3 — see issue #6); that store
+      // is not one of ours, so it cannot block these deletes.
       request.onblocked = () => resolve();
     } catch {
       resolve();

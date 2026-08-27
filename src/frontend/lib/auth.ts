@@ -95,6 +95,17 @@ export function sessionExpiresAt(identity: Identity): number | null {
  * user is never shown an unexplained sign-in screen.
  */
 export async function resumeSession(): Promise<{ identity: Identity | null; lockReason: LockReason | null }> {
+  // Let the client finish restoring from storage before anything below touches
+  // it. `getIdentity()` is the only method that awaits that restore;
+  // `signOut()` does not, so the refusals below would otherwise delete storage
+  // while the constructor's restore is still reading it, and both paths would
+  // open their own IndexedDB connection (the second leaks).
+  //
+  // Both are fixed upstream in dfinity/icp-js-auth#137, which is merged but not
+  // in any release — 8.0.3 is the newest published. Drop this line once a
+  // release contains it; see issue #6.
+  await authClient.getIdentity();
+
   const idleFor = idleElapsedMs();
   const hadMark = idleFor !== null;
   const hadDelegation = authClient.isAuthenticated();
