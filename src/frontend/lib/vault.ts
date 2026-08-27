@@ -147,11 +147,27 @@ export class VaultClient {
         name: OWN_VAULT_NAME,
         isOwned: true,
         rights: null,
-        sharedWith: [],
+        // An empty vault is absent from the listing above but can still be
+        // shared, so its access list has to be asked for separately — otherwise
+        // sharing looks like it did not take effect until the first item is
+        // added. A query, and only reached while the own vault is empty.
+        sharedWith: await this.accessListFor(OWN_VAULT_NAME),
         items: [],
       });
     }
     return vaults;
+  }
+
+  /** Who an owned vault is shared with. Empty rather than throwing if unknown. */
+  private async accessListFor(name: string): Promise<[Principal, AccessRights][]> {
+    try {
+      const access = await this.encryptedMaps.getSharedUserAccessForMap(this.me, nameBytes(name));
+      return access.filter(([who]) => who.compareTo(this.me) !== "eq");
+    } catch {
+      // No map yet, or no access list to read. Absence of sharing, not an error
+      // worth failing a vault load over.
+      return [];
+    }
   }
 
   async saveItem(vault: Vault, item: VaultItem): Promise<void> {
