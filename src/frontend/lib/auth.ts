@@ -3,7 +3,15 @@ import type { Identity } from "@icp-sdk/core/agent";
 import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
 import { Principal } from "@icp-sdk/core/principal";
 import { backendCanisterId } from "./canister";
-import { clearActivity, idleElapsedMs, markActive, purgeKeyMaterial } from "./session";
+import {
+  SESSION_POLICY,
+  IDLE_TIMEOUT_MS,
+  clearActivity,
+  idleElapsedMs,
+  markActive,
+  purgeKeyMaterial,
+  storedPrincipal,
+} from "./session";
 
 /**
  * Internet Identity sign-in.
@@ -49,56 +57,18 @@ if (USING_LOCAL_II) {
   console.info(`[vetVault] signing in against local Internet Identity: ${IDENTITY_PROVIDER}`);
 }
 
-/**
- * How long an unlocked vault stays unlocked. The only two numbers to change; the
- * lock-screen wording derives from them.
- *
- * `idleMinutes` is the timeout that matters, and it covers **both** cases: the
- * app auto-locks after this much inactivity while open, and a session left
- * closed for longer than this is refused on the next load, with the delegation
- * and the cached key material purged together (see ./session).
- *
- * `delegationHours` is only a ceiling: the delegation cannot outlive it even
- * with continuous use, so it bounds a stolen delegation regardless of the idle
- * policy.
- */
-export const SESSION_POLICY = {
-  idleMinutes: 5,
-  delegationHours: 8,
-} as const;
-
 const SESSION_LIFETIME_NS = BigInt(SESSION_POLICY.delegationHours) * BigInt(3_600_000_000_000);
-
-/** Auto-lock after this much inactivity. */
-export const IDLE_TIMEOUT_MS = SESSION_POLICY.idleMinutes * 60_000;
-
-export const SESSION_LIFETIME_LABEL = `${SESSION_POLICY.delegationHours}-hour`;
-export const IDLE_TIMEOUT_LABEL = `${SESSION_POLICY.idleMinutes} minutes`;
-
 /** Why the vault is locked, so the lock screen can say so. */
-export type LockReason = "manual" | "idle" | "expired";
+export type LockReason = "manual" | "idle" | "expired" | "elsewhere";
 
 export const authClient = new AuthClient({
   identityProvider: IDENTITY_PROVIDER,
-  idleOptions: {
-    idleTimeout: IDLE_TIMEOUT_MS,
-    // The library's default idle callback signs out and reloads the page. We
-    // take it over so locking runs the same path as the Lock button — dropping
-    // the vault key material deliberately — and so the user is told why.
-    disableDefaultIdleCallback: true,
-  },
+  // The idle policy lives in ./session, which owns one activity definition for
+  // both the in-page timeout and the persisted mark. The library's IdleManager
+  // is off entirely: it is only created inside signIn()/#hydrate(), so a
+  // callback registered here would be dropped, and it is single-shot.
+  idleOptions: { disableIdle: true },
 });
-
-// Registered once at module load; `onIdle` only swaps the target, so React
-// re-renders and StrictMode double-mounts cannot stack duplicate callbacks
-// (IdleManager has no way to unregister one).
-let idleCallback: (() => void) | null = null;
-authClient.idleManager?.registerCallback(() => idleCallback?.());
-
-/** Called once the user has been idle for {@link IDLE_TIMEOUT_MS}. */
-export function onIdle(callback: () => void): void {
-  idleCallback = callback;
-}
 
 /**
  * When the delegation stops being valid, in ms since the epoch.
@@ -119,32 +89,49 @@ export function sessionExpiresAt(identity: Identity): number | null {
 /**
  * Decide, on page load, whether the stored session may be resumed.
  *
- * This is where a session that was left closed for too long dies: the delegation
- * and every cached vault key are purged together before anything can use them,
- * so the two can never diverge no matter how the app was closed.
+ * This is where a session left closed for too long dies: the delegation and
+ * every cached vault key are purged together before anything can use them, so
+ * the two can never diverge no matter how the app was closed.
+ *
+ * Refusals always carry a reason unless this is a genuinely first visit, so the
+ * user is never shown an unexplained sign-in screen.
  */
 export async function resumeSession(): Promise<{ identity: Identity | null; lockReason: LockReason | null }> {
   const idleFor = idleElapsedMs();
+  const hadMark = idleFor !== null;
+  const hadDelegation = authClient.isAuthenticated();
 
-  // No recorded activity means no live session to resume — never treat a missing
-  // mark as fresh.
-  if (idleFor === null || idleFor > IDLE_TIMEOUT_MS) {
-    const hadSession = authClient.isAuthenticated();
+  // A missing mark is never treated as fresh: no recorded activity means no live
+  // session to resume.
+  if (!hadMark || idleFor > IDLE_TIMEOUT_MS) {
     await signOut();
-    return { identity: null, lockReason: hadSession && idleFor !== null ? "idle" : null };
+    if (!hadMark && !hadDelegation) return { identity: null, lockReason: null }; // first visit
+    return { identity: null, lockReason: hadMark ? "idle" : "expired" };
   }
 
-  if (!authClient.isAuthenticated()) {
+  if (!hadDelegation) {
     // Delegation expired or was cleared elsewhere; key material must not survive it.
     await signOut();
     return { identity: null, lockReason: "expired" };
   }
 
   const identity = await authClient.getIdentity();
-  if (identity.getPrincipal().isAnonymous()) {
+  const principal = identity.getPrincipal();
+  if (principal.isAnonymous()) {
     await signOut();
-    return { identity: null, lockReason: null };
+    return { identity: null, lockReason: "expired" };
   }
+
+  // The mark and the delegation must describe the same user. markActive
+  // swallows storage failures by design, so divergence is reachable — and
+  // resuming on a mark that belongs to someone else is exactly the coupling
+  // failure this module exists to prevent.
+  const recorded = storedPrincipal();
+  if (recorded !== null && recorded !== principal.toText()) {
+    await signOut();
+    return { identity: null, lockReason: "expired" };
+  }
+
   return { identity, lockReason: null };
 }
 
@@ -154,6 +141,10 @@ export async function signIn(): Promise<Identity> {
     // Scope the delegation to the vault canister. An unscoped delegation can
     // sign calls to *any* canister on the user's behalf, and this one is
     // persisted to disk — so bound what a leaked copy could do.
+    //
+    // Adding a second canister callee (a ledger, II attributes) means adding it
+    // here too: a call to a canister outside this list is rejected at runtime,
+    // after a successful sign-in, so it surfaces only in a deployed build.
     targets: [Principal.fromText(backendCanisterId())],
   });
   if (identity.getPrincipal().isAnonymous()) {
@@ -169,7 +160,14 @@ export async function signIn(): Promise<Identity> {
  * never be left behind by one of them.
  */
 export async function signOut(): Promise<void> {
-  await purgeKeyMaterial();
-  await authClient.signOut();
-  clearActivity();
+  try {
+    await purgeKeyMaterial();
+  } finally {
+    try {
+      await authClient.signOut();
+    } finally {
+      // Always runs: a mark left behind would make a dead session look live.
+      clearActivity();
+    }
+  }
 }

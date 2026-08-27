@@ -2,14 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Identity } from "@icp-sdk/core/agent";
 import type { Principal } from "@icp-sdk/core/principal";
 import {
-  onIdle,
   resumeSession,
   sessionExpiresAt,
   signIn,
   signOut,
   type LockReason,
 } from "./lib/auth";
-import { trackActivity } from "./lib/session";
+import { startSession, type RunningSession } from "./lib/session";
 import { CLIPBOARD_CLEAR_SECONDS, copyPlain, copySecret } from "./lib/clipboard";
 import { compareItems, emptyItem, matchesQuery, type VaultItem } from "./lib/items";
 import {
@@ -129,10 +128,29 @@ export function App() {
    * delegation, then every trace of the vault in component state. Key material
    * must never outlive the session that authorised it.
    */
+  const sessionRef = useRef<RunningSession | null>(null);
+
   const lock = useCallback(
     async (reason: LockReason) => {
-      await client?.lock();
-      await signOut();
+      // Each step is independent and must run even if an earlier one throws:
+      // failing halfway would leave the delegation or the persisted key store
+      // behind, which is the dangerous direction.
+      try {
+        await client?.lock();
+      } catch {
+        /* signOut() purges the store anyway */
+      }
+      try {
+        await signOut();
+      } catch {
+        /* fall through: the UI must still lock */
+      }
+      sessionRef.current?.stop();
+      // Locking anywhere locks everywhere, except when this lock *came* from
+      // another tab — that would bounce the message back and forth.
+      if (reason !== "elsewhere") sessionRef.current?.broadcastLock();
+      sessionRef.current = null;
+
       setIdentity(null);
       setClient(null);
       setVaults(null);
@@ -147,27 +165,26 @@ export function App() {
     [client],
   );
 
-  // The idle callback is registered once, so it has to reach the current `lock`
-  // and identity through refs rather than closing over stale ones.
+  // The session's callbacks are installed once per identity, so they reach the
+  // current `lock` through a ref rather than closing over a stale one.
   const lockRef = useRef(lock);
-  const identityRef = useRef(identity);
   useEffect(() => {
     lockRef.current = lock;
-    identityRef.current = identity;
-  }, [lock, identity]);
+  }, [lock]);
 
-  useEffect(() => {
-    onIdle(() => {
-      // The idle timer runs while locked too; ignore it then.
-      if (identityRef.current) void lockRef.current("idle");
-    });
-  }, []);
-
-  // Keep the session marked alive while it is unlocked, so the next load can tell
-  // how long the app was away. Stops on lock, so a locked app looks locked.
+  // One owner for the idle timeout, the persisted activity mark and the
+  // cross-tab lock signal — see lib/session.
   useEffect(() => {
     if (!identity) return;
-    return trackActivity(identity.getPrincipal().toText());
+    const session = startSession(identity.getPrincipal().toText(), {
+      onIdle: () => void lockRef.current("idle"),
+      onRemoteLock: () => void lockRef.current("elsewhere"),
+    });
+    sessionRef.current = session;
+    return () => {
+      session.stop();
+      if (sessionRef.current === session) sessionRef.current = null;
+    };
   }, [identity]);
 
   // Lock exactly when the delegation stops being valid.

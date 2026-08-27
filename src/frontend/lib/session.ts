@@ -1,20 +1,43 @@
 /**
- * Persisted session lifetime.
+ * Session lifetime: one activity definition, one timeout, both halves.
  *
- * The idle timer inside the page dies with the page, so on its own it says
- * nothing about how long the app was *closed*. This module records when the user
- * was last active and lets the next page load decide whether the session is
- * still alive — which is what makes one configurable timeout govern both cases.
+ * This module owns the idle policy outright rather than delegating to
+ * `@icp-sdk/auth`'s `IdleManager`, for three reasons found the hard way:
  *
- * Why a deadline checked on load rather than clearing on close: there is no
- * reliable "the app was closed" hook. `pagehide`/`beforeunload` do not run on a
- * crash, a force-quit or an OS kill, so anything that relies on them can leave
- * credentials behind exactly when it matters. Worse, they also fire on an
- * ordinary reload, so clearing there would force a fresh passkey on every
- * refresh and throw away the key-material cache. A stored deadline needs no
- * cooperation from the shutdown path: whatever killed the app, the next load
- * refuses and purges.
+ * 1. `AuthClient.idleManager` is only assigned inside `signIn()` and the async
+ *    `#hydrate()`, i.e. after the constructor returns — so a callback registered
+ *    at construction time is silently dropped and nothing ever locks.
+ * 2. `IdleManager` is single-shot: `exit()` clears its own singleton after
+ *    firing, and `signIn()` only recreates it when `idleManager` is falsy, which
+ *    it no longer is. A second sign-in in one page load would get no timer.
+ * 3. It listened on its own set of DOM events while this module listened on
+ *    another, so the in-page timeout and the persisted mark could disagree about
+ *    what "active" means.
+ *
+ * The page timer and the persisted mark are now fed by the *same* handler, so
+ * the open-tab and closed-tab halves of the timeout cannot diverge.
  */
+
+/**
+ * How long an unlocked vault stays unlocked. The only two numbers to change; the
+ * lock-screen wording derives from them.
+ *
+ * `idleMinutes` covers **both** cases: the app auto-locks after this much
+ * inactivity while open, and a session left closed for longer is refused on the
+ * next load, with the delegation and cached vault keys purged together.
+ *
+ * `delegationHours` is only a ceiling: the delegation cannot outlive it even
+ * with continuous use, so it bounds a stolen delegation regardless of the idle
+ * policy.
+ */
+export const SESSION_POLICY = {
+  idleMinutes: 5,
+  delegationHours: 8,
+} as const;
+
+export const IDLE_TIMEOUT_MS = SESSION_POLICY.idleMinutes * 60_000;
+export const IDLE_TIMEOUT_LABEL = `${SESSION_POLICY.idleMinutes} minutes`;
+export const SESSION_LIFETIME_LABEL = `${SESSION_POLICY.delegationHours}-hour`;
 
 const ACTIVITY_KEY = "vetvault:last-active";
 const PRINCIPAL_KEY = "vetvault:principal";
@@ -26,26 +49,23 @@ export function keyCacheName(principal: string): string {
   return `${KEY_CACHE_PREFIX}${principal}`;
 }
 
-function readNumber(key: string): number | null {
-  try {
-    const raw = window.localStorage.getItem(key);
-    const value = raw === null ? Number.NaN : Number(raw);
-    return Number.isFinite(value) ? value : null;
-  } catch {
-    // Storage can throw in private modes; treat as "no session recorded".
-    return null;
-  }
-}
+// ---------------------------------------------------------------------------
+// The persisted mark
+// ---------------------------------------------------------------------------
 
-/** Stamp the session as alive. Cheap enough to call from an event handler. */
-export function markActive(principal?: string): void {
+function writeMark(at: number, principal: string): void {
   try {
-    window.localStorage.setItem(ACTIVITY_KEY, String(Date.now()));
-    if (principal) window.localStorage.setItem(PRINCIPAL_KEY, principal);
+    window.localStorage.setItem(ACTIVITY_KEY, String(at));
+    window.localStorage.setItem(PRINCIPAL_KEY, principal);
   } catch {
     // Non-fatal: without the mark the next load treats the session as expired,
     // which fails closed.
   }
+}
+
+/** Stamp the session as alive as of now. */
+export function markActive(principal: string): void {
+  writeMark(Date.now(), principal);
 }
 
 export function clearActivity(): void {
@@ -57,20 +77,7 @@ export function clearActivity(): void {
   }
 }
 
-/**
- * How long since the last recorded activity, or null if nothing is recorded.
- *
- * Null means "no session was left running" — not "fresh". Callers must not treat
- * it as within the timeout.
- */
-export function idleElapsedMs(): number | null {
-  const lastActive = readNumber(ACTIVITY_KEY);
-  if (lastActive === null) return null;
-  // A clock moved backwards would otherwise read as "just active".
-  return Math.max(0, Date.now() - lastActive);
-}
-
-function storedPrincipal(): string | null {
+export function storedPrincipal(): string | null {
   try {
     return window.localStorage.getItem(PRINCIPAL_KEY);
   } catch {
@@ -78,15 +85,38 @@ function storedPrincipal(): string | null {
   }
 }
 
+/**
+ * How long since the last recorded activity, or null if nothing is recorded.
+ *
+ * Null means "no session was left running" — not "fresh". Callers must not treat
+ * it as within the timeout.
+ */
+export function idleElapsedMs(): number | null {
+  try {
+    const raw = window.localStorage.getItem(ACTIVITY_KEY);
+    const at = raw === null ? Number.NaN : Number(raw);
+    if (!Number.isFinite(at)) return null;
+    // A clock moved backwards would otherwise read as "just active".
+    return Math.max(0, Date.now() - at);
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Purging cached key material
+// ---------------------------------------------------------------------------
+
 function deleteDatabase(name: string): Promise<void> {
   return new Promise((resolve) => {
     try {
       const request = window.indexedDB.deleteDatabase(name);
-      // Resolve on every outcome: a purge must never block sign-in. `blocked`
-      // fires when another tab holds the store open; that tab's own load will
-      // have purged it too.
+      // Resolve on every outcome: a purge must never block sign-in.
       request.onsuccess = () => resolve();
       request.onerror = () => resolve();
+      // `blocked` means another tab still holds the store open. The delete is
+      // queued and completes when that connection closes, so the store does go
+      // away — just not before this resolves.
       request.onblocked = () => resolve();
     } catch {
       resolve();
@@ -97,8 +127,9 @@ function deleteDatabase(name: string): Promise<void> {
 /**
  * Delete every derived-key-material store this app owns.
  *
- * Enumerates when the browser supports it so a store left by a principal we no
- * longer know about is still removed; falls back to the last recorded principal.
+ * Enumerates where supported, so a store left by a principal no longer recorded
+ * is still removed. `indexedDB.databases()` is **not implemented in Firefox**,
+ * where this degrades to deleting the last recorded principal's store only.
  */
 export async function purgeKeyMaterial(): Promise<void> {
   const names = new Set<string>();
@@ -118,39 +149,122 @@ export async function purgeKeyMaterial(): Promise<void> {
   await Promise.all([...names].map(deleteDatabase));
 }
 
-/** Events that count as the user being present. */
-const ACTIVITY_EVENTS = ["pointerdown", "keydown", "wheel", "touchstart", "focus"] as const;
+// ---------------------------------------------------------------------------
+// Running session: idle timer, activity mark, cross-tab locking
+// ---------------------------------------------------------------------------
 
-/** No more than one write per this interval, so listeners stay cheap. */
+/** What counts as the user being present. One list, used for both halves. */
+const ACTIVITY_EVENTS = [
+  "pointerdown",
+  "pointermove",
+  "keydown",
+  "wheel",
+  "scroll",
+  "touchstart",
+] as const;
+
+/** At most one localStorage write per this interval; the timer re-arms freely. */
 const MARK_THROTTLE_MS = 15_000;
 
+const LOCK_CHANNEL = "vetvault:session";
+
+/** Told to other tabs so locking anywhere locks everywhere. */
+export type SessionSignal = "locked";
+
+export interface RunningSession {
+  /** Tear down listeners and the timer. Call on lock. */
+  stop: () => void;
+  /** Tell other tabs of this origin to lock too. */
+  broadcastLock: () => void;
+}
+
 /**
- * Keep the activity mark fresh while the vault is unlocked. Returns a teardown
- * function; call it on lock so a locked app stops looking alive.
+ * Start tracking a live session.
+ *
+ * `onIdle` fires once, after {@link IDLE_TIMEOUT_MS} without activity.
+ * `onRemoteLock` fires when another tab locks. Both are one-shot per session:
+ * the caller locks, which calls `stop()`, and the next sign-in starts a fresh
+ * session — so unlike the library's singleton this re-arms correctly.
  */
-export function trackActivity(principal: string): () => void {
-  let last = 0;
-  const mark = () => {
-    const now = Date.now();
-    if (now - last < MARK_THROTTLE_MS) return;
-    last = now;
-    markActive(principal);
+export function startSession(
+  principal: string,
+  { onIdle, onRemoteLock }: { onIdle: () => void; onRemoteLock: () => void },
+): RunningSession {
+  let lastActivity = Date.now();
+  let lastWrite = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+
+  writeMark(lastActivity, principal);
+
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (!stopped) onIdle();
+    }, IDLE_TIMEOUT_MS);
   };
 
-  // Write immediately so a session is recorded from the moment it opens.
-  markActive(principal);
+  const onActivity = () => {
+    if (stopped) return;
+    const now = Date.now();
+    lastActivity = now;
+    arm();
+    // Throttle only the write. The mark is therefore at most MARK_THROTTLE_MS
+    // stale, and `flush` below makes it exact when the page goes away.
+    if (now - lastWrite >= MARK_THROTTLE_MS) {
+      lastWrite = now;
+      writeMark(now, principal);
+    }
+  };
 
-  const onHide = () => markActive(principal);
-  for (const event of ACTIVITY_EVENTS) window.addEventListener(event, mark, { passive: true });
-  // Best-effort freshening as the page goes away, so a close is timed from when
-  // the user actually left rather than from the last throttled write. The
-  // deadline stands on its own if this never runs.
-  window.addEventListener("pagehide", onHide);
-  document.addEventListener("visibilitychange", onHide);
+  /**
+   * Persist the *real* last activity as the page goes away.
+   *
+   * Deliberately not `Date.now()`: the page being hidden or unloaded is not
+   * evidence the user is present, and stamping it there would extend the closed
+   * half of the window by up to a full timeout on top of the open half.
+   */
+  const flush = () => {
+    if (!stopped) writeMark(lastActivity, principal);
+  };
 
-  return () => {
-    for (const event of ACTIVITY_EVENTS) window.removeEventListener(event, mark);
-    window.removeEventListener("pagehide", onHide);
-    document.removeEventListener("visibilitychange", onHide);
+  let channel: BroadcastChannel | undefined;
+  try {
+    channel = new BroadcastChannel(LOCK_CHANNEL);
+    channel.onmessage = (event: MessageEvent<SessionSignal>) => {
+      if (!stopped && event.data === "locked") onRemoteLock();
+    };
+  } catch {
+    // No BroadcastChannel: other tabs lock on their own schedule instead.
+  }
+
+  for (const event of ACTIVITY_EVENTS) {
+    window.addEventListener(event, onActivity, { passive: true, capture: true });
+  }
+  window.addEventListener("pagehide", flush);
+  document.addEventListener("visibilitychange", flush);
+  arm();
+
+  return {
+    stop: () => {
+      stopped = true;
+      clearTimeout(timer);
+      for (const event of ACTIVITY_EVENTS) {
+        window.removeEventListener(event, onActivity, { capture: true });
+      }
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", flush);
+      channel?.close();
+    },
+    broadcastLock: () => {
+      try {
+        // A fresh channel: ours may already be closed by `stop()`.
+        const notifier = new BroadcastChannel(LOCK_CHANNEL);
+        notifier.postMessage("locked" satisfies SessionSignal);
+        notifier.close();
+      } catch {
+        /* nothing to do */
+      }
+    },
   };
 }
