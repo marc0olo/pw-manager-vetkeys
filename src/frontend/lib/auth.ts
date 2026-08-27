@@ -1,8 +1,6 @@
 import { AuthClient } from "@icp-sdk/auth/client";
 import type { Identity } from "@icp-sdk/core/agent";
 import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
-import { Principal } from "@icp-sdk/core/principal";
-import { backendCanisterId } from "./canister";
 import {
   SESSION_POLICY,
   IDLE_TIMEOUT_MS,
@@ -138,15 +136,24 @@ export async function resumeSession(): Promise<{ identity: Identity | null; lock
 export async function signIn(): Promise<Identity> {
   const identity = await authClient.signIn({
     maxTimeToLive: SESSION_LIFETIME_NS,
-    // Scope the delegation to the vault canister. An unscoped delegation can
-    // sign calls to *any* canister on the user's behalf, and this one is
-    // persisted to disk — so bound what a leaked copy could do.
+    // Deliberately NOT scoped with `targets`. Internet Identity does not issue
+    // canister-scoped delegations: it ignores the request and returns an
+    // unscoped chain, which @icp-sdk/signer then rejects —
+    // "Returned delegation is unscoped but scoped targets were requested" —
+    // so sign-in fails outright. Scoped delegations are an ICRC-49/57 signer
+    // feature (OISY and similar), not part of II's authorize flow.
     //
-    // Adding a second canister callee (a ledger, II attributes) means adding it
-    // here too: a call to a canister outside this list is rejected at runtime,
-    // after a successful sign-in, so it surfaces only in a deployed build.
-    targets: [Principal.fromText(backendCanisterId())],
+    // Little is lost. II derives a principal per *origin*, so this principal
+    // exists only for this app and holds nothing on any other canister; and the
+    // IC is reverse-gas, so a leaked delegation cannot spend the user's cycles
+    // by calling elsewhere. Its blast radius is already this app's own data,
+    // which is what the idle timeout and the delegation TTL bound.
+    //
+    // Revisit only if the app starts calling a canister that holds value under
+    // this same principal (a ledger, say) — and note that II still could not
+    // scope it, so the mitigation would have to be something else.
   });
+
   if (identity.getPrincipal().isAnonymous()) {
     throw new Error("Internet Identity returned an anonymous identity; sign-in did not complete.");
   }

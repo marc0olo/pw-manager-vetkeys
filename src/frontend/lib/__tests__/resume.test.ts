@@ -9,12 +9,15 @@ const PRINCIPAL = "aaaaa-bbbbb-ccccc-ddddd-cai";
 const OTHER = "zzzzz-yyyyy-xxxxx-wwwww-cai";
 
 // --- stub the identity provider client -------------------------------------
+type SignInOptions = { maxTimeToLive?: bigint; targets?: unknown[] };
+
 const authState = {
   authenticated: false,
   principal: PRINCIPAL,
   anonymous: false,
   signOutCalls: 0,
   signOutThrows: false,
+  signInOptions: undefined as SignInOptions | undefined,
 };
 
 vi.mock("@icp-sdk/auth/client", () => ({
@@ -36,16 +39,20 @@ vi.mock("@icp-sdk/auth/client", () => ({
       authState.authenticated = false;
       if (authState.signOutThrows) throw new Error("storage unavailable");
     }
-    async signIn() {
-      throw new Error("not used in these tests");
+    async signIn(options?: SignInOptions) {
+      authState.signInOptions = options;
+      authState.authenticated = true;
+      return {
+        getPrincipal: () => ({
+          toText: () => authState.principal,
+          isAnonymous: () => authState.anonymous,
+        }),
+      };
     }
   },
 }));
 
-// The canister ID comes from the ic_env cookie, which jsdom has no reason to have.
-vi.mock("../canister", () => ({ backendCanisterId: () => "aaaaa-aa" }));
-
-const { resumeSession, signOut } = await import("../auth");
+const { resumeSession, signIn, signOut } = await import("../auth");
 const { IDLE_TIMEOUT_MS, keyCacheName, markActive } = await import("../session");
 
 function openKeyStore(principal: string): Promise<void> {
@@ -209,5 +216,44 @@ describe("signOut", () => {
 
     expect(window.localStorage.getItem("vetvault:last-active")).toBeNull();
     expect(await keyStoreExists(PRINCIPAL)).toBe(false);
+  });
+});
+
+describe("signIn", () => {
+  // Internet Identity does not issue canister-scoped delegations: it ignores a
+  // `targets` request and returns an unscoped chain, which @icp-sdk/signer then
+  // rejects with "Returned delegation is unscoped but scoped targets were
+  // requested" — sign-in fails outright. This was shipped once and only surfaced
+  // in a manual test, because the canister happily accepts a scoped delegation;
+  // it is the issuer that will not make one.
+  it("does not request scoped targets", async () => {
+    window.localStorage.clear();
+    authState.anonymous = false;
+
+    await signIn();
+
+    expect(authState.signInOptions).toBeDefined();
+    expect(authState.signInOptions?.targets).toBeUndefined();
+  });
+
+  it("requests the delegation lifetime from SESSION_POLICY", async () => {
+    const { SESSION_POLICY } = await import("../session");
+    window.localStorage.clear();
+    authState.anonymous = false;
+
+    await signIn();
+
+    expect(authState.signInOptions?.maxTimeToLive).toBe(
+      BigInt(SESSION_POLICY.delegationHours) * BigInt(3_600_000_000_000),
+    );
+  });
+
+  it("marks the session live so the next load can resume it", async () => {
+    window.localStorage.clear();
+    authState.anonymous = false;
+
+    await signIn();
+
+    expect(window.localStorage.getItem("vetvault:principal")).toBe(PRINCIPAL);
   });
 });

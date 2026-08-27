@@ -60,7 +60,14 @@ that is refused on the next load, and the delegation and every cached vault key
 are purged together before anything can use them. `delegationHours` is only a
 ceiling the session cannot outlive even with continuous use.
 
-Both live in `SESSION_POLICY` in `src/frontend/lib/auth.ts`.
+Both live in `SESSION_POLICY` in `src/frontend/lib/session.ts`.
+
+The delegation is **not** canister-scoped. Internet Identity does not issue
+scoped delegations — it ignores a `targets` request and returns an unscoped
+chain, which the client then rejects, so sign-in fails outright. Little is lost:
+II derives a principal per *origin*, so this principal exists only for this app
+and holds nothing on any other canister, and the IC is reverse-gas, so a leaked
+delegation cannot spend the user's cycles elsewhere.
 
 Why a deadline checked on load rather than clearing on close: there is no
 reliable "the app was closed" hook. `pagehide`/`beforeunload` do not run on a
