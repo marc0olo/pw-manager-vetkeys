@@ -118,8 +118,11 @@ export function App() {
 
   /**
    * The single way out of an unlocked vault, whether the user pressed Lock, went
-   * idle, or the delegation expired. Drops the derived key material first, then
-   * the delegation, then every trace of the vault from component state.
+   * idle, or the delegation expired.
+   *
+   * Order matters and is the invariant: derived key material goes first, then the
+   * delegation, then every trace of the vault in component state. Key material
+   * must never outlive the session that authorised it.
    */
   const lock = useCallback(
     async (reason: LockReason) => {

@@ -1,6 +1,8 @@
 import { AuthClient } from "@icp-sdk/auth/client";
 import type { Identity } from "@icp-sdk/core/agent";
 import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
+import { Principal } from "@icp-sdk/core/principal";
+import { backendCanisterId } from "./canister";
 
 /**
  * Internet Identity sign-in.
@@ -46,15 +48,27 @@ if (USING_LOCAL_II) {
   console.info(`[vetVault] signing in against local Internet Identity: ${IDENTITY_PROVIDER}`);
 }
 
-/** Eight hours. A password manager should not hold a month-long delegation. */
-const SESSION_LIFETIME_HOURS = 8;
-const SESSION_LIFETIME_NS = BigInt(SESSION_LIFETIME_HOURS) * BigInt(3_600_000_000_000);
+/**
+ * How long an unlocked vault stays unlocked. The only two numbers to change;
+ * the lock-screen wording is derived from them.
+ *
+ * `delegationHours` is also the hard cap on a *closed* tab: the delegation is
+ * persisted (IndexedDB, by @icp-sdk/auth), so reopening the app within this
+ * window re-derives the vault key and shows the vault without a passkey prompt.
+ * `idleMinutes` only applies while a page is open.
+ */
+export const SESSION_POLICY = {
+  delegationHours: 8,
+  idleMinutes: 5,
+} as const;
+
+const SESSION_LIFETIME_NS = BigInt(SESSION_POLICY.delegationHours) * BigInt(3_600_000_000_000);
 
 /** Auto-lock after this much inactivity. */
-export const IDLE_TIMEOUT_MS = 5 * 60_000;
+export const IDLE_TIMEOUT_MS = SESSION_POLICY.idleMinutes * 60_000;
 
-export const SESSION_LIFETIME_LABEL = `${SESSION_LIFETIME_HOURS}-hour`;
-export const IDLE_TIMEOUT_LABEL = `${IDLE_TIMEOUT_MS / 60_000} minutes`;
+export const SESSION_LIFETIME_LABEL = `${SESSION_POLICY.delegationHours}-hour`;
+export const IDLE_TIMEOUT_LABEL = `${SESSION_POLICY.idleMinutes} minutes`;
 
 /** Why the vault is locked, so the lock screen can say so. */
 export type LockReason = "manual" | "idle" | "expired";
@@ -104,7 +118,13 @@ export async function restoreSession(): Promise<Identity | null> {
 }
 
 export async function signIn(): Promise<Identity> {
-  const identity = await authClient.signIn({ maxTimeToLive: SESSION_LIFETIME_NS });
+  const identity = await authClient.signIn({
+    maxTimeToLive: SESSION_LIFETIME_NS,
+    // Scope the delegation to the vault canister. An unscoped delegation can
+    // sign calls to *any* canister on the user's behalf, and this one is
+    // persisted to disk — so bound what a leaked copy could do.
+    targets: [Principal.fromText(backendCanisterId())],
+  });
   if (identity.getPrincipal().isAnonymous()) {
     throw new Error("Internet Identity returned an anonymous identity; sign-in did not complete.");
   }

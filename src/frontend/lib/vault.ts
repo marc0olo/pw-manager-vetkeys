@@ -6,6 +6,7 @@ import {
   EncryptedMaps,
   type AccessRights,
 } from "@icp-sdk/vetkeys/encrypted_maps";
+import { backendCanisterId } from "./canister";
 import { compareItems, decodeItem, encodeItem, type VaultItem } from "./items";
 
 export type { AccessRights };
@@ -59,26 +60,31 @@ function nameBytes(name: string): Uint8Array {
   return bytes;
 }
 
-export function backendCanisterId(): string {
-  const id = safeGetCanisterEnv<{ readonly "PUBLIC_CANISTER_ID:backend": string }>()?.[
-    "PUBLIC_CANISTER_ID:backend"
-  ];
-  if (!id) {
-    throw new Error(
-      "Backend canister ID missing from the ic_env cookie. Deploy with `icp deploy`, " +
-        "or start the local network before `npm run dev`.",
-    );
-  }
-  return id;
-}
-
 /**
  * Thin, typed façade over EncryptedMaps.
  *
  * Encryption and decryption happen here in the browser; the canister only ever
- * holds ciphertext. Derived key material is kept in memory only (the library
- * default) so closing or reloading the tab genuinely locks the vault — the
- * IndexedDB cache would leave a usable decryption capability behind on disk.
+ * holds ciphertext.
+ *
+ * **Derived key material is memory-only** — the library default
+ * (`InMemoryDerivedKeyMaterialCache`), since no `cache` is passed below. Note
+ * what this does and does not buy:
+ *
+ * - It does NOT lock the vault on reload. The *delegation* is persisted by
+ *   @icp-sdk/auth (IndexedDB), so a reload re-derives the key and reopens the
+ *   vault with no user interaction. The cost of dropping the cache is one vetKD
+ *   derivation per map per page load, not a lock.
+ * - It DOES make "key material never outlives the session" hold automatically:
+ *   memory dies with the page, so the two can never diverge.
+ *
+ * That second property is the reason to keep it. Switching to
+ * `IndexedDbDerivedKeyMaterialCache` would trade one vetKD derivation per load
+ * for a persisted decryption capability that has **no intrinsic expiry** —
+ * unlike the delegation, which dies on its own — and it cannot be made safe by
+ * clearing on unload, because unload handlers are not guaranteed to run. It
+ * would need the invariant re-established explicitly on *load*: namespace the
+ * store per principal, and before trusting the cache verify that a valid
+ * non-expired delegation exists for that same principal, purging otherwise.
  */
 export class VaultClient {
   private constructor(

@@ -42,9 +42,27 @@ client by construction.
 | Item id | Yes — so ids are random bytes and leak nothing |
 | Vault name, owner, and who it is shared with | Yes — access control has to be enforced in the clear |
 
-Derived key material is kept **in memory only**. Reloading the tab genuinely locks
-the vault. The persistent `IndexedDbDerivedKeyMaterialCache` is deliberately not
-used: it would leave a usable decryption capability on disk for any same-origin code.
+### What persists, and for how long
+
+| | Where | Survives a reload or tab close? |
+|---|---|---|
+| Derived vault key material | memory only (library default) | No |
+| Internet Identity delegation | IndexedDB (`@icp-sdk/auth` default) | Yes, until it expires |
+
+**Reloading does not lock the vault.** The delegation outlives the page, so the
+app re-derives the vault key and reopens it with no user interaction — dropping
+the key material costs one vetKD derivation per load, it is not a lock. Within
+the 8-hour delegation window, reopening the app shows the vault straight away.
+
+What memory-only caching *does* buy is that key material can never outlive the
+session that authorised it: memory dies with the page, so the two cannot diverge.
+The delegation is scoped to the vault canister (`targets`) so a leaked copy
+cannot sign calls to other canisters, and it expires on its own — a persisted
+derived key would not.
+
+Locking is therefore what bounds exposure, not reloading: 5 minutes idle while
+open, the delegation's 8 hours while closed, or the **Lock vault** button. Both
+lifetimes live in `SESSION_POLICY` in `src/frontend/lib/auth.ts`.
 
 ## Run it
 
