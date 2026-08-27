@@ -217,6 +217,14 @@ export interface RunningSession {
   stop: () => void;
   /** Tell other tabs of this origin to lock too. */
   broadcastLock: () => void;
+  /**
+   * Milliseconds until the idle lock, clamped to 0.
+   *
+   * Reads the same in-memory activity timestamp the deadline itself uses, so the
+   * two can never disagree — the persisted mark is throttled to 15 s and would
+   * make a countdown built on it jump.
+   */
+  remainingMs: () => number;
 }
 
 /**
@@ -315,6 +323,14 @@ export function startSession(
       window.removeEventListener("pageshow", checkDeadline);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       channel?.close();
+    },
+    remainingMs: () => {
+      if (stopped || fired) return 0;
+      const elapsed = Date.now() - lastActivity;
+      // A backwards jump past tolerance locks on the next check; report 0 rather
+      // than a figure that would count upwards.
+      if (elapsed < -CLOCK_SKEW_TOLERANCE_MS) return 0;
+      return Math.max(0, IDLE_TIMEOUT_MS - Math.max(0, elapsed));
     },
     broadcastLock: () => {
       try {

@@ -854,3 +854,56 @@ code,
   font-size: 13px;
   text-align: left;
 }
+
+/* Time remaining before the idle lock, in the sidebar footer. */
+.countdown {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.countdown strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.countdown--warn {
+  color: var(--fair);
+}
+
+.countdown--warn strong {
+  color: var(--fair);
+}
+
+/* Principal plus its copy button. */
+.sidebar__whoRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar__whoRow code {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* "Shared with N" on an owned vault row. */
+.vaultRow__meta--shared {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  color: var(--blue);
+}
+
+.vaultRow__meta--shared svg {
+  width: 12px;
+  height: 12px;
+}

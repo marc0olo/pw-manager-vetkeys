@@ -17,8 +17,10 @@ password — the vault key is derived for your Internet Identity principal.
 - **Reveal / copy.** Passwords are masked, auto-hide after 30s, and copying one
   clears the clipboard after 45s (only if it still holds that value).
 - **Vault sharing** at three levels — read, read/write, read/write/manage. The
-  vault key is re-encrypted for the grantee, so no secret changes hands.
-- **Lock** discards the derived key material.
+  vault key is re-encrypted for the grantee, so no secret changes hands. The
+  sidebar and the pane header both show how many people a vault is shared with.
+- **Lock** discards the derived key material, and the sidebar counts down to the
+  automatic one.
 
 ## Architecture
 
@@ -29,7 +31,7 @@ src/frontend/lib/items.ts  The item model and its JSON encoding
 src/frontend/lib/auth.ts   Internet Identity, and the load-time session gate
 src/frontend/lib/session.ts  Idle timeout, activity mark, cross-tab lock, key purge
 src/frontend/lib/lock.ts     The lock sequence: ordering and failure safety
-src/frontend/components/   Sidebar, item list, detail, editor, share dialog
+src/frontend/components/   Sidebar, item list, detail, editor, share dialog, countdown
 src/frontend/lib/__tests__/  Unit tests: session lifetime, load-time gate, lock sequence
 scripts/smoke-test.mjs     End-to-end check against a running local replica
 ```

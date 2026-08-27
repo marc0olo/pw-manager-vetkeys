@@ -1,4 +1,5 @@
-import { LockIcon, ShieldIcon } from "./Icons";
+import { CopyIcon, LockIcon, ShareIcon, ShieldIcon } from "./Icons";
+import { IdleCountdown } from "./IdleCountdown";
 import { accessLevel, vaultId, type Vault } from "../lib/vault";
 
 interface Props {
@@ -6,12 +7,23 @@ interface Props {
   selectedId: string | null;
   onSelect: (id: string) => void;
   principal: string;
+  onCopyPrincipal: () => void;
   onSignOut: () => void;
+  /** Live remaining time before the idle lock; absent while locked. */
+  remainingMs: (() => number) | null;
 }
 
 const LEVEL_LABEL = { Read: "read-only", ReadWrite: "can edit", ReadWriteManage: "can manage" } as const;
 
-export function Sidebar({ vaults, selectedId, onSelect, principal, onSignOut }: Props) {
+export function Sidebar({
+  vaults,
+  selectedId,
+  onSelect,
+  principal,
+  onCopyPrincipal,
+  onSignOut,
+  remainingMs,
+}: Props) {
   const owned = vaults.filter((vault) => vault.isOwned);
   const shared = vaults.filter((vault) => !vault.isOwned);
 
@@ -25,27 +37,30 @@ export function Sidebar({ vaults, selectedId, onSelect, principal, onSignOut }: 
       </div>
 
       <nav className="sidebar__nav">
-        <VaultGroup
-          title="My vault"
-          vaults={owned}
-          selectedId={selectedId}
-          onSelect={onSelect}
-        />
+        <VaultGroup title="My vault" vaults={owned} selectedId={selectedId} onSelect={onSelect} />
         {shared.length > 0 && (
-          <VaultGroup
-            title="Shared with me"
-            vaults={shared}
-            selectedId={selectedId}
-            onSelect={onSelect}
-          />
+          <VaultGroup title="Shared with me" vaults={shared} selectedId={selectedId} onSelect={onSelect} />
         )}
       </nav>
 
       <div className="sidebar__foot">
-        <div className="sidebar__who" title={principal}>
+        <div className="sidebar__who">
           <span className="sidebar__whoLabel">Signed in as</span>
-          <code>{principal}</code>
+          <div className="sidebar__whoRow">
+            <code title={principal}>{principal}</code>
+            <button
+              className="iconBtn"
+              onClick={onCopyPrincipal}
+              title="Copy your principal, so someone can share a vault with you"
+              aria-label="Copy your principal"
+            >
+              <CopyIcon />
+            </button>
+          </div>
         </div>
+
+        {remainingMs && <IdleCountdown remainingMs={remainingMs} />}
+
         <button className="btn btn--ghost btn--full" onClick={onSignOut}>
           <LockIcon />
           Lock vault
@@ -55,13 +70,24 @@ export function Sidebar({ vaults, selectedId, onSelect, principal, onSignOut }: 
   );
 }
 
-function VaultGroup({ title, vaults, selectedId, onSelect }: Omit<Props, "principal" | "onSignOut"> & { title: string }) {
+function VaultGroup({
+  title,
+  vaults,
+  selectedId,
+  onSelect,
+}: {
+  title: string;
+  vaults: Vault[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
   return (
     <div className="sidebar__group">
       <h2 className="sidebar__groupTitle">{title}</h2>
       <ul>
         {vaults.map((vault) => {
           const id = vaultId(vault);
+          const sharedCount = vault.sharedWith.length;
           return (
             <li key={id}>
               <button
@@ -70,6 +96,15 @@ function VaultGroup({ title, vaults, selectedId, onSelect }: Omit<Props, "princi
               >
                 <span className="vaultRow__name">{vault.name}</span>
                 <span className="vaultRow__count">{vault.items.length}</span>
+                {vault.isOwned && sharedCount > 0 && (
+                  <span
+                    className="vaultRow__meta vaultRow__meta--shared"
+                    title={`Shared with ${sharedCount} ${sharedCount === 1 ? "person" : "people"}`}
+                  >
+                    <ShareIcon />
+                    Shared with {sharedCount}
+                  </span>
+                )}
                 {!vault.isOwned && vault.rights && (
                   <span className="vaultRow__meta">
                     {vault.owner.toText().slice(0, 5)}… · {LEVEL_LABEL[accessLevel(vault.rights)]}
