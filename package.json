@@ -9,7 +9,8 @@
     "smoke-test": "node scripts/smoke-test.mjs",
     "check-ii-metadata": "node scripts/check-ii-metadata.mjs",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check-poll-cost": "node scripts/check-poll-cost.mjs"
   },
   "dependencies": {
     "@icp-sdk/auth": "^8.0.3",

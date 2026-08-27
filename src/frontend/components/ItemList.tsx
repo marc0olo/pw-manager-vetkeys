@@ -1,9 +1,9 @@
 import { PlusIcon, SearchIcon } from "./Icons";
 import { displayHost, type VaultItem } from "../lib/items";
-import type { Vault } from "../lib/vault";
+import type { VaultSummary } from "../lib/vault";
 
 interface Props {
-  vault: Vault;
+  vault: VaultSummary;
   items: VaultItem[];
   query: string;
   onQueryChange: (query: string) => void;
@@ -11,6 +11,8 @@ interface Props {
   onSelect: (id: string) => void;
   onNew: () => void;
   canWrite: boolean;
+  /** The vault's items are still being decrypted. */
+  loading: boolean;
 }
 
 export function ItemList({
@@ -22,6 +24,7 @@ export function ItemList({
   onSelect,
   onNew,
   canWrite,
+  loading,
 }: Props) {
   return (
     <section className="list">
@@ -47,9 +50,11 @@ export function ItemList({
         </button>
       </header>
 
-      {items.length === 0 ? (
+      {loading ? (
+        <p className="list__empty">Decrypting…</p>
+      ) : items.length === 0 ? (
         <p className="list__empty">
-          {vault.items.length === 0
+          {vault.itemIds.length === 0
             ? canWrite
               ? "This vault is empty. Add your first login."
               : "This vault is empty."
@@ -81,7 +86,7 @@ export function ItemList({
       )}
 
       <footer className="list__foot">
-        {items.length} of {vault.items.length} {vault.items.length === 1 ? "item" : "items"}
+        {items.length} of {vault.itemIds.length} {vault.itemIds.length === 1 ? "item" : "items"}
       </footer>
     </section>
   );

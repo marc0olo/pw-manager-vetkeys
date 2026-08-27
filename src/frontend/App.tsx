@@ -19,7 +19,9 @@ import {
   vaultId,
   type AccessLevel,
   type Vault,
+  type VaultSummary,
 } from "./lib/vault";
+import { reconcile } from "./lib/reconcile";
 import { ItemDetail } from "./components/ItemDetail";
 import { ItemEditor } from "./components/ItemEditor";
 import { ItemList } from "./components/ItemList";
@@ -27,6 +29,9 @@ import { LockScreen } from "./components/LockScreen";
 import { ShareDialog } from "./components/ShareDialog";
 import { Sidebar } from "./components/Sidebar";
 import { CheckIcon, ShareIcon } from "./components/Icons";
+
+/** How often to re-read the vault list. Queries only, so this is cheap. */
+const POLL_INTERVAL_MS = 15_000;
 
 type Pane = { mode: "view" } | { mode: "edit"; item: VaultItem; isNew: boolean };
 
@@ -37,7 +42,10 @@ function message(error: unknown): string {
 export function App() {
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [client, setClient] = useState<VaultClient | null>(null);
-  const [vaults, setVaults] = useState<Vault[] | null>(null);
+  const [vaults, setVaults] = useState<VaultSummary[] | null>(null);
+  const [openItems, setOpenItems] = useState<VaultItem[] | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncedAt, setSyncedAt] = useState<number | null>(null);
 
   const [selectedVaultId, setSelectedVaultId] = useState<string | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -73,7 +81,8 @@ export function App() {
     try {
       const vaultClient = await VaultClient.create(established);
       setClient(vaultClient);
-      setVaults(await vaultClient.loadVaults());
+      setVaults(await vaultClient.listVaults());
+      setSyncedAt(Date.now());
     } catch (caught) {
       setError(message(caught));
       setIdentity(null);
@@ -86,10 +95,57 @@ export function App() {
     if (identity && !client) void connect(identity);
   }, [identity, client, connect]);
 
-  const refresh = useCallback(async () => {
-    if (!client) return;
-    setVaults(await client.loadVaults());
-  }, [client]);
+  // Refs so the poll can read current state without re-arming on every change.
+  const selectionRef = useRef({ vaultId: selectedVaultId, itemId: selectedItemId });
+  const vaultsRef = useRef(vaults);
+  const openItemsRef = useRef(openItems);
+  useEffect(() => {
+    selectionRef.current = { vaultId: selectedVaultId, itemId: selectedItemId };
+    vaultsRef.current = vaults;
+    openItemsRef.current = openItems;
+  }, [selectedVaultId, selectedItemId, vaults, openItems]);
+
+  /**
+   * Re-read the vault list and reconcile the selection with it.
+   *
+   * One query, no key derivation — see VaultClient.listVaults. Safe to call on a
+   * timer for exactly that reason.
+   */
+  const refresh = useCallback(
+    async ({ quiet = false }: { quiet?: boolean } = {}) => {
+      if (!client) return;
+      if (!quiet) setSyncing(true);
+      try {
+        const next = await client.listVaults();
+        const previous = vaultsRef.current ?? [];
+        setVaults(next);
+        setSyncedAt(Date.now());
+
+        const outcome = reconcile({
+          previous,
+          next,
+          selection: selectionRef.current,
+          openItems: openItemsRef.current,
+        });
+        if (outcome.selection.vaultId !== selectionRef.current.vaultId) {
+          setSelectedVaultId(outcome.selection.vaultId);
+        }
+        if (outcome.selection.itemId !== selectionRef.current.itemId) {
+          setSelectedItemId(outcome.selection.itemId);
+          // Whatever was on screen is gone; do not leave an editor open on it.
+          setPane({ mode: "view" });
+        }
+        if (outcome.notice) notify(outcome.notice);
+        if (outcome.refreshItems) setOpenItems(null);
+      } catch (caught) {
+        // A failed poll is not worth a banner; the next one will retry.
+        if (!quiet) setError(message(caught));
+      } finally {
+        if (!quiet) setSyncing(false);
+      }
+    },
+    [client, notify],
+  );
 
   const run = useCallback(
     async (action: () => Promise<void>, success?: string) => {
@@ -194,18 +250,67 @@ export function App() {
     return () => clearTimeout(timer);
   }, [expiresAt]);
 
-  const vault = useMemo(() => {
+  const summary = useMemo(() => {
     if (!vaults?.length) return null;
     return vaults.find((candidate) => vaultId(candidate) === selectedVaultId) ?? vaults[0];
   }, [vaults, selectedVaultId]);
 
-  const visibleItems = useMemo(
-    () => (vault ? vault.items.filter((item) => matchesQuery(item, query)).sort(compareItems) : []),
-    [vault, query],
+  // Decrypt the selected vault, and only that one. This is the single place a
+  // key is derived; the cache makes reopening free. `openItems` is cleared by a
+  // poll that saw the ciphertext change, which re-runs this against the cache.
+  useEffect(() => {
+    if (!client || !summary || openItems !== null) return;
+    let cancelled = false;
+    client
+      .openVault(summary)
+      .then((items) => {
+        if (!cancelled) setOpenItems(items);
+      })
+      .catch((caught) => {
+        if (!cancelled) setError(message(caught));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client, summary, openItems]);
+
+  const vault: Vault | null = useMemo(
+    () => (summary ? { ...summary, items: openItems ?? [] } : null),
+    [summary, openItems],
   );
 
-  const selectedItem = vault?.items.find((item) => item.id === selectedItemId) ?? null;
-  const writable = vault !== null && canWrite(vault);
+  const visibleItems = useMemo(
+    () => (openItems ?? []).filter((item) => matchesQuery(item, query)).sort(compareItems),
+    [openItems, query],
+  );
+
+  // `openItems === null` means "not decrypted yet", which the item list renders
+  // as loading. Deliberately not keyed on a request being in flight: between
+  // clearing openItems and the effect starting there is a tick with neither, and
+  // an empty list would briefly render as “Nothing matches ''”.
+  const itemsLoading = openItems === null;
+
+  const selectedItem = openItems?.find((item) => item.id === selectedItemId) ?? null;
+  const writable = summary !== null && canWrite(summary);
+
+  // Poll for changes so a newly shared vault, a new item or a revocation shows
+  // up without a reload. Queries only, no key derivation — and deliberately not
+  // wired to the activity mark, or a background timer would hold the vault
+  // unlocked forever.
+  useEffect(() => {
+    if (!client) return;
+    const tick = () => {
+      if (document.visibilityState === "visible") void refresh({ quiet: true });
+    };
+    const poller = setInterval(tick, POLL_INTERVAL_MS);
+    // Catch up immediately on returning to the tab rather than waiting a tick.
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      clearInterval(poller);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, [client, refresh]);
 
   const copyField = async (field: "username" | "password" | "url", value: string) => {
     try {
@@ -246,6 +351,7 @@ export function App() {
         onSelect={(id) => {
           setSelectedVaultId(id);
           setSelectedItemId(null);
+          setOpenItems(null);
           setPane({ mode: "view" });
           setQuery("");
         }}
@@ -259,6 +365,9 @@ export function App() {
         onSignOut={() => void lock("manual")}
         remainingMs={session ? session.remainingMs : null}
         sessionExpiresAt={expiresAt}
+        onRefresh={() => void refresh()}
+        syncing={syncing}
+        syncedAt={syncedAt}
       />
 
       <ItemList
@@ -273,6 +382,7 @@ export function App() {
         }}
         onNew={() => setPane({ mode: "edit", item: emptyItem(), isNew: true })}
         canWrite={writable}
+        loading={itemsLoading}
       />
 
       <main className="pane">

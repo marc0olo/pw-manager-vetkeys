@@ -13,6 +13,9 @@ password — the vault key is derived for your Internet Identity principal.
   5 minutes idle, whether the app is open or closed.
 - **Items**: title, username, password, website, notes — create, edit, delete.
 - **Search** across every field except the password.
+- **Live updates.** The vault list is re-read every 15 s, so a newly shared vault,
+  a new item or a revocation appears without a reload — and because listing needs
+  no key, polling costs no derivations. A manual check sits beside the app name.
 - **Password generator** with length, digits and symbols, plus a strength read-out.
 - **Reveal / copy.** Passwords are masked, auto-hide after 30s, and copying one
   clears the clipboard after 45s (only if it still holds that value).
@@ -29,12 +32,14 @@ password — the vault key is derived for your Internet Identity principal.
 src/backend/main.mo        The whole backend: EncryptedMaps state + the canister mixin
 src/frontend/lib/vault.ts  Encrypt/decrypt and access control over EncryptedMaps
 src/frontend/lib/items.ts  The item model and its JSON encoding
+src/frontend/lib/reconcile.ts  What the UI does when the canister changes underneath
 src/frontend/lib/auth.ts   Internet Identity, and the load-time session gate
 src/frontend/lib/session.ts  Idle timeout, activity mark, cross-tab lock, key purge
 src/frontend/lib/lock.ts     The lock sequence: ordering and failure safety
 src/frontend/components/   Sidebar, item list, detail, editor, share dialog, session status
 src/frontend/lib/__tests__/  Unit tests: session lifetime, load-time gate, lock sequence
 scripts/smoke-test.mjs     End-to-end check against a running local replica
+scripts/check-poll-cost.mjs  Asserts a poll derives no keys and opening one vault derives one
 ```
 
 The backend is ~20 lines: `include EncryptedMapsCanister(state)` contributes every
@@ -82,9 +87,15 @@ load refuses and purges. A missing mark counts as expired, so it fails closed.
 
 #### Why key material is cached at all
 
-Opening a vault costs one `vetkd_derive_key` call, so the cost scales with how
-many vaults you can see — 1 owned + 25 shared is 26 derivations on **every** page
-load, about 0.68 XDR on `key_1`. Caching takes a reload inside the window to zero.
+Opening a vault costs one `vetkd_derive_key` call — about 0.026 XDR on `key_1`,
+paid by the canister. Two things keep that bounded:
+
+- **Vaults are opened lazily.** The vault list is one query returning ciphertext,
+  so listing costs **no derivations at all**; a key is derived only for the vault
+  you actually open. A user with 1 owned + 25 shared vaults pays 1 derivation
+  instead of 26. `npm run check-poll-cost` asserts this against a live replica.
+- **The derived key is cached**, so reopening a vault, and any reload inside the
+  session window, costs nothing.
 
 What is stored is a **non-extractable `CryptoKey` handle**: `exportKey` throws, so
 the raw key bytes can never leave the device. The exposure is "same-origin code
