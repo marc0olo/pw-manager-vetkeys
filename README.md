@@ -51,24 +51,59 @@ used: it would leave a usable decryption capability on disk for any same-origin 
 ```bash
 npm install
 
-icp network start -d          # this project uses gateway port 0, so it can run
-                              # alongside other icp-cli projects
+icp network start -d          # gateway pinned to port 8100 (see below)
 icp deploy                    # builds the canister and the frontend, then syncs
-
-icp network status --json | jq -r '.gateway_url'   # the port changes each start
 ```
 
-`icp deploy` prints the frontend URL, e.g. `http://frontend.local.localhost:52368/`.
+`icp deploy` prints the frontend URL: `http://frontend.local.localhost:8100/`.
 
-Verify the crypto and access-control path end to end:
+### Internet Identity
 
-```bash
-npm run smoke-test            # 8 checks against the deployed local canister
-```
+**Which II** is decided at runtime from the origin the page is served from,
+because a locally deployed II is served by the *same gateway* as this app:
 
-For UI work, `npm run dev` serves the app on Vite with the `ic_env` cookie faked
-from the live local network (canister IDs and root key read via `icp network status`),
-so sign-in and canister calls work the same as in the deployed build.
+| Served from | Internet Identity |
+|---|---|
+| `*.localhost` (local gateway) | `http://id.ai.localhost:<same port>/authorize` |
+| anything else (mainnet, custom domain) | `https://id.ai/authorize` |
+
+That is the whole mechanism — `resolveIdentityProvider()` in
+`src/frontend/lib/auth.ts`. There is no build configuration, and a mainnet origin
+cannot resolve to a localhost URL. `npm run dev` is the one exception, since Vite
+serves on its own port rather than the gateway's; the dev server passes the
+gateway origin in the `ic_env` cookie it already fakes.
+
+Local Internet Identity requires `ii: true` on the local network in `icp.yaml`
+(already set). A local-II build says so on the lock screen.
+
+**The gate**: everything sensitive hangs off `VaultClient`, built only from a
+non-anonymous identity, so no code path reaches an item without a delegation. The
+canister enforces the same independently through EncryptedMaps access control —
+the gate is defence in depth, not the security boundary.
+
+The vault locks three ways, all through `lock(reason)` in `App.tsx`, always in the
+same order: drop the derived key material, then the delegation, then all vault
+state. The lock screen says which happened.
+
+| Trigger | When |
+|---|---|
+| `manual` | the **Lock vault** button |
+| `idle` | 5 minutes without interaction |
+| `expired` | the 8-hour delegation runs out |
+
+Because key material is memory-only, reloading the tab also locks the vault.
+
+> **Principals are per origin.** `http://localhost:5173` (`npm run dev`),
+> `http://frontend.local.localhost:8100` (deployed locally) and mainnet are three
+> different users with three different vaults.
+
+### Why the gateway port is pinned
+
+II derives a principal per origin, and the port is part of the origin. With an
+OS-assigned port (`gateway.port: 0`) every `icp network start` would hand you a
+new principal — and an apparently empty vault. The port is pinned to **8100**
+(not the icp-cli default of 8000, so this project coexists with others). If 8100
+is taken, change it in `icp.yaml`; everything else reads the port dynamically.
 
 ### Mainnet
 
@@ -78,6 +113,15 @@ icp deploy -e ic
 ```
 
 Before that, change `VETKD_KEY_NAME` in `icp.yaml` from `test_key_1` to `key_1`.
+
+Internet Identity needs no configuration — a mainnet origin resolves to
+`https://id.ai/authorize` on its own. Do **not** add `derivationOrigin` for the
+gateway domains: II canonicalizes `ic0.app`, `icp0.io` and `icp.net` to one form,
+so they already yield the same principal, and adding it would break sign-in.
+
+The sign-in screen shows this app's name, tagline and logo from
+`public/.well-known/ii-app-metadata`. Its rules fail as a unit — one invalid field
+voids the whole document — so run `npm run check-ii-metadata` after editing it.
 
 > **The vetKD key name and the domain separator are immutable once data exists.**
 > Both feed key derivation, so changing either makes every stored secret

@@ -1,7 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Identity } from "@icp-sdk/core/agent";
 import type { Principal } from "@icp-sdk/core/principal";
-import { restoreSession, signIn, signOut } from "./lib/auth";
+import {
+  onIdle,
+  restoreSession,
+  sessionExpiresAt,
+  signIn,
+  signOut,
+  type LockReason,
+} from "./lib/auth";
 import { CLIPBOARD_CLEAR_SECONDS, copyPlain, copySecret } from "./lib/clipboard";
 import { compareItems, emptyItem, matchesQuery, type VaultItem } from "./lib/items";
 import {
@@ -40,6 +47,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [lockReason, setLockReason] = useState<LockReason | null>(null);
 
   const notify = useCallback((text: string) => {
     setToast(text);
@@ -98,6 +106,7 @@ export function App() {
   const handleSignIn = async () => {
     setBusy(true);
     setError(null);
+    setLockReason(null);
     try {
       setIdentity(await signIn());
     } catch (caught) {
@@ -107,17 +116,53 @@ export function App() {
     }
   };
 
-  const handleSignOut = async () => {
-    await client?.lock();
-    await signOut();
-    setIdentity(null);
-    setClient(null);
-    setVaults(null);
-    setSelectedVaultId(null);
-    setSelectedItemId(null);
-    setPane({ mode: "view" });
-    setQuery("");
-  };
+  /**
+   * The single way out of an unlocked vault, whether the user pressed Lock, went
+   * idle, or the delegation expired. Drops the derived key material first, then
+   * the delegation, then every trace of the vault from component state.
+   */
+  const lock = useCallback(
+    async (reason: LockReason) => {
+      await client?.lock();
+      await signOut();
+      setIdentity(null);
+      setClient(null);
+      setVaults(null);
+      setSelectedVaultId(null);
+      setSelectedItemId(null);
+      setPane({ mode: "view" });
+      setQuery("");
+      setSharing(false);
+      setError(null);
+      setLockReason(reason);
+    },
+    [client],
+  );
+
+  // The idle callback is registered once, so it has to reach the current `lock`
+  // and identity through refs rather than closing over stale ones.
+  const lockRef = useRef(lock);
+  const identityRef = useRef(identity);
+  useEffect(() => {
+    lockRef.current = lock;
+    identityRef.current = identity;
+  }, [lock, identity]);
+
+  useEffect(() => {
+    onIdle(() => {
+      // The idle timer runs while locked too; ignore it then.
+      if (identityRef.current) void lockRef.current("idle");
+    });
+  }, []);
+
+  // Lock exactly when the delegation stops being valid.
+  useEffect(() => {
+    if (!identity) return;
+    const expiresAt = sessionExpiresAt(identity);
+    if (expiresAt === null) return;
+    const timer = setTimeout(() => void lockRef.current("expired"), Math.max(0, expiresAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [identity]);
 
   const vault = useMemo(() => {
     if (!vaults?.length) return null;
@@ -147,7 +192,7 @@ export function App() {
   };
 
   if (!identity) {
-    return <LockScreen onSignIn={handleSignIn} busy={busy} error={error} />;
+    return <LockScreen onSignIn={handleSignIn} busy={busy} error={error} lockReason={lockReason} />;
   }
 
   if (!vault) {
@@ -155,7 +200,7 @@ export function App() {
       <main className="loading">
         <p>{error ?? "Deriving your vault key…"}</p>
         {error && (
-          <button className="btn btn--ghost" onClick={handleSignOut}>
+          <button className="btn btn--ghost" onClick={() => void lock("manual")}>
             Sign out
           </button>
         )}
@@ -175,7 +220,7 @@ export function App() {
           setQuery("");
         }}
         principal={client?.me.toText() ?? ""}
-        onSignOut={handleSignOut}
+        onSignOut={() => void lock("manual")}
       />
 
       <ItemList

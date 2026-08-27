@@ -24,9 +24,16 @@ canisters:
           - npm run build
 
 networks:
-  # port 0 -> the OS picks a free port, so this network can run alongside other
-  # icp-cli projects. Read the real URL with `icp network status --json`.
   - name: local
     mode: managed
+    # Internet Identity derives a principal per ORIGIN, and the port is part of
+    # the origin. An OS-assigned port (0) would hand you a new principal — and an
+    # apparently empty vault — on every restart, so the port is pinned. 8000 is
+    # the icp-cli default; this project uses 8100 to coexist with other projects.
     gateway:
-      port: 0
+      port: 8100
+    # Deploys the II canisters locally, served at http://id.ai.localhost:8100.
+    # The app finds it from its own origin at runtime — no build configuration.
+    # Required, not a toggle: anything served from a local gateway signs in
+    # against local II, so with `ii: false` the sign-in popup would open nothing.
+    ii: true

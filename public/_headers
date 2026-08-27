@@ -12,3 +12,14 @@
 # HTML must revalidate so a redeploy is picked up
 /*.html
   Cache-Control: public, max-age=0, must-revalidate
+
+# Internet Identity reads these cross-origin from the sign-in screen, so both
+# need CORS. The metadata document has no file extension, so its media type must
+# be set with the bare `Content-Type:` form.
+/.well-known/ii-app-metadata
+  Content-Type: application/json
+  Access-Control-Allow-Origin: *
+
+/logo.png
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=86400

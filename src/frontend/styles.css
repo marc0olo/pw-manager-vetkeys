@@ -832,3 +832,25 @@ code,
   font-weight: 550;
   box-shadow: var(--shadow);
 }
+
+/* Development-build marker: shown only when wired to a local II. */
+.lock__env {
+  margin: 18px 0 0;
+  padding: 8px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+}
+
+/* Why the vault is locked — inactivity, expiry, or the Lock button. */
+.lock__notice {
+  margin: 0 0 16px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--active);
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+}
