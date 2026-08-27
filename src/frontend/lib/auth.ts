@@ -1,6 +1,15 @@
 import { AuthClient } from "@icp-sdk/auth/client";
 import type { Identity } from "@icp-sdk/core/agent";
 import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
+import {
+  SESSION_POLICY,
+  IDLE_TIMEOUT_MS,
+  clearActivity,
+  idleElapsedMs,
+  markActive,
+  purgeKeyMaterial,
+  storedPrincipal,
+} from "./session";
 
 /**
  * Internet Identity sign-in.
@@ -46,40 +55,18 @@ if (USING_LOCAL_II) {
   console.info(`[vetVault] signing in against local Internet Identity: ${IDENTITY_PROVIDER}`);
 }
 
-/** Eight hours. A password manager should not hold a month-long delegation. */
-const SESSION_LIFETIME_HOURS = 8;
-const SESSION_LIFETIME_NS = BigInt(SESSION_LIFETIME_HOURS) * BigInt(3_600_000_000_000);
-
-/** Auto-lock after this much inactivity. */
-export const IDLE_TIMEOUT_MS = 5 * 60_000;
-
-export const SESSION_LIFETIME_LABEL = `${SESSION_LIFETIME_HOURS}-hour`;
-export const IDLE_TIMEOUT_LABEL = `${IDLE_TIMEOUT_MS / 60_000} minutes`;
-
+const SESSION_LIFETIME_NS = BigInt(SESSION_POLICY.delegationHours) * BigInt(3_600_000_000_000);
 /** Why the vault is locked, so the lock screen can say so. */
-export type LockReason = "manual" | "idle" | "expired";
+export type LockReason = "manual" | "idle" | "expired" | "elsewhere";
 
 export const authClient = new AuthClient({
   identityProvider: IDENTITY_PROVIDER,
-  idleOptions: {
-    idleTimeout: IDLE_TIMEOUT_MS,
-    // The library's default idle callback signs out and reloads the page. We
-    // take it over so locking runs the same path as the Lock button — dropping
-    // the vault key material deliberately — and so the user is told why.
-    disableDefaultIdleCallback: true,
-  },
+  // The idle policy lives in ./session, which owns one activity definition for
+  // both the in-page timeout and the persisted mark. The library's IdleManager
+  // is off entirely: it is only created inside signIn()/#hydrate(), so a
+  // callback registered here would be dropped, and it is single-shot.
+  idleOptions: { disableIdle: true },
 });
-
-// Registered once at module load; `onIdle` only swaps the target, so React
-// re-renders and StrictMode double-mounts cannot stack duplicate callbacks
-// (IdleManager has no way to unregister one).
-let idleCallback: (() => void) | null = null;
-authClient.idleManager?.registerCallback(() => idleCallback?.());
-
-/** Called once the user has been idle for {@link IDLE_TIMEOUT_MS}. */
-export function onIdle(callback: () => void): void {
-  idleCallback = callback;
-}
 
 /**
  * When the delegation stops being valid, in ms since the epoch.
@@ -97,20 +84,119 @@ export function sessionExpiresAt(identity: Identity): number | null {
   return Math.min(...delegations.map((d) => Number(d.delegation.expiration / BigInt(1_000_000))));
 }
 
-export async function restoreSession(): Promise<Identity | null> {
-  if (!authClient.isAuthenticated()) return null;
+/**
+ * Decide, on page load, whether the stored session may be resumed.
+ *
+ * This is where a session left closed for too long dies: the delegation and
+ * every cached vault key are purged together before anything can use them, so
+ * the two can never diverge no matter how the app was closed.
+ *
+ * Refusals always carry a reason unless this is a genuinely first visit, so the
+ * user is never shown an unexplained sign-in screen.
+ */
+export async function resumeSession(): Promise<{ identity: Identity | null; lockReason: LockReason | null }> {
+  // Let the client finish restoring from storage before anything below touches
+  // it. `getIdentity()` is the only method that awaits that restore;
+  // `signOut()` does not, so the refusals below would otherwise delete storage
+  // while the constructor's restore is still reading it, and both paths would
+  // open their own IndexedDB connection (the second leaks). Both are fixed
+  // upstream in dfinity/icp-js-auth#137, merged but absent from 8.0.3 — see
+  // issue #6 for what to remove once a release carries it.
+  //
+  // The restore can also *reject*: restoreKey's storage read sits outside its
+  // try/catch, and `#initPromise` memoizes the rejection so every later
+  // `getIdentity()` rejects too. That must inform the decision, not gate it —
+  // letting it propagate would abort `resumeSession` and skip the purge, and a
+  // failing store is exactly when the purge matters most. It is also the failure
+  // mode of the very bug this workaround is for.
+  const hydrated = await authClient.getIdentity().then(
+    () => true,
+    () => false,
+  );
+
+  const idleFor = idleElapsedMs();
+  const hadMark = idleFor !== null;
+  // A delegation that cannot be read is not a delegation. `isAuthenticated()`
+  // only consults a localStorage mirror, so on its own it would happily report
+  // one that no longer loads.
+  const hadDelegation = hydrated && authClient.isAuthenticated();
+
+  // A missing mark is never treated as fresh: no recorded activity means no live
+  // session to resume.
+  if (!hadMark || idleFor > IDLE_TIMEOUT_MS) {
+    await signOut();
+    if (!hadMark && !hadDelegation) return { identity: null, lockReason: null }; // first visit
+    return { identity: null, lockReason: hadMark ? "idle" : "expired" };
+  }
+
+  if (!hadDelegation) {
+    // Delegation expired or was cleared elsewhere; key material must not survive it.
+    await signOut();
+    return { identity: null, lockReason: "expired" };
+  }
+
   const identity = await authClient.getIdentity();
-  return identity.getPrincipal().isAnonymous() ? null : identity;
+  const principal = identity.getPrincipal();
+  if (principal.isAnonymous()) {
+    await signOut();
+    return { identity: null, lockReason: "expired" };
+  }
+
+  // The mark and the delegation must describe the same user. markActive
+  // swallows storage failures by design, so divergence is reachable — and
+  // resuming on a mark that belongs to someone else is exactly the coupling
+  // failure this module exists to prevent.
+  const recorded = storedPrincipal();
+  if (recorded !== null && recorded !== principal.toText()) {
+    await signOut();
+    return { identity: null, lockReason: "expired" };
+  }
+
+  return { identity, lockReason: null };
 }
 
 export async function signIn(): Promise<Identity> {
-  const identity = await authClient.signIn({ maxTimeToLive: SESSION_LIFETIME_NS });
+  const identity = await authClient.signIn({
+    maxTimeToLive: SESSION_LIFETIME_NS,
+    // Deliberately NOT scoped with `targets`. Internet Identity does not issue
+    // canister-scoped delegations: it ignores the request and returns an
+    // unscoped chain, which @icp-sdk/signer then rejects —
+    // "Returned delegation is unscoped but scoped targets were requested" —
+    // so sign-in fails outright. Scoped delegations are an ICRC-49/57 signer
+    // feature (OISY and similar), not part of II's authorize flow.
+    //
+    // Little is lost. II derives a principal per *origin*, so this principal
+    // exists only for this app and holds nothing on any other canister; and the
+    // IC is reverse-gas, so a leaked delegation cannot spend the user's cycles
+    // by calling elsewhere. Its blast radius is already this app's own data,
+    // which is what the idle timeout and the delegation TTL bound.
+    //
+    // Revisit only if the app starts calling a canister that holds value under
+    // this same principal (a ledger, say) — and note that II still could not
+    // scope it, so the mitigation would have to be something else.
+  });
+
   if (identity.getPrincipal().isAnonymous()) {
     throw new Error("Internet Identity returned an anonymous identity; sign-in did not complete.");
   }
+  markActive(identity.getPrincipal().toText());
   return identity;
 }
 
+/**
+ * Full teardown: cached vault keys first, then the delegation, then the activity
+ * mark. Every path that ends a session goes through here so key material can
+ * never be left behind by one of them.
+ */
 export async function signOut(): Promise<void> {
-  await authClient.signOut();
+  try {
+    await purgeKeyMaterial();
+  } finally {
+    try {
+      await authClient.signOut();
+    } finally {
+      // Always runs: a mark left behind would make a dead session look live.
+      clearActivity();
+    }
+  }
 }

@@ -4,9 +4,11 @@ import { Principal } from "@icp-sdk/core/principal";
 import {
   DefaultEncryptedMapsClient,
   EncryptedMaps,
+  IndexedDbDerivedKeyMaterialCache,
   type AccessRights,
 } from "@icp-sdk/vetkeys/encrypted_maps";
 import { compareItems, decodeItem, encodeItem, type VaultItem } from "./items";
+import { keyCacheName } from "./session";
 
 export type { AccessRights };
 
@@ -49,17 +51,11 @@ export function vaultId(vault: Pick<Vault, "owner" | "name">): string {
   return `${vault.owner.toText()}/${vault.name}`;
 }
 
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
-
-function nameBytes(name: string): Uint8Array {
-  const bytes = encoder.encode(name);
-  if (bytes.length === 0) throw new Error("A vault name cannot be empty.");
-  if (bytes.length > 32) throw new Error("A vault name must be at most 32 bytes.");
-  return bytes;
-}
-
-export function backendCanisterId(): string {
+/**
+ * The vault canister's ID, injected by `icp deploy` into every canister's
+ * settings and delivered to the frontend through the `ic_env` cookie.
+ */
+function backendCanisterId(): string {
   const id = safeGetCanisterEnv<{ readonly "PUBLIC_CANISTER_ID:backend": string }>()?.[
     "PUBLIC_CANISTER_ID:backend"
   ];
@@ -72,13 +68,34 @@ export function backendCanisterId(): string {
   return id;
 }
 
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+function nameBytes(name: string): Uint8Array {
+  const bytes = encoder.encode(name);
+  if (bytes.length === 0) throw new Error("A vault name cannot be empty.");
+  if (bytes.length > 32) throw new Error("A vault name must be at most 32 bytes.");
+  return bytes;
+}
+
 /**
  * Thin, typed façade over EncryptedMaps.
  *
  * Encryption and decryption happen here in the browser; the canister only ever
- * holds ciphertext. Derived key material is kept in memory only (the library
- * default) so closing or reloading the tab genuinely locks the vault — the
- * IndexedDB cache would leave a usable decryption capability behind on disk.
+ * holds ciphertext.
+ *
+ * **Derived key material is cached in IndexedDB**, namespaced per principal.
+ * Each vault costs one `vetkd_derive_key` call to open, so a user with a handful
+ * of shared vaults pays that many derivations on *every* page load — real cycles
+ * (~0.026 XDR each on `key_1`), not just latency. The cache removes that for
+ * reloads inside the session window.
+ *
+ * The safety of persisting it rests entirely on the cache having the same
+ * lifetime as the session that authorised it. That is enforced in ./session:
+ * every load either resumes a session inside the idle window or purges the
+ * delegation *and* these stores together, and every lock does the same. The
+ * per-principal namespace keeps one identity's keys from ever being served to
+ * another on this origin.
  */
 export class VaultClient {
   private constructor(
@@ -93,8 +110,11 @@ export class VaultClient {
       host: window.location.origin,
       rootKey: safeGetCanisterEnv()?.IC_ROOT_KEY,
     });
-    const encryptedMaps = new EncryptedMaps(new DefaultEncryptedMapsClient(agent, canisterId));
-    return new VaultClient(encryptedMaps, identity.getPrincipal());
+    const principal = identity.getPrincipal();
+    const encryptedMaps = new EncryptedMaps(new DefaultEncryptedMapsClient(agent, canisterId), {
+      cache: new IndexedDbDerivedKeyMaterialCache(keyCacheName(principal.toText())),
+    });
+    return new VaultClient(encryptedMaps, principal);
   }
 
   /**
@@ -156,7 +176,7 @@ export class VaultClient {
     await this.encryptedMaps.removeUser(vault.owner, nameBytes(vault.name), user);
   }
 
-  /** Drops in-memory key material. Call on sign-out. */
+  /** Drops the cached vault keys, including the persisted ones. */
   async lock(): Promise<void> {
     await this.encryptedMaps.clearCache();
   }

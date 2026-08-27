@@ -9,7 +9,8 @@ password — the vault key is derived for your Internet Identity principal.
 
 ## Features
 
-- **Internet Identity sign-in.** No account, no master password. 8-hour session.
+- **Internet Identity sign-in.** No account, no master password. Auto-locks after
+  5 minutes idle, whether the app is open or closed.
 - **Items**: title, username, password, website, notes — create, edit, delete.
 - **Search** across every field except the password.
 - **Password generator** with length, digits and symbols, plus a strength read-out.
@@ -25,8 +26,11 @@ password — the vault key is derived for your Internet Identity principal.
 src/backend/main.mo        The whole backend: EncryptedMaps state + the canister mixin
 src/frontend/lib/vault.ts  Encrypt/decrypt and access control over EncryptedMaps
 src/frontend/lib/items.ts  The item model and its JSON encoding
-src/frontend/lib/auth.ts   Internet Identity
+src/frontend/lib/auth.ts   Internet Identity, and the load-time session gate
+src/frontend/lib/session.ts  Idle timeout, activity mark, cross-tab lock, key purge
+src/frontend/lib/lock.ts     The lock sequence: ordering and failure safety
 src/frontend/components/   Sidebar, item list, detail, editor, share dialog
+src/frontend/lib/__tests__/  Unit tests: session lifetime, load-time gate, lock sequence
 scripts/smoke-test.mjs     End-to-end check against a running local replica
 ```
 
@@ -42,9 +46,60 @@ client by construction.
 | Item id | Yes — so ids are random bytes and leak nothing |
 | Vault name, owner, and who it is shared with | Yes — access control has to be enforced in the clear |
 
-Derived key material is kept **in memory only**. Reloading the tab genuinely locks
-the vault. The persistent `IndexedDbDerivedKeyMaterialCache` is deliberately not
-used: it would leave a usable decryption capability on disk for any same-origin code.
+### What persists, and for how long
+
+| | Where | Lifetime |
+|---|---|---|
+| Internet Identity delegation | IndexedDB (`@icp-sdk/auth`) | until the idle window lapses, capped at 8 h |
+| Derived vault key material | IndexedDB, namespaced per principal | the same — purged with the delegation |
+| Last-activity mark | `localStorage` | cleared on lock |
+
+**One timeout governs both open and closed time.** The app auto-locks after
+`idleMinutes` of inactivity while open; a session left closed for longer than
+that is refused on the next load, and the delegation and every cached vault key
+are purged together before anything can use them. `delegationHours` is only a
+ceiling the session cannot outlive even with continuous use.
+
+Both live in `SESSION_POLICY` in `src/frontend/lib/session.ts`.
+
+The delegation is **not** canister-scoped. Internet Identity does not issue
+scoped delegations — it ignores a `targets` request and returns an unscoped
+chain, which the client then rejects, so sign-in fails outright. Little is lost:
+II derives a principal per *origin*, so this principal exists only for this app
+and holds nothing on any other canister, and the IC is reverse-gas, so a leaked
+delegation cannot spend the user's cycles elsewhere.
+
+Why a deadline checked on load rather than clearing on close: there is no
+reliable "the app was closed" hook. `pagehide`/`beforeunload` do not run on a
+crash, force-quit or OS kill — so anything relying on them leaves credentials
+behind exactly when it matters — and they *also* fire on an ordinary reload, so
+clearing there would demand a fresh passkey on every refresh. A stored deadline
+needs no cooperation from the shutdown path: whatever killed the app, the next
+load refuses and purges. A missing mark counts as expired, so it fails closed.
+
+#### Why key material is cached at all
+
+Opening a vault costs one `vetkd_derive_key` call, so the cost scales with how
+many vaults you can see — 1 owned + 25 shared is 26 derivations on **every** page
+load, about 0.68 XDR on `key_1`. Caching takes a reload inside the window to zero.
+
+What is stored is a **non-extractable `CryptoKey` handle**: `exportKey` throws, so
+the raw key bytes can never leave the device. The exposure is "same-origin code
+could use the handle", not "key material can be copied off the machine".
+
+Persisting it is sound only because its lifetime is tied to the session's, which
+is what the purge-on-load rule above enforces, and because the store is
+namespaced per principal so one identity's keys are never served to another.
+
+Two limits worth knowing:
+
+- The purge enumerates stores with `indexedDB.databases()`, which **Firefox does
+  not implement**. There it can only delete the last recorded principal's store,
+  so a store left behind by a principal no longer recorded would survive.
+- `EncryptedMaps` does not rotate a vault key when access is revoked, so a
+  revoked collaborator's cached handle stays cryptographically valid. They can no
+  longer fetch ciphertext, and cannot export the key — but caching widens the
+  window in which they hold a usable handle from "this tab" to "the idle window".
 
 ## Run it
 
@@ -56,6 +111,12 @@ icp deploy                    # builds the canister and the frontend, then syncs
 ```
 
 `icp deploy` prints the frontend URL: `http://frontend.local.localhost:8100/`.
+
+```bash
+npm test                      # session lifetime and load-time gate (no replica needed)
+npm run smoke-test            # crypto + access control against the deployed canister
+npm run check-ii-metadata     # validates the II app-metadata document
+```
 
 ### Internet Identity
 
@@ -81,17 +142,37 @@ non-anonymous identity, so no code path reaches an item without a delegation. Th
 canister enforces the same independently through EncryptedMaps access control —
 the gate is defence in depth, not the security boundary.
 
-The vault locks three ways, all through `lock(reason)` in `App.tsx`, always in the
-same order: drop the derived key material, then the delegation, then all vault
-state. The lock screen says which happened.
+The vault locks four ways, all through `lock(reason)` in `App.tsx`, always in the
+same order — drop the derived key material, then the delegation, then all vault
+state — with each step running even if an earlier one throws. Locking in one tab
+broadcasts to the others, so they lock too. The lock screen says which happened.
 
 | Trigger | When |
 |---|---|
 | `manual` | the **Lock vault** button |
-| `idle` | 5 minutes without interaction |
-| `expired` | the 8-hour delegation runs out |
+| `idle` | 5 minutes without interaction, **or** reopening after that long away |
+| `expired` | the delegation is gone, or the stored session cannot be trusted |
+| `elsewhere` | another tab locked |
 
-Because key material is memory-only, reloading the tab also locks the vault.
+A reload keeps you signed in (it lands well inside the idle window) and reuses
+the cached vault keys, so it costs no derivations.
+
+The idle timeout is owned by `lib/session`, not by `@icp-sdk/auth`'s
+`IdleManager`: that is created only inside `signIn()`, so a callback registered at
+construction never runs, and it is single-shot. Owning it also means the in-page
+timer and the persisted mark are driven by the same activity events, so the two
+halves of the timeout cannot disagree.
+
+Both halves compare against the **wall clock** rather than waiting for a timer to
+fire. Timers do not run while a page is frozen or the machine is asleep, and a
+pending timeout resumes with its original remaining delay — so a lid closed for an
+hour would otherwise reopen on a decrypted vault with minutes still to run.
+
+Because both halves read the clock, both also guard against it being wound
+**backwards**: a jump of more than 30 s back makes a stale session look recent, so
+it locks or refuses rather than being waited out. Forward jumps need no guard —
+they only make the measured age larger, which already locks sooner. Smaller skew
+(NTP, resume from sleep) is tolerated so it cannot log anyone out on its own.
 
 > **Principals are per origin.** `http://localhost:5173` (`npm run dev`),
 > `http://frontend.local.localhost:8100` (deployed locally) and mainnet are three

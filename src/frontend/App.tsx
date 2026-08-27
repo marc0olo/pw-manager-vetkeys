@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Identity } from "@icp-sdk/core/agent";
 import type { Principal } from "@icp-sdk/core/principal";
 import {
-  onIdle,
-  restoreSession,
+  resumeSession,
   sessionExpiresAt,
   signIn,
   signOut,
   type LockReason,
 } from "./lib/auth";
+import { lockVault } from "./lib/lock";
+import { startSession, type RunningSession } from "./lib/session";
 import { CLIPBOARD_CLEAR_SECONDS, copyPlain, copySecret } from "./lib/clipboard";
 import { compareItems, emptyItem, matchesQuery, type VaultItem } from "./lib/items";
 import {
@@ -54,11 +55,15 @@ export function App() {
     setTimeout(() => setToast((current) => (current === text ? null : current)), 3000);
   }, []);
 
-  // Restore an existing delegation on load, but never auto-derive vault keys:
-  // key material is in-memory only, so a reload really does lock the vault.
+  // Resume a stored session only if it is still inside the idle window; a session
+  // left closed for longer is refused here, with its delegation and cached vault
+  // keys purged together. See lib/session.
   useEffect(() => {
-    restoreSession()
-      .then(setIdentity)
+    resumeSession()
+      .then(({ identity: resumed, lockReason: reason }) => {
+        setIdentity(resumed);
+        if (reason) setLockReason(reason);
+      })
       .catch(() => setIdentity(null));
   }, []);
 
@@ -118,42 +123,62 @@ export function App() {
 
   /**
    * The single way out of an unlocked vault, whether the user pressed Lock, went
-   * idle, or the delegation expired. Drops the derived key material first, then
-   * the delegation, then every trace of the vault from component state.
+   * idle, or the delegation expired.
+   *
+   * Order matters and is the invariant: derived key material goes first, then the
+   * delegation, then every trace of the vault in component state. Key material
+   * must never outlive the session that authorised it.
    */
+  const sessionRef = useRef<RunningSession | null>(null);
+
   const lock = useCallback(
     async (reason: LockReason) => {
-      await client?.lock();
-      await signOut();
-      setIdentity(null);
-      setClient(null);
-      setVaults(null);
-      setSelectedVaultId(null);
-      setSelectedItemId(null);
-      setPane({ mode: "view" });
-      setQuery("");
-      setSharing(false);
-      setError(null);
-      setLockReason(reason);
+      const session = sessionRef.current;
+      sessionRef.current = null;
+      // Ordering and failure-safety live in lib/lock, where they are tested.
+      await lockVault(reason, session, {
+        resetUi: (locked) => {
+          setIdentity(null);
+          setClient(null);
+          setVaults(null);
+          setSelectedVaultId(null);
+          setSelectedItemId(null);
+          setPane({ mode: "view" });
+          setQuery("");
+          setSharing(false);
+          setError(null);
+          setLockReason(locked);
+        },
+        clearVaultKeys: async () => {
+          await client?.lock();
+        },
+        endSession: signOut,
+      });
     },
     [client],
   );
 
-  // The idle callback is registered once, so it has to reach the current `lock`
-  // and identity through refs rather than closing over stale ones.
+  // The session's callbacks are installed once per identity, so they reach the
+  // current `lock` through a ref rather than closing over a stale one.
   const lockRef = useRef(lock);
-  const identityRef = useRef(identity);
   useEffect(() => {
     lockRef.current = lock;
-    identityRef.current = identity;
-  }, [lock, identity]);
+  }, [lock]);
 
+  // One owner for the idle timeout, the persisted activity mark and the
+  // cross-tab lock signal — see lib/session.
   useEffect(() => {
-    onIdle(() => {
-      // The idle timer runs while locked too; ignore it then.
-      if (identityRef.current) void lockRef.current("idle");
+    if (!identity) return;
+    const session = startSession(identity.getPrincipal().toText(), {
+      onIdle: () => void lockRef.current("idle"),
+      onRemoteLock: () => void lockRef.current("elsewhere"),
     });
-  }, []);
+    sessionRef.current = session;
+    return () => {
+      session.stop();
+      if (sessionRef.current === session) sessionRef.current = null;
+    };
+  }, [identity]);
 
   // Lock exactly when the delegation stops being valid.
   useEffect(() => {

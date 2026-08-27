@@ -1,11 +1,6 @@
 import { LockIcon, ShieldIcon } from "./Icons";
-import {
-  IDENTITY_PROVIDER,
-  IDLE_TIMEOUT_LABEL,
-  SESSION_LIFETIME_LABEL,
-  USING_LOCAL_II,
-  type LockReason,
-} from "../lib/auth";
+import { IDENTITY_PROVIDER, USING_LOCAL_II, type LockReason } from "../lib/auth";
+import { IDLE_TIMEOUT_LABEL } from "../lib/session";
 
 interface Props {
   onSignIn: () => void;
@@ -18,7 +13,8 @@ interface Props {
 const LOCK_MESSAGE: Record<LockReason, string> = {
   manual: "Vault locked. Your keys were discarded.",
   idle: `Locked after ${IDLE_TIMEOUT_LABEL} of inactivity.`,
-  expired: `Your ${SESSION_LIFETIME_LABEL} session expired. Sign in again to unlock.`,
+  expired: "Your session ended. Sign in again to unlock.",
+  elsewhere: "Locked in another tab.",
 };
 
 export function LockScreen({ onSignIn, busy, error, lockReason }: Props) {
