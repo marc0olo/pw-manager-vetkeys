@@ -161,10 +161,11 @@ fire. Timers do not run while a page is frozen or the machine is asleep, and a
 pending timeout resumes with its original remaining delay — so a lid closed for an
 hour would otherwise reopen on a decrypted vault with minutes still to run.
 
-Because both halves read the clock, both also distrust it: a jump larger than
-30 s in either direction locks rather than being waited out, since the age of the
-session is then unknowable. Smaller skew (NTP, resume from sleep) is tolerated so
-it cannot log anyone out on its own.
+Because both halves read the clock, both also guard against it being wound
+**backwards**: a jump of more than 30 s back makes a stale session look recent, so
+it locks or refuses rather than being waited out. Forward jumps need no guard —
+they only make the measured age larger, which already locks sooner. Smaller skew
+(NTP, resume from sleep) is tolerated so it cannot log anyone out on its own.
 
 > **Principals are per origin.** `http://localhost:5173` (`npm run dev`),
 > `http://frontend.local.localhost:8100` (deployed locally) and mainnet are three

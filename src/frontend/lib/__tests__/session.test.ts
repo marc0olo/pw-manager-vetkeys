@@ -171,7 +171,11 @@ describe("idle timeout (open tab)", () => {
     const session = startSession(PRINCIPAL, { onIdle, onRemoteLock: vi.fn() });
 
     vi.setSystemTime(Date.now() - 5_000);
-    vi.advanceTimersByTime(IDLE_CHECK_INTERVAL_MS);
+    // Drive the check WITHOUT advancing timers. Advancing by a poll interval
+    // would carry elapsed back above zero before the tick fired, so the negative
+    // branch would never be exercised and this test would pass for the wrong
+    // reason — the tolerance could be deleted and nothing would notice.
+    window.dispatchEvent(new Event("pageshow"));
 
     expect(onIdle).not.toHaveBeenCalled();
     session.stop();

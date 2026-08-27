@@ -39,14 +39,19 @@ export const IDLE_TIMEOUT_MS = SESSION_POLICY.idleMinutes * 60_000;
 export const IDLE_TIMEOUT_LABEL = `${SESSION_POLICY.idleMinutes} minutes`;
 
 /**
- * How far the clock may move, in either direction, before a timestamp is treated
- * as untrustworthy rather than merely skewed.
+ * How far the clock may move **backwards** before a timestamp is treated as
+ * untrustworthy rather than merely skewed.
  *
- * NTP corrections and resume-from-sleep can step a device's clock by a small
- * amount, and locking someone out over a few hundred milliseconds of skew would
- * be its own bug. Anything larger is either a deliberate change or a clock wrong
- * enough that the honest answer is "this session cannot be vouched for" — and
- * that answer must fail closed, which is the whole premise of this module.
+ * Only the backwards direction needs a guard. A forward jump makes the measured
+ * age larger, so it locks sooner or refuses a resume — already the safe
+ * direction. A backwards jump makes a stale session look recent, which is the
+ * one reading that fails open.
+ *
+ * The tolerance exists so the guard is not its own bug: NTP corrections and
+ * resume-from-sleep step a device's clock by a small amount, and locking someone
+ * out over a few hundred milliseconds of skew would be worse than the hole. A
+ * larger jump is either deliberate or a clock wrong enough that the honest answer
+ * is "this session cannot be vouched for".
  */
 const CLOCK_SKEW_TOLERANCE_MS = 30_000;
 
