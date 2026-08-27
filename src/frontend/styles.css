@@ -206,11 +206,60 @@ code,
   color: #fff;
 }
 
-.lock__lede {
-  margin: 0 0 24px;
+.lock__tagline {
+  margin: 0 0 18px;
   color: var(--muted);
   font-size: 14px;
   text-align: left;
+}
+
+/* First visit: what this is, scannable rather than a paragraph. */
+.lock__points {
+  margin: 0 0 24px;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+
+.lock__points li {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 9px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.lock__points svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--blue);
+}
+
+/* Returning after a lock: state and reassurance, no first-run explanation. */
+.lock__status {
+  margin: 0 0 22px;
+  text-align: left;
+}
+
+.lock__status h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}
+
+.lock__status p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.lock__mark--locked {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
 }
 
 .lock__error,
@@ -835,25 +884,13 @@ code,
 
 /* Development-build marker: shown only when wired to a local II. */
 .lock__env {
-  margin: 18px 0 0;
-  padding: 8px 12px;
-  border: 1px dashed var(--line);
-  border-radius: 8px;
+  margin: 16px 0 0;
   color: var(--muted);
-  font-size: 12px;
-  text-align: left;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  cursor: help;
 }
 
-/* Why the vault is locked — inactivity, expiry, or the Lock button. */
-.lock__notice {
-  margin: 0 0 16px;
-  padding: 9px 12px;
-  border-radius: 8px;
-  background: var(--active);
-  color: var(--text);
-  font-size: 13px;
-  text-align: left;
-}
 
 /* Time remaining before the idle lock, in the sidebar footer. */
 .countdown {
