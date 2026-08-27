@@ -4,10 +4,12 @@ import { Principal } from "@icp-sdk/core/principal";
 import {
   DefaultEncryptedMapsClient,
   EncryptedMaps,
+  IndexedDbDerivedKeyMaterialCache,
   type AccessRights,
 } from "@icp-sdk/vetkeys/encrypted_maps";
 import { backendCanisterId } from "./canister";
 import { compareItems, decodeItem, encodeItem, type VaultItem } from "./items";
+import { keyCacheName } from "./session";
 
 export type { AccessRights };
 
@@ -66,25 +68,18 @@ function nameBytes(name: string): Uint8Array {
  * Encryption and decryption happen here in the browser; the canister only ever
  * holds ciphertext.
  *
- * **Derived key material is memory-only** — the library default
- * (`InMemoryDerivedKeyMaterialCache`), since no `cache` is passed below. Note
- * what this does and does not buy:
+ * **Derived key material is cached in IndexedDB**, namespaced per principal.
+ * Each vault costs one `vetkd_derive_key` call to open, so a user with a handful
+ * of shared vaults pays that many derivations on *every* page load — real cycles
+ * (~0.026 XDR each on `key_1`), not just latency. The cache removes that for
+ * reloads inside the session window.
  *
- * - It does NOT lock the vault on reload. The *delegation* is persisted by
- *   @icp-sdk/auth (IndexedDB), so a reload re-derives the key and reopens the
- *   vault with no user interaction. The cost of dropping the cache is one vetKD
- *   derivation per map per page load, not a lock.
- * - It DOES make "key material never outlives the session" hold automatically:
- *   memory dies with the page, so the two can never diverge.
- *
- * That second property is the reason to keep it. Switching to
- * `IndexedDbDerivedKeyMaterialCache` would trade one vetKD derivation per load
- * for a persisted decryption capability that has **no intrinsic expiry** —
- * unlike the delegation, which dies on its own — and it cannot be made safe by
- * clearing on unload, because unload handlers are not guaranteed to run. It
- * would need the invariant re-established explicitly on *load*: namespace the
- * store per principal, and before trusting the cache verify that a valid
- * non-expired delegation exists for that same principal, purging otherwise.
+ * The safety of persisting it rests entirely on the cache having the same
+ * lifetime as the session that authorised it. That is enforced in ./session:
+ * every load either resumes a session inside the idle window or purges the
+ * delegation *and* these stores together, and every lock does the same. The
+ * per-principal namespace keeps one identity's keys from ever being served to
+ * another on this origin.
  */
 export class VaultClient {
   private constructor(
@@ -99,8 +94,11 @@ export class VaultClient {
       host: window.location.origin,
       rootKey: safeGetCanisterEnv()?.IC_ROOT_KEY,
     });
-    const encryptedMaps = new EncryptedMaps(new DefaultEncryptedMapsClient(agent, canisterId));
-    return new VaultClient(encryptedMaps, identity.getPrincipal());
+    const principal = identity.getPrincipal();
+    const encryptedMaps = new EncryptedMaps(new DefaultEncryptedMapsClient(agent, canisterId), {
+      cache: new IndexedDbDerivedKeyMaterialCache(keyCacheName(principal.toText())),
+    });
+    return new VaultClient(encryptedMaps, principal);
   }
 
   /**
@@ -162,7 +160,7 @@ export class VaultClient {
     await this.encryptedMaps.removeUser(vault.owner, nameBytes(vault.name), user);
   }
 
-  /** Drops in-memory key material. Call on sign-out. */
+  /** Drops the cached vault keys, including the persisted ones. */
   async lock(): Promise<void> {
     await this.encryptedMaps.clearCache();
   }

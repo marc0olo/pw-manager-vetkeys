@@ -3,12 +3,13 @@ import type { Identity } from "@icp-sdk/core/agent";
 import type { Principal } from "@icp-sdk/core/principal";
 import {
   onIdle,
-  restoreSession,
+  resumeSession,
   sessionExpiresAt,
   signIn,
   signOut,
   type LockReason,
 } from "./lib/auth";
+import { trackActivity } from "./lib/session";
 import { CLIPBOARD_CLEAR_SECONDS, copyPlain, copySecret } from "./lib/clipboard";
 import { compareItems, emptyItem, matchesQuery, type VaultItem } from "./lib/items";
 import {
@@ -54,11 +55,15 @@ export function App() {
     setTimeout(() => setToast((current) => (current === text ? null : current)), 3000);
   }, []);
 
-  // Restore an existing delegation on load, but never auto-derive vault keys:
-  // key material is in-memory only, so a reload really does lock the vault.
+  // Resume a stored session only if it is still inside the idle window; a session
+  // left closed for longer is refused here, with its delegation and cached vault
+  // keys purged together. See lib/session.
   useEffect(() => {
-    restoreSession()
-      .then(setIdentity)
+    resumeSession()
+      .then(({ identity: resumed, lockReason: reason }) => {
+        setIdentity(resumed);
+        if (reason) setLockReason(reason);
+      })
       .catch(() => setIdentity(null));
   }, []);
 
@@ -157,6 +162,13 @@ export function App() {
       if (identityRef.current) void lockRef.current("idle");
     });
   }, []);
+
+  // Keep the session marked alive while it is unlocked, so the next load can tell
+  // how long the app was away. Stops on lock, so a locked app looks locked.
+  useEffect(() => {
+    if (!identity) return;
+    return trackActivity(identity.getPrincipal().toText());
+  }, [identity]);
 
   // Lock exactly when the delegation stops being valid.
   useEffect(() => {

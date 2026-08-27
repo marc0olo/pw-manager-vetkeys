@@ -3,6 +3,7 @@ import type { Identity } from "@icp-sdk/core/agent";
 import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
 import { Principal } from "@icp-sdk/core/principal";
 import { backendCanisterId } from "./canister";
+import { clearActivity, idleElapsedMs, markActive, purgeKeyMaterial } from "./session";
 
 /**
  * Internet Identity sign-in.
@@ -49,17 +50,21 @@ if (USING_LOCAL_II) {
 }
 
 /**
- * How long an unlocked vault stays unlocked. The only two numbers to change;
- * the lock-screen wording is derived from them.
+ * How long an unlocked vault stays unlocked. The only two numbers to change; the
+ * lock-screen wording derives from them.
  *
- * `delegationHours` is also the hard cap on a *closed* tab: the delegation is
- * persisted (IndexedDB, by @icp-sdk/auth), so reopening the app within this
- * window re-derives the vault key and shows the vault without a passkey prompt.
- * `idleMinutes` only applies while a page is open.
+ * `idleMinutes` is the timeout that matters, and it covers **both** cases: the
+ * app auto-locks after this much inactivity while open, and a session left
+ * closed for longer than this is refused on the next load, with the delegation
+ * and the cached key material purged together (see ./session).
+ *
+ * `delegationHours` is only a ceiling: the delegation cannot outlive it even
+ * with continuous use, so it bounds a stolen delegation regardless of the idle
+ * policy.
  */
 export const SESSION_POLICY = {
-  delegationHours: 8,
   idleMinutes: 5,
+  delegationHours: 8,
 } as const;
 
 const SESSION_LIFETIME_NS = BigInt(SESSION_POLICY.delegationHours) * BigInt(3_600_000_000_000);
@@ -111,10 +116,36 @@ export function sessionExpiresAt(identity: Identity): number | null {
   return Math.min(...delegations.map((d) => Number(d.delegation.expiration / BigInt(1_000_000))));
 }
 
-export async function restoreSession(): Promise<Identity | null> {
-  if (!authClient.isAuthenticated()) return null;
+/**
+ * Decide, on page load, whether the stored session may be resumed.
+ *
+ * This is where a session that was left closed for too long dies: the delegation
+ * and every cached vault key are purged together before anything can use them,
+ * so the two can never diverge no matter how the app was closed.
+ */
+export async function resumeSession(): Promise<{ identity: Identity | null; lockReason: LockReason | null }> {
+  const idleFor = idleElapsedMs();
+
+  // No recorded activity means no live session to resume — never treat a missing
+  // mark as fresh.
+  if (idleFor === null || idleFor > IDLE_TIMEOUT_MS) {
+    const hadSession = authClient.isAuthenticated();
+    await signOut();
+    return { identity: null, lockReason: hadSession && idleFor !== null ? "idle" : null };
+  }
+
+  if (!authClient.isAuthenticated()) {
+    // Delegation expired or was cleared elsewhere; key material must not survive it.
+    await signOut();
+    return { identity: null, lockReason: "expired" };
+  }
+
   const identity = await authClient.getIdentity();
-  return identity.getPrincipal().isAnonymous() ? null : identity;
+  if (identity.getPrincipal().isAnonymous()) {
+    await signOut();
+    return { identity: null, lockReason: null };
+  }
+  return { identity, lockReason: null };
 }
 
 export async function signIn(): Promise<Identity> {
@@ -128,9 +159,17 @@ export async function signIn(): Promise<Identity> {
   if (identity.getPrincipal().isAnonymous()) {
     throw new Error("Internet Identity returned an anonymous identity; sign-in did not complete.");
   }
+  markActive(identity.getPrincipal().toText());
   return identity;
 }
 
+/**
+ * Full teardown: cached vault keys first, then the delegation, then the activity
+ * mark. Every path that ends a session goes through here so key material can
+ * never be left behind by one of them.
+ */
 export async function signOut(): Promise<void> {
+  await purgeKeyMaterial();
   await authClient.signOut();
+  clearActivity();
 }

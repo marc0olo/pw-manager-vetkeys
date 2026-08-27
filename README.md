@@ -9,7 +9,8 @@ password — the vault key is derived for your Internet Identity principal.
 
 ## Features
 
-- **Internet Identity sign-in.** No account, no master password. 8-hour session.
+- **Internet Identity sign-in.** No account, no master password. Auto-locks after
+  5 minutes idle, whether the app is open or closed.
 - **Items**: title, username, password, website, notes — create, edit, delete.
 - **Search** across every field except the password.
 - **Password generator** with length, digits and symbols, plus a strength read-out.
@@ -44,25 +45,36 @@ client by construction.
 
 ### What persists, and for how long
 
-| | Where | Survives a reload or tab close? |
+| | Where | Lifetime |
 |---|---|---|
-| Derived vault key material | memory only (library default) | No |
-| Internet Identity delegation | IndexedDB (`@icp-sdk/auth` default) | Yes, until it expires |
+| Internet Identity delegation | IndexedDB (`@icp-sdk/auth`) | until the idle window lapses, capped at 8 h |
+| Derived vault key material | IndexedDB, namespaced per principal | the same — purged with the delegation |
+| Last-activity mark | `localStorage` | cleared on lock |
 
-**Reloading does not lock the vault.** The delegation outlives the page, so the
-app re-derives the vault key and reopens it with no user interaction — dropping
-the key material costs one vetKD derivation per load, it is not a lock. Within
-the 8-hour delegation window, reopening the app shows the vault straight away.
+**One timeout governs both open and closed time.** The app auto-locks after
+`idleMinutes` of inactivity while open; a session left closed for longer than
+that is refused on the next load, and the delegation and every cached vault key
+are purged together before anything can use them. `delegationHours` is only a
+ceiling the session cannot outlive even with continuous use.
 
-What memory-only caching *does* buy is that key material can never outlive the
-session that authorised it: memory dies with the page, so the two cannot diverge.
-The delegation is scoped to the vault canister (`targets`) so a leaked copy
-cannot sign calls to other canisters, and it expires on its own — a persisted
-derived key would not.
+Both live in `SESSION_POLICY` in `src/frontend/lib/auth.ts`.
 
-Locking is therefore what bounds exposure, not reloading: 5 minutes idle while
-open, the delegation's 8 hours while closed, or the **Lock vault** button. Both
-lifetimes live in `SESSION_POLICY` in `src/frontend/lib/auth.ts`.
+Why a deadline checked on load rather than clearing on close: there is no
+reliable "the app was closed" hook. `pagehide`/`beforeunload` do not run on a
+crash, force-quit or OS kill — so anything relying on them leaves credentials
+behind exactly when it matters — and they *also* fire on an ordinary reload, so
+clearing there would demand a fresh passkey on every refresh. A stored deadline
+needs no cooperation from the shutdown path: whatever killed the app, the next
+load refuses and purges. A missing mark counts as expired, so it fails closed.
+
+#### Why key material is cached at all
+
+Opening a vault costs one `vetkd_derive_key` call, so the cost scales with how
+many vaults you can see — 1 owned + 25 shared is 26 derivations on **every** page
+load, about 0.68 XDR on `key_1`. Caching takes a reload inside the window to
+zero. Persisting it is only sound because its lifetime is tied to the session's,
+which is what the purge-on-load rule above enforces; the per-principal namespace
+keeps one identity's keys from being served to another on this origin.
 
 ## Run it
 
@@ -106,10 +118,11 @@ state. The lock screen says which happened.
 | Trigger | When |
 |---|---|
 | `manual` | the **Lock vault** button |
-| `idle` | 5 minutes without interaction |
+| `idle` | 5 minutes without interaction, **or** reopening after that long away |
 | `expired` | the 8-hour delegation runs out |
 
-Because key material is memory-only, reloading the tab also locks the vault.
+A reload keeps you signed in (it lands well inside the idle window) and reuses
+the cached vault keys, so it costs no derivations.
 
 > **Principals are per origin.** `http://localhost:5173` (`npm run dev`),
 > `http://frontend.local.localhost:8100` (deployed locally) and mainnet are three
