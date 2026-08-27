@@ -7,7 +7,6 @@ import {
   IndexedDbDerivedKeyMaterialCache,
   type AccessRights,
 } from "@icp-sdk/vetkeys/encrypted_maps";
-import { backendCanisterId } from "./canister";
 import { compareItems, decodeItem, encodeItem, type VaultItem } from "./items";
 import { keyCacheName } from "./session";
 
@@ -50,6 +49,23 @@ export function canManage(vault: Vault): boolean {
 
 export function vaultId(vault: Pick<Vault, "owner" | "name">): string {
   return `${vault.owner.toText()}/${vault.name}`;
+}
+
+/**
+ * The vault canister's ID, injected by `icp deploy` into every canister's
+ * settings and delivered to the frontend through the `ic_env` cookie.
+ */
+function backendCanisterId(): string {
+  const id = safeGetCanisterEnv<{ readonly "PUBLIC_CANISTER_ID:backend": string }>()?.[
+    "PUBLIC_CANISTER_ID:backend"
+  ];
+  if (!id) {
+    throw new Error(
+      "Backend canister ID missing from the ic_env cookie. Deploy with `icp deploy`, " +
+        "or start the local network before `npm run dev`.",
+    );
+  }
+  return id;
 }
 
 const encoder = new TextEncoder();
