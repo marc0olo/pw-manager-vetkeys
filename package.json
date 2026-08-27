@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "smoke-test": "node scripts/smoke-test.mjs"
+    "smoke-test": "node scripts/smoke-test.mjs",
+    "check-ii-metadata": "node scripts/check-ii-metadata.mjs"
   },
   "dependencies": {
     "@icp-sdk/auth": "^8.0.3",

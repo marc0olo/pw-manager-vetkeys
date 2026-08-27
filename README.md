@@ -119,6 +119,10 @@ Internet Identity needs no configuration — a mainnet origin resolves to
 gateway domains: II canonicalizes `ic0.app`, `icp0.io` and `icp.net` to one form,
 so they already yield the same principal, and adding it would break sign-in.
 
+The sign-in screen shows this app's name, tagline and logo from
+`public/.well-known/ii-app-metadata`. Its rules fail as a unit — one invalid field
+voids the whole document — so run `npm run check-ii-metadata` after editing it.
+
 > **The vetKD key name and the domain separator are immutable once data exists.**
 > Both feed key derivation, so changing either makes every stored secret
 > undecryptable. In Motoko the key name is captured into stable state at first
