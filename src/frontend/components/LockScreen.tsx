@@ -1,4 +1,4 @@
-import { CheckIcon, ExternalIcon, LockIcon, ShieldIcon } from "./Icons";
+import { CheckIcon, LockIcon, ShieldIcon } from "./Icons";
 import { IDENTITY_PROVIDER, USING_LOCAL_II, type LockReason } from "../lib/auth";
 import { IDLE_TIMEOUT_LABEL } from "../lib/session";
 
@@ -31,6 +31,8 @@ const LOCK_STATE: Record<LockReason, { title: string; detail: string }> = {
   },
 };
 
+// The concept page, linked from the term itself. Point it at a how-to guide
+// instead once one exists.
 const VETKEYS_DOCS = "https://docs.internetcomputer.org/concepts/vetkeys/";
 
 /**
@@ -69,17 +71,22 @@ export function LockScreen({ onSignIn, busy, error, lockReason }: Props) {
 
   return (
     <main className="lock">
-      <div className={`lock__card ${locked ? "" : "lock__card--intro"}`}>
-        <div className="lock__brand">
-          <span className={`lock__mark ${locked ? "lock__mark--locked" : ""}`}>
-            {locked ? <LockIcon /> : <ShieldIcon />}
-          </span>
-          <h1>vetVault</h1>
-        </div>
+      {/* The brand belongs to the page, not to the card — it was reading as a
+          second title stacked above the headline. */}
+      <div className="lock__brand">
+        <span className="lock__mark">
+          <ShieldIcon />
+        </span>
+        <h1>vetVault</h1>
+      </div>
 
+      <div className={`lock__card ${locked ? "" : "lock__card--intro"}`}>
         {locked ? (
           <div className="lock__status" role="status">
-            <h2>{locked.title}</h2>
+            <h2>
+              <LockIcon />
+              {locked.title}
+            </h2>
             <p>{locked.detail}</p>
           </div>
         ) : (
@@ -106,15 +113,6 @@ export function LockScreen({ onSignIn, busy, error, lockReason }: Props) {
         {error && (
           <p className="lock__error" role="alert">
             {error}
-          </p>
-        )}
-
-        {!locked && (
-          <p className="lock__credit">
-            <a href={VETKEYS_DOCS} target="_blank" rel="noreferrer noopener">
-              How vetKeys derives and shares keys
-              <ExternalIcon />
-            </a>
           </p>
         )}
 

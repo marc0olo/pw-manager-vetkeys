@@ -164,11 +164,12 @@ code,
 .lock,
 .loading {
   min-height: 100vh;
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   padding: 24px;
   gap: 16px;
-  align-content: center;
 }
 
 .lock__card {
@@ -178,15 +179,13 @@ code,
   border-radius: 16px;
   background: var(--surface);
   box-shadow: var(--shadow);
-  text-align: center;
+  text-align: left;
 }
 
 .lock__brand {
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 10px;
-  margin-bottom: 14px;
 }
 
 .lock__brand h1 {
@@ -242,34 +241,15 @@ code,
   font-weight: 600;
 }
 
-.lock__points a,
-.lock__credit a {
+.lock__points a {
   color: var(--blue);
   text-decoration: none;
 }
 
-.lock__points a:hover,
-.lock__credit a:hover {
+.lock__points a:hover {
   text-decoration: underline;
 }
 
-/* Attribution under the button — the differentiator, not fine print. */
-.lock__credit {
-  margin: 14px 0 0;
-  font-size: 12px;
-  text-align: center;
-}
-
-.lock__credit a {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.lock__credit svg {
-  width: 13px;
-  height: 13px;
-}
 
 .lock__points svg {
   flex: none;
@@ -284,9 +264,17 @@ code,
 }
 
 .lock__status h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0 0 6px;
   font-size: 16px;
   letter-spacing: -0.01em;
+}
+
+.lock__status h2 svg {
+  flex: none;
+  color: var(--muted);
 }
 
 .lock__status p {
@@ -296,11 +284,6 @@ code,
   line-height: 1.5;
 }
 
-.lock__mark--locked {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  color: var(--muted);
-}
 
 .lock__error,
 .modal__error {
@@ -925,6 +908,7 @@ code,
 /* Development-build marker: shown only when wired to a local II. */
 .lock__env {
   margin: 16px 0 0;
+  text-align: center;
   color: var(--muted);
   font-size: 11px;
   letter-spacing: 0.02em;
