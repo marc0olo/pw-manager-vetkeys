@@ -1,0 +1,5 @@
+# Real 404s for missing build assets (must come before the SPA catch-all)
+/assets/*  /404.html    404
+
+# Single-page-app fallback: serve the shell for any unmatched client route
+/*         /index.html  200

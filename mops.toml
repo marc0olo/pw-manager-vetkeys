@@ -1,0 +1,11 @@
+[toolchain]
+moc = "1.14.0"
+
+[moc]
+args = [ "--default-persistent-actors" ]
+
+[canisters.backend]
+main = "src/backend/main.mo"
+
+[dependencies]
+ic-vetkeys = "0.6.0"

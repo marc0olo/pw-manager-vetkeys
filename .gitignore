@@ -1,0 +1,28 @@
+# Various IDEs and Editors
+.vscode/
+.idea/
+**/*~
+
+# Mac OSX temporary files
+.DS_Store
+**/.DS_Store
+
+# environment variables
+.env
+
+# motoko
+.mops
+*.wasm
+
+# icp-cli local cache (safe to delete, rebuilt on next build/deploy)
+.icp/cache/
+# Do NOT ignore .icp/data/ — it stores mainnet canister ID mappings.
+# See: https://github.com/dfinity/icp-cli/blob/main/docs/concepts/project-model.md#whats-safe-to-delete
+
+# node / frontend build
+node_modules/
+dist/
+tsconfig.tsbuildinfo
+
+# autosync-managed IC skills (regenerated each session by .claude/sync-ic-skills.sh)
+.claude/skills/

@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://github.com/dfinity/icp-cli/raw/refs/tags/v1.3.0/docs/schemas/icp-yaml-schema.json
+
+canisters:
+  # Holds only ciphertext: the vetKeys EncryptedMaps state plus access control.
+  - name: backend
+    recipe:
+      type: "@dfinity/motoko@v5.1.0"
+    settings:
+      environment_variables:
+        # The vetKD key that derives every vault key. `test_key_1` is what local
+        # networks provision. IMMUTABLE once data exists — see README.
+        VETKD_KEY_NAME: test_key_1
+
+  # Serves the app. `presync` builds after canister IDs exist so the bundle is
+  # produced against the deployed backend; IDs still reach the app at runtime
+  # through the `ic_env` cookie.
+  - name: frontend
+    recipe:
+      type: "@dfinity/static-site@v0.3.3"
+      configuration:
+        dir: dist
+        presync:
+          - npm ci
+          - npm run build
+
+networks:
+  # port 0 -> the OS picks a free port, so this network can run alongside other
+  # icp-cli projects. Read the real URL with `icp network status --json`.
+  - name: local
+    mode: managed
+    gateway:
+      port: 0

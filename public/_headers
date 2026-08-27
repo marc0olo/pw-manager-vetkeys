@@ -1,0 +1,14 @@
+/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+  Content-Security-Policy: default-src 'self'; connect-src 'self' https://icp-api.io https://*.icp0.io https://*.icp.net; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
+
+# Fingerprinted build assets never change — cache them hard
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# HTML must revalidate so a redeploy is picked up
+/*.html
+  Cache-Control: public, max-age=0, must-revalidate
