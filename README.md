@@ -19,8 +19,9 @@ password — the vault key is derived for your Internet Identity principal.
 - **Vault sharing** at three levels — read, read/write, read/write/manage. The
   vault key is re-encrypted for the grantee, so no secret changes hands. The
   sidebar and the pane header both show how many people a vault is shared with.
-- **Lock** discards the derived key material, and the sidebar counts down to the
-  automatic one.
+- **Lock** discards the derived key material. The sidebar shows both deadlines
+  that end a session — the sliding idle lock and the fixed sign-in expiry — with
+  whichever comes first highlighted.
 
 ## Architecture
 
@@ -31,7 +32,7 @@ src/frontend/lib/items.ts  The item model and its JSON encoding
 src/frontend/lib/auth.ts   Internet Identity, and the load-time session gate
 src/frontend/lib/session.ts  Idle timeout, activity mark, cross-tab lock, key purge
 src/frontend/lib/lock.ts     The lock sequence: ordering and failure safety
-src/frontend/components/   Sidebar, item list, detail, editor, share dialog, countdown
+src/frontend/components/   Sidebar, item list, detail, editor, share dialog, session status
 src/frontend/lib/__tests__/  Unit tests: session lifetime, load-time gate, lock sequence
 scripts/smoke-test.mjs     End-to-end check against a running local replica
 ```

@@ -184,14 +184,15 @@ export function App() {
     };
   }, [identity]);
 
+  // Read once: the timer below and the sidebar's read-out must agree on it.
+  const expiresAt = useMemo(() => (identity ? sessionExpiresAt(identity) : null), [identity]);
+
   // Lock exactly when the delegation stops being valid.
   useEffect(() => {
-    if (!identity) return;
-    const expiresAt = sessionExpiresAt(identity);
     if (expiresAt === null) return;
     const timer = setTimeout(() => void lockRef.current("expired"), Math.max(0, expiresAt - Date.now()));
     return () => clearTimeout(timer);
-  }, [identity]);
+  }, [expiresAt]);
 
   const vault = useMemo(() => {
     if (!vaults?.length) return null;
@@ -257,6 +258,7 @@ export function App() {
         }
         onSignOut={() => void lock("manual")}
         remainingMs={session ? session.remainingMs : null}
+        sessionExpiresAt={expiresAt}
       />
 
       <ItemList

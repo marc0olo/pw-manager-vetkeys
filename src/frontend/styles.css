@@ -907,3 +907,27 @@ code,
   width: 12px;
   height: 12px;
 }
+
+/* The fixed sign-in expiry, under the sliding idle countdown. */
+.sessionStatus {
+  margin: 0 0 10px;
+}
+
+.sessionStatus .countdown {
+  margin: 0;
+}
+
+.sessionStatus__expiry {
+  margin: 3px 0 0 23px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sessionStatus__expiry strong {
+  font-weight: 600;
+}
+
+.sessionStatus__expiry--warn {
+  color: var(--fair);
+}

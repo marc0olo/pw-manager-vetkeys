@@ -1,5 +1,5 @@
 import { CopyIcon, LockIcon, ShareIcon, ShieldIcon } from "./Icons";
-import { IdleCountdown } from "./IdleCountdown";
+import { SessionStatus } from "./SessionStatus";
 import { accessLevel, vaultId, type Vault } from "../lib/vault";
 
 interface Props {
@@ -11,6 +11,8 @@ interface Props {
   onSignOut: () => void;
   /** Live remaining time before the idle lock; absent while locked. */
   remainingMs: (() => number) | null;
+  /** When the delegation stops being valid, in ms since the epoch. */
+  sessionExpiresAt: number | null;
 }
 
 const LEVEL_LABEL = { Read: "read-only", ReadWrite: "can edit", ReadWriteManage: "can manage" } as const;
@@ -23,6 +25,7 @@ export function Sidebar({
   onCopyPrincipal,
   onSignOut,
   remainingMs,
+  sessionExpiresAt,
 }: Props) {
   const owned = vaults.filter((vault) => vault.isOwned);
   const shared = vaults.filter((vault) => !vault.isOwned);
@@ -59,7 +62,7 @@ export function Sidebar({
           </div>
         </div>
 
-        {remainingMs && <IdleCountdown remainingMs={remainingMs} />}
+        {remainingMs && <SessionStatus remainingMs={remainingMs} expiresAt={sessionExpiresAt} />}
 
         <button className="btn btn--ghost btn--full" onClick={onSignOut}>
           <LockIcon />
