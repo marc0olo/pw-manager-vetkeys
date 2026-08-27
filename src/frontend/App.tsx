@@ -8,6 +8,7 @@ import {
   signOut,
   type LockReason,
 } from "./lib/auth";
+import { lockVault } from "./lib/lock";
 import { startSession, type RunningSession } from "./lib/session";
 import { CLIPBOARD_CLEAR_SECONDS, copyPlain, copySecret } from "./lib/clipboard";
 import { compareItems, emptyItem, matchesQuery, type VaultItem } from "./lib/items";
@@ -134,39 +135,25 @@ export function App() {
     async (reason: LockReason) => {
       const session = sessionRef.current;
       sessionRef.current = null;
-
-      // Take the UI out of the unlocked state FIRST, so nothing can start new
-      // work against the vault while the teardown runs — a save landing
-      // mid-purge would re-create the key store after it was deleted.
-      setIdentity(null);
-      setClient(null);
-      setVaults(null);
-      setSelectedVaultId(null);
-      setSelectedItemId(null);
-      setPane({ mode: "view" });
-      setQuery("");
-      setSharing(false);
-      setError(null);
-      setLockReason(reason);
-
-      session?.stop();
-      // Locking anywhere locks everywhere, except when this lock *came* from
-      // another tab — that would bounce the message back and forth.
-      if (reason !== "elsewhere") session?.broadcastLock();
-
-      // Each step is independent and must run even if an earlier one throws:
-      // failing halfway would leave the delegation or the persisted key store
-      // behind, which is the dangerous direction.
-      try {
-        await client?.lock();
-      } catch {
-        /* signOut() purges the store anyway */
-      }
-      try {
-        await signOut();
-      } catch {
-        /* the UI is already locked; nothing further to do */
-      }
+      // Ordering and failure-safety live in lib/lock, where they are tested.
+      await lockVault(reason, session, {
+        resetUi: (locked) => {
+          setIdentity(null);
+          setClient(null);
+          setVaults(null);
+          setSelectedVaultId(null);
+          setSelectedItemId(null);
+          setPane({ mode: "view" });
+          setQuery("");
+          setSharing(false);
+          setError(null);
+          setLockReason(locked);
+        },
+        clearVaultKeys: async () => {
+          await client?.lock();
+        },
+        endSession: signOut,
+      });
     },
     [client],
   );

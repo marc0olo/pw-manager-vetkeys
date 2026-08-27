@@ -28,8 +28,9 @@ src/frontend/lib/vault.ts  Encrypt/decrypt and access control over EncryptedMaps
 src/frontend/lib/items.ts  The item model and its JSON encoding
 src/frontend/lib/auth.ts   Internet Identity, and the load-time session gate
 src/frontend/lib/session.ts  Idle timeout, activity mark, cross-tab lock, key purge
+src/frontend/lib/lock.ts     The lock sequence: ordering and failure safety
 src/frontend/components/   Sidebar, item list, detail, editor, share dialog
-src/frontend/lib/__tests__/  Unit tests: session lifetime, load-time gate
+src/frontend/lib/__tests__/  Unit tests: session lifetime, load-time gate, lock sequence
 scripts/smoke-test.mjs     End-to-end check against a running local replica
 ```
 
