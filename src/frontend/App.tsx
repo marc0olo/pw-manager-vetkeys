@@ -14,6 +14,7 @@ import { CLIPBOARD_CLEAR_SECONDS, copyPlain, copySecret } from "./lib/clipboard"
 import { compareItems, emptyItem, matchesQuery } from "./lib/items";
 import {
   VaultClient,
+  defaultVaultId,
   vaultId,
   type AccessLevel,
   type Vault,
@@ -25,7 +26,7 @@ import {
   withDenial,
   type Capability,
 } from "./lib/capabilities";
-import { reconcile } from "./lib/reconcile";
+import { pollUpdate } from "./lib/poll";
 import { createLoadGuard, NO_VAULT_SESSION, type VaultSessionState } from "./lib/vault-session";
 import { ItemDetail } from "./components/ItemDetail";
 import { ItemEditor } from "./components/ItemEditor";
@@ -99,7 +100,10 @@ export function App() {
       const listed = await vaultClient.listVaults();
       if (!current()) return;
       setClient(vaultClient);
-      patch({ vaults: listed, syncedAt: Date.now() });
+      // Chosen here rather than left to the render, so that the vault on screen
+      // and the vault every other consumer reasons about are the same one. See
+      // #16: an implicit selection meant the poll ignored the open vault.
+      patch({ vaults: listed, selectedVaultId: defaultVaultId(listed), syncedAt: Date.now() });
     } catch (caught) {
       // A failure that belongs to an ended session must not raise a banner on
       // the locked screen.
@@ -132,29 +136,15 @@ export function App() {
         // Superseded by a newer poll, or the vault locked while this was in
         // flight. Either way the result is not ours to write.
         if (!current()) return;
-        const before = vaultStateRef.current;
-        const previous = before.vaults ?? [];
-        patch({ vaults: next, syncedAt: Date.now() });
-
-        const outcome = reconcile({
-          previous,
-          next,
-          selection: { vaultId: before.selectedVaultId, itemId: before.selectedItemId },
-          openItems: before.openItems,
-        });
-        if (outcome.selection.vaultId !== before.selectedVaultId) {
-          patch({ selectedVaultId: outcome.selection.vaultId });
+        const outcome = pollUpdate(vaultStateRef.current, next, Date.now());
+        patch(outcome.patch);
+        if (outcome.movedVault) {
           // Any banner was about the vault we just left. "You no longer have
           // access to this vault" is worse than useless once "this vault" is a
-          // different one — and reconcile's own notice says what happened.
+          // different one — and the notice below says what happened.
           setError(null);
         }
-        if (outcome.selection.itemId !== before.selectedItemId) {
-          // Whatever was on screen is gone; do not leave an editor open on it.
-          patch({ selectedItemId: outcome.selection.itemId, pane: { mode: "view" } });
-        }
         if (outcome.notice) notify(outcome.notice);
-        if (outcome.refreshItems) patch({ openItems: null });
       } catch (caught) {
         // A failed poll is not worth a banner; the next one will retry.
         if (!quiet) setError(message(caught));
@@ -303,10 +293,15 @@ export function App() {
     return () => clearTimeout(timer);
   }, [expiresAt]);
 
-  const summary = useMemo(() => {
-    if (!vaults?.length) return null;
-    return vaults.find((candidate) => vaultId(candidate) === selectedVaultId) ?? vaults[0];
-  }, [vaults, selectedVaultId]);
+  // A plain lookup. The fallback that used to live here was the whole of #16:
+  // it resolved a null selection for the *render* only, so the poll went on
+  // reconciling against "nothing selected" while a vault was plainly on screen.
+  // The selection is now chosen when the list arrives and corrected by
+  // reconcile, so there is one answer and everything reads it.
+  const summary = useMemo(
+    () => vaults?.find((candidate) => vaultId(candidate) === selectedVaultId) ?? null,
+    [vaults, selectedVaultId],
+  );
 
   // Decrypt the selected vault, and only that one. This is the single place a
   // key is derived; the cache makes reopening free. `openItems` is cleared by a
