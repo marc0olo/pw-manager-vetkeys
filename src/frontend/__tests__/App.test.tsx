@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ALICE, BOB, FakeClient, identityFor, item, vault } from "./harness";
 
 /**
@@ -37,7 +37,7 @@ vi.mock("../lib/session", async (importOriginal) => ({
   startSession: () => ({ stop: vi.fn(), broadcastLock: vi.fn(), remainingMs: () => 300_000 }),
 }));
 
-const { App } = await import("../App");
+const { App, POLL_INTERVAL_MS } = await import("../App");
 
 const SECRET = "correct-horse-battery";
 const personal = vault({ itemIds: ["a"], fingerprint: "own-1" });
@@ -206,5 +206,67 @@ describe("landing", () => {
 
     expect(await screen.findByText("“Team infra” is no longer shared with you.")).toBeInTheDocument();
     expect(await screen.findByText("GitHub")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The 15 s poll is a README-advertised feature, and it fails silently: updates
+ * simply stop appearing, which looks exactly like #16. Every other test here
+ * drives `refresh` through the manual button, so the interval, the listener and
+ * the visibility guard would each have had nothing behind them.
+ */
+describe("polling for changes", () => {
+  it("re-reads the vault list on its own, with no interaction", async () => {
+    // Fake timers must be installed before render: the interval is scheduled
+    // during the effect, and one created with the real timer is not advanced by
+    // a fake clock swapped in afterwards.
+    vi.useFakeTimers();
+    try {
+      const client = signedInAs(ALICE);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      const before = client.listVaults.mock.calls.length;
+
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+
+      expect(client.listVaults.mock.calls.length).toBeGreaterThan(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("catches up as soon as the tab is visible again, without waiting a tick", async () => {
+    const client = signedInAs(ALICE, new FakeClient(ALICE, [vault({ itemIds: [], fingerprint: "own-0" })], {
+      Personal: [],
+    }));
+    render(<App />);
+    await screen.findByText(/this vault is empty/i);
+
+    client.vaults = [vault({ itemIds: ["a"], fingerprint: "own-1" })];
+    client.items.set("Personal", [item({ id: "a", title: "GitHub" })]);
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    expect(await screen.findByText("GitHub")).toBeInTheDocument();
+  });
+
+  it("does not poll a hidden tab", async () => {
+    const client = signedInAs(ALICE);
+    render(<App />);
+    await screen.findByText("GitHub");
+
+    const hidden = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      const before = client.listVaults.mock.calls.length;
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      // A background tab should cost nothing — the guard, not the timer, is
+      // what makes the poll affordable to leave running.
+      expect(client.listVaults.mock.calls.length).toBe(before);
+    } finally {
+      hidden.mockRestore();
+    }
   });
 });

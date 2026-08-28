@@ -38,7 +38,7 @@ import { Sidebar } from "./components/Sidebar";
 import { CheckIcon, ShareIcon, TrashIcon } from "./components/Icons";
 
 /** How often to re-read the vault list. Queries only, so this is cheap. */
-const POLL_INTERVAL_MS = 15_000;
+export const POLL_INTERVAL_MS = 15_000;
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
