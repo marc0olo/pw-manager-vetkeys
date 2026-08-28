@@ -46,11 +46,64 @@ const item = (id: string, title: string): VaultItem => ({
   updatedAt: 0,
 });
 
-describe("nothing selected", () => {
-  it("is left alone", () => {
+/**
+ * The user lands on a vault without choosing it, so `selectedVaultId` stays
+ * null while a vault is plainly on screen. Treating that as "nothing selected"
+ * meant every poll-driven update was dropped until the user happened to click
+ * something — see #16.
+ */
+describe("a selection the user never made", () => {
+  it("is resolved to the vault actually on screen, not ignored", () => {
     const result = reconcile({
       previous: [own],
       next: [own],
+      selection: { vaultId: null, itemId: null },
+      openItems: null,
+    });
+    // Returning the resolved id is what makes the selection explicit from here.
+    expect(result.selection).toEqual({ vaultId: vaultId(own), itemId: null });
+  });
+
+  it("notices the first item being added — the reported bug", () => {
+    // Empty own vault, then a password is saved. Before the fix `refreshItems`
+    // stayed false, so the decrypted list kept its stale [] while itemIds had
+    // the new id, and the list rendered `Nothing matches “”.`
+    const empty = summary({ itemIds: [], fingerprint: "own-0" });
+    const withOne = summary({ itemIds: ["a"], fingerprint: "own-1" });
+    const result = reconcile({
+      previous: [empty],
+      next: [withOne],
+      selection: { vaultId: null, itemId: null },
+      openItems: [],
+    });
+    expect(result.refreshItems).toBe(true);
+  });
+
+  it("notices a revocation, which otherwise persisted until reload", () => {
+    const result = reconcile({
+      previous: [shared],
+      next: [],
+      selection: { vaultId: null, itemId: null },
+      openItems: null,
+    });
+    expect(result.notice).toBe("“Team infra” is no longer shared with you.");
+    expect(result.refreshItems).toBe(true);
+  });
+
+  it("prefers the own vault over listing order, matching the sidebar", () => {
+    const result = reconcile({
+      previous: [shared, own],
+      next: [shared, own],
+      selection: { vaultId: null, itemId: null },
+      openItems: null,
+    });
+    expect(result.selection.vaultId).toBe(vaultId(own));
+  });
+
+  it("stays null when there is genuinely nothing to select", () => {
+    const result = reconcile({
+      previous: [],
+      next: [],
       selection: { vaultId: null, itemId: null },
       openItems: null,
     });

@@ -1,5 +1,5 @@
 import type { VaultItem } from "./items";
-import { OWN_VAULT_NAME, vaultId, type VaultSummary } from "./vault";
+import { defaultVaultId, vaultId, type VaultSummary } from "./vault";
 
 export interface Selection {
   vaultId: string | null;
@@ -36,20 +36,28 @@ export function reconcile({
   selection: Selection;
   openItems: VaultItem[] | null;
 }): Reconciled {
-  const unchanged: Reconciled = { selection, notice: null, refreshItems: false };
-  if (selection.vaultId === null) return unchanged;
+  // An unchosen selection still shows a vault — the default — so it has to be
+  // reconciled like any other. Bailing out here meant that until the user
+  // clicked a vault, every poll-driven update was silently dropped: a new item
+  // never appeared, and a revoked vault stayed on screen until reload.
+  //
+  // Resolved against `previous`, because that is the list the user is currently
+  // looking at. Returning the resolved id is what makes the selection explicit
+  // from then on.
+  const selected = selection.vaultId ?? defaultVaultId(previous);
+  if (selected === null) return { selection, notice: null, refreshItems: false };
+  const resolved: Selection = { vaultId: selected, itemId: selection.itemId };
 
-  const before = previous.find((vault) => vaultId(vault) === selection.vaultId) ?? null;
-  const after = next.find((vault) => vaultId(vault) === selection.vaultId) ?? null;
+  const before = previous.find((vault) => vaultId(vault) === selected) ?? null;
+  const after = next.find((vault) => vaultId(vault) === selected) ?? null;
 
   // The selected vault is gone. A shared vault only leaves the listing when
   // access is revoked — emptying it keeps it, since it is listed from the access
   // control list — so the message can say what happened rather than hedge.
   if (after === null) {
-    const fallback = next.find((vault) => vault.isOwned && vault.name === OWN_VAULT_NAME) ?? next[0] ?? null;
     const name = before?.name ?? "That vault";
     return {
-      selection: { vaultId: fallback === null ? null : vaultId(fallback), itemId: null },
+      selection: { vaultId: defaultVaultId(next), itemId: null },
       notice:
         before === null || before.isOwned
           ? `“${name}” is no longer available.`
@@ -64,11 +72,11 @@ export function reconcile({
   if (selection.itemId !== null && !after.itemIds.includes(selection.itemId)) {
     const title = openItems?.find((item) => item.id === selection.itemId)?.title;
     return {
-      selection: { vaultId: selection.vaultId, itemId: null },
+      selection: { vaultId: selected, itemId: null },
       notice: title ? `“${title}” was deleted.` : "That item was deleted.",
       refreshItems: true,
     };
   }
 
-  return { selection, notice: null, refreshItems: contentsChanged };
+  return { selection: resolved, notice: null, refreshItems: contentsChanged };
 }

@@ -60,6 +60,19 @@ export function toAccessRights(level: AccessLevel): AccessRights {
   return { [level]: null } as AccessRights;
 }
 
+/**
+ * Which vault to show when the user has not chosen one.
+ *
+ * A single policy, used both for the initial selection and as `reconcile`'s
+ * fallback when the selected vault disappears. Those were two different rules —
+ * "the first vault" in the component and "your own vault, else the first" here —
+ * which is the kind of split that produces a UI disagreeing with itself.
+ */
+export function defaultVaultId(vaults: VaultSummary[]): string | null {
+  const preferred = vaults.find((vault) => vault.isOwned && vault.name === OWN_VAULT_NAME) ?? vaults[0];
+  return preferred ? vaultId(preferred) : null;
+}
+
 export function canWrite(vault: VaultSummary): boolean {
   return vault.isOwned || (vault.rights !== null && accessLevel(vault.rights) !== "Read");
 }
