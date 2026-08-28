@@ -19,8 +19,8 @@ import {
   type Vault,
 } from "./lib/vault";
 import {
-  isUnauthorized,
   offers,
+  refusalMessage,
   verdictFor,
   withDenial,
   type Capability,
@@ -144,6 +144,10 @@ export function App() {
         });
         if (outcome.selection.vaultId !== before.selectedVaultId) {
           patch({ selectedVaultId: outcome.selection.vaultId });
+          // Any banner was about the vault we just left. "You no longer have
+          // access to this vault" is worse than useless once "this vault" is a
+          // different one — and reconcile's own notice says what happened.
+          setError(null);
         }
         if (outcome.selection.itemId !== before.selectedItemId) {
           // Whatever was on screen is gone; do not leave an editor open on it.
@@ -184,7 +188,8 @@ export function App() {
         // The canister is the authority on rights, and this is it answering.
         // Record it so the control stops being offered, and say it plainly
         // instead of surfacing "unauthorized" at the user.
-        if (attempt && isUnauthorized(caught)) {
+        const refusal = attempt ? refusalMessage(caught, attempt.capability) : null;
+        if (attempt && refusal) {
           patch({
             denials: withDenial(vaultStateRef.current.denials, attempt.vault, attempt.capability),
             // Close whatever was open to do the thing that was just refused: an
@@ -194,11 +199,7 @@ export function App() {
               ? { pane: { mode: "view" as const }, wiping: false }
               : { sharing: false }),
           });
-          notify(
-            attempt.capability === "write"
-              ? "You have read-only access to this vault."
-              : "You cannot change who has access to this vault.",
-          );
+          notify(refusal);
           return;
         }
         setError(message(caught));
@@ -328,11 +329,7 @@ export function App() {
         // Deliberately does not call refresh() here. `summary` is a reference
         // into the vaults array, so a refresh would give it a new identity,
         // re-run this effect, and fail again — a tight loop, not a retry.
-        setError(
-          isUnauthorized(caught)
-            ? "You no longer have access to this vault."
-            : message(caught),
-        );
+        setError(refusalMessage(caught, "open") ?? message(caught));
       });
 
     return () => {
@@ -428,6 +425,9 @@ export function App() {
             pane: { mode: "view" },
             query: "",
           });
+          // Errors name "this vault"; carrying one across a switch makes it a
+          // false statement about the vault now on screen.
+          setError(null);
         }}
         principal={client?.me.toText() ?? ""}
         onCopyPrincipal={() =>

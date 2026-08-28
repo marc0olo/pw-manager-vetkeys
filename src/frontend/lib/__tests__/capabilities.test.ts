@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { Principal } from "@icp-sdk/core/principal";
-import { isUnauthorized, offers, verdictFor, withDenial, type Denials } from "../capabilities";
+import {
+  isUnauthorized,
+  offers,
+  refusalMessage,
+  verdictFor,
+  withDenial,
+  type Denials,
+} from "../capabilities";
 import { OWN_VAULT_NAME, vaultId, type VaultSummary } from "../vault";
 
 const me = Principal.fromText("2ibo7-dia");
@@ -120,5 +127,30 @@ describe("recognising a refusal", () => {
   it("survives a non-Error rejection", () => {
     expect(isUnauthorized("unauthorized")).toBe(true);
     expect(isUnauthorized(null)).toBe(false);
+  });
+});
+
+describe("wording a refusal", () => {
+  const refused = new Error("unauthorized");
+
+  it.each([
+    ["write", "You have read-only access to this vault."],
+    ["manage", "You cannot change who has access to this vault."],
+    ["open", "You no longer have access to this vault."],
+  ] as const)("%s reads as %j", (attempted, expected) => {
+    expect(refusalMessage(refused, attempted)).toBe(expected);
+  });
+
+  it("says nothing about access when the failure is not a refusal", () => {
+    // A dead connection must not be reported as lost access.
+    for (const attempted of ["write", "manage", "open"] as const) {
+      expect(refusalMessage(new Error("fetch failed"), attempted)).toBeNull();
+    }
+  });
+
+  it("distinguishes losing read access from being read-only", () => {
+    // Different situations: one means the vault is gone, the other that it is
+    // still yours to read. Sharing a string between them would mislead.
+    expect(refusalMessage(refused, "open")).not.toBe(refusalMessage(refused, "write"));
   });
 });
