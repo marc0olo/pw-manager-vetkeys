@@ -21,7 +21,7 @@ import {
   type Vault,
 } from "./lib/vault";
 import { reconcile } from "./lib/reconcile";
-import { NO_VAULT_SESSION, type VaultSessionState } from "./lib/vault-session";
+import { createLoadGuard, NO_VAULT_SESSION, type VaultSessionState } from "./lib/vault-session";
 import { ItemDetail } from "./components/ItemDetail";
 import { ItemEditor } from "./components/ItemEditor";
 import { ItemList } from "./components/ItemList";
@@ -54,8 +54,12 @@ export function App() {
     setVaultSession(vaultStateRef.current);
   }, []);
   const [syncing, setSyncing] = useState(false);
-  /** Monotonic id so an out-of-order poll result is discarded. */
-  const latestRequest = useRef(0);
+  // Guards every load that crosses an await. See lib/vault-session: a request
+  // already on the wire when the vault locks must not write the previous
+  // session's vault list back into the state the lock just cleared.
+  const loadsRef = useRef<ReturnType<typeof createLoadGuard> | null>(null);
+  loadsRef.current ??= createLoadGuard();
+  const loads = loadsRef.current;
 
 
   const [busy, setBusy] = useState(false);
@@ -83,17 +87,24 @@ export function App() {
   const connect = useCallback(async (established: Identity) => {
     setBusy(true);
     setError(null);
+    const current = loads.begin();
     try {
       const vaultClient = await VaultClient.create(established);
+      const listed = await vaultClient.listVaults();
+      if (!current()) return;
       setClient(vaultClient);
-      patch({ vaults: await vaultClient.listVaults(), syncedAt: Date.now() });
+      patch({ vaults: listed, syncedAt: Date.now() });
     } catch (caught) {
+      // A failure that belongs to an ended session must not raise a banner on
+      // the locked screen.
+      if (!current()) return;
       setError(message(caught));
       setIdentity(null);
     } finally {
+      // Deliberately unguarded: leaving this stuck would spin forever.
       setBusy(false);
     }
-  }, []);
+  }, [loads, patch]);
 
   useEffect(() => {
     if (identity && !client) void connect(identity);
@@ -109,11 +120,12 @@ export function App() {
     async ({ quiet = false }: { quiet?: boolean } = {}) => {
       if (!client) return;
       if (!quiet) setSyncing(true);
-      const request = ++latestRequest.current;
+      const current = loads.begin();
       try {
         const next = await client.listVaults();
-        // A slower earlier request must not overwrite a newer one's result.
-        if (request !== latestRequest.current) return;
+        // Superseded by a newer poll, or the vault locked while this was in
+        // flight. Either way the result is not ours to write.
+        if (!current()) return;
         const before = vaultStateRef.current;
         const previous = before.vaults ?? [];
         patch({ vaults: next, syncedAt: Date.now() });
@@ -140,7 +152,7 @@ export function App() {
         if (!quiet) setSyncing(false);
       }
     },
-    [client, notify],
+    [client, notify, loads],
   );
 
   const run = useCallback(
@@ -193,6 +205,9 @@ export function App() {
       // Ordering and failure-safety live in lib/lock, where they are tested.
       await lockVault(reason, session, {
         resetUi: (locked) => {
+          // Anything already on the wire belongs to the session that just
+          // ended; without this, its result lands in the state cleared below.
+          loads.invalidate();
           // Wholesale, not field by field: that is what stops decrypted items
           // and a draft password surviving into the next session.
           vaultStateRef.current = NO_VAULT_SESSION;
@@ -208,7 +223,7 @@ export function App() {
         endSession: signOut,
       });
     },
-    [client],
+    [client, loads],
   );
 
   // The session's callbacks are installed once per identity, so they reach the

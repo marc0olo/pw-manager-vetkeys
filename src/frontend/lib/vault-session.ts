@@ -50,3 +50,38 @@ export const NO_VAULT_SESSION: VaultSessionState = {
   query: "",
   sharing: false,
 };
+
+/**
+ * Decides which asynchronous load is allowed to write vault state.
+ *
+ * Sign-in and every poll read from the canister across an await, and what they
+ * bring back must not be written if, while they were waiting, either a newer
+ * load started or the session ended. The second case is the dangerous one:
+ * clearing state on lock does nothing if a request already in flight writes the
+ * previous session's vault list straight back into it a moment later.
+ *
+ * A counter rather than an `AbortController` because the work cannot actually be
+ * cancelled — an agent query is already on the wire. The result still arrives;
+ * this decides whether anyone listens to it.
+ */
+export function createLoadGuard() {
+  let current = 0;
+  return {
+    /**
+     * Begin a load. The returned predicate is true only while this load is
+     * still the newest and its session is still open — check it after every
+     * await, before writing state.
+     */
+    begin(): () => boolean {
+      const mine = ++current;
+      return () => mine === current;
+    },
+    /**
+     * Abandon everything in flight. Called by the lock: those results belong to
+     * a session that no longer exists.
+     */
+    invalidate(): void {
+      current++;
+    },
+  };
+}
