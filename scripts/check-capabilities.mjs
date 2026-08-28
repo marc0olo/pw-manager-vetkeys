@@ -135,15 +135,24 @@ check(
 
 // ---- a manager cannot lock the owner out -----------------------------------
 //
-// The interesting part is *how*: `removeUser` on the owner reports success and
-// does nothing. Ownership is not an ACL entry, so there is nothing to remove.
-// Harmless here — the UI filters the owner out of the share list, so it is
-// unreachable — but it means the response cannot be trusted as evidence that
-// anything happened. Worth knowing before building anything on removeUser.
+// The interesting part is *how*. Ownership is identity-derived, not an ACL
+// entry, so `removeUser` on the owner removes nothing and returns the previous
+// rights as `undefined` — the same answer as for a principal who was never
+// granted anything. `getUserRights` meanwhile synthesises the owner's rights
+// and reports `ReadWriteManage`, so the two endpoints disagree about whether
+// the owner is a member, and a caller cannot tell "the owner is protected"
+// from "that principal had nothing". Upstream dfinity/vetkeys#437 proposes
+// rejecting ACL mutations that target the owner, which resolves both.
+//
+// Unreachable from our UI, which filters the owner out of the share list.
 {
   const { mapName, G } = await vaultSharedAt("ReadWriteManage", "Vault Owner");
-  const removed = await attempt(() => G.removeUser(me, mapName, me));
-  check("removing the owner reports success", removed === "ok", removed);
+  const removed = await G.removeUser(me, mapName, me);
+  check("removing the owner removes nothing", removed === undefined, JSON.stringify(removed));
+  check(
+    "yet getUserRights reports the owner as a manager — the two disagree",
+    JSON.stringify(await G.getUserRights(me, mapName, me)) === JSON.stringify({ ReadWriteManage: null }),
+  );
   check(
     "but it is a no-op: the owner can still write",
     (await attempt(() => O.setValue(me, mapName, enc.encode("still"), enc.encode("{}")))) === "ok",
