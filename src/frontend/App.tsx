@@ -11,7 +11,7 @@ import {
 import { lockVault } from "./lib/lock";
 import { startSession, type RunningSession } from "./lib/session";
 import { CLIPBOARD_CLEAR_SECONDS, copyPlain, copySecret } from "./lib/clipboard";
-import { compareItems, emptyItem, matchesQuery, type VaultItem } from "./lib/items";
+import { compareItems, emptyItem, matchesQuery } from "./lib/items";
 import {
   canManage,
   canWrite,
@@ -19,9 +19,9 @@ import {
   vaultId,
   type AccessLevel,
   type Vault,
-  type VaultSummary,
 } from "./lib/vault";
 import { reconcile } from "./lib/reconcile";
+import { NO_VAULT_SESSION, type VaultSessionState } from "./lib/vault-session";
 import { ItemDetail } from "./components/ItemDetail";
 import { ItemEditor } from "./components/ItemEditor";
 import { ItemList } from "./components/ItemList";
@@ -33,8 +33,6 @@ import { CheckIcon, ShareIcon } from "./components/Icons";
 /** How often to re-read the vault list. Queries only, so this is cheap. */
 const POLL_INTERVAL_MS = 15_000;
 
-type Pane = { mode: "view" } | { mode: "edit"; item: VaultItem; isNew: boolean };
-
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -42,16 +40,23 @@ function message(error: unknown): string {
 export function App() {
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [client, setClient] = useState<VaultClient | null>(null);
-  const [vaults, setVaults] = useState<VaultSummary[] | null>(null);
-  const [openItems, setOpenItems] = useState<VaultItem[] | null>(null);
+  // One object, cleared as a unit on lock — see lib/vault-session for why.
+  const [vaultSession, setVaultSession] = useState<VaultSessionState>(NO_VAULT_SESSION);
+  const { vaults, openItems, selectedVaultId, selectedItemId, syncedAt, pane, query, sharing } =
+    vaultSession;
+  // Updated synchronously by `patch` below. The poll reads state across an
+  // await, and React state is not visible until the next commit — reading the
+  // ref means a change made just before the await is already seen, so deleting
+  // your own item cannot produce a "someone deleted this" toast.
+  const vaultStateRef = useRef(NO_VAULT_SESSION);
+  const patch = useCallback((fields: Partial<VaultSessionState>) => {
+    vaultStateRef.current = { ...vaultStateRef.current, ...fields };
+    setVaultSession(vaultStateRef.current);
+  }, []);
   const [syncing, setSyncing] = useState(false);
-  const [syncedAt, setSyncedAt] = useState<number | null>(null);
+  /** Monotonic id so an out-of-order poll result is discarded. */
+  const latestRequest = useRef(0);
 
-  const [selectedVaultId, setSelectedVaultId] = useState<string | null>(null);
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [pane, setPane] = useState<Pane>({ mode: "view" });
-  const [sharing, setSharing] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,8 +86,7 @@ export function App() {
     try {
       const vaultClient = await VaultClient.create(established);
       setClient(vaultClient);
-      setVaults(await vaultClient.listVaults());
-      setSyncedAt(Date.now());
+      patch({ vaults: await vaultClient.listVaults(), syncedAt: Date.now() });
     } catch (caught) {
       setError(message(caught));
       setIdentity(null);
@@ -95,16 +99,6 @@ export function App() {
     if (identity && !client) void connect(identity);
   }, [identity, client, connect]);
 
-  // Refs so the poll can read current state without re-arming on every change.
-  const selectionRef = useRef({ vaultId: selectedVaultId, itemId: selectedItemId });
-  const vaultsRef = useRef(vaults);
-  const openItemsRef = useRef(openItems);
-  useEffect(() => {
-    selectionRef.current = { vaultId: selectedVaultId, itemId: selectedItemId };
-    vaultsRef.current = vaults;
-    openItemsRef.current = openItems;
-  }, [selectedVaultId, selectedItemId, vaults, openItems]);
-
   /**
    * Re-read the vault list and reconcile the selection with it.
    *
@@ -115,28 +109,30 @@ export function App() {
     async ({ quiet = false }: { quiet?: boolean } = {}) => {
       if (!client) return;
       if (!quiet) setSyncing(true);
+      const request = ++latestRequest.current;
       try {
         const next = await client.listVaults();
-        const previous = vaultsRef.current ?? [];
-        setVaults(next);
-        setSyncedAt(Date.now());
+        // A slower earlier request must not overwrite a newer one's result.
+        if (request !== latestRequest.current) return;
+        const before = vaultStateRef.current;
+        const previous = before.vaults ?? [];
+        patch({ vaults: next, syncedAt: Date.now() });
 
         const outcome = reconcile({
           previous,
           next,
-          selection: selectionRef.current,
-          openItems: openItemsRef.current,
+          selection: { vaultId: before.selectedVaultId, itemId: before.selectedItemId },
+          openItems: before.openItems,
         });
-        if (outcome.selection.vaultId !== selectionRef.current.vaultId) {
-          setSelectedVaultId(outcome.selection.vaultId);
+        if (outcome.selection.vaultId !== before.selectedVaultId) {
+          patch({ selectedVaultId: outcome.selection.vaultId });
         }
-        if (outcome.selection.itemId !== selectionRef.current.itemId) {
-          setSelectedItemId(outcome.selection.itemId);
+        if (outcome.selection.itemId !== before.selectedItemId) {
           // Whatever was on screen is gone; do not leave an editor open on it.
-          setPane({ mode: "view" });
+          patch({ selectedItemId: outcome.selection.itemId, pane: { mode: "view" } });
         }
         if (outcome.notice) notify(outcome.notice);
-        if (outcome.refreshItems) setOpenItems(null);
+        if (outcome.refreshItems) patch({ openItems: null });
       } catch (caught) {
         // A failed poll is not worth a banner; the next one will retry.
         if (!quiet) setError(message(caught));
@@ -197,14 +193,12 @@ export function App() {
       // Ordering and failure-safety live in lib/lock, where they are tested.
       await lockVault(reason, session, {
         resetUi: (locked) => {
+          // Wholesale, not field by field: that is what stops decrypted items
+          // and a draft password surviving into the next session.
+          vaultStateRef.current = NO_VAULT_SESSION;
+          setVaultSession(NO_VAULT_SESSION);
           setIdentity(null);
           setClient(null);
-          setVaults(null);
-          setSelectedVaultId(null);
-          setSelectedItemId(null);
-          setPane({ mode: "view" });
-          setQuery("");
-          setSharing(false);
           setError(null);
           setLockReason(locked);
         },
@@ -264,7 +258,7 @@ export function App() {
     client
       .openVault(summary)
       .then((items) => {
-        if (!cancelled) setOpenItems(items);
+        if (!cancelled) patch({ openItems: items });
       })
       .catch((caught) => {
         if (!cancelled) setError(message(caught));
@@ -349,11 +343,13 @@ export function App() {
         vaults={vaults ?? []}
         selectedId={vaultId(vault)}
         onSelect={(id) => {
-          setSelectedVaultId(id);
-          setSelectedItemId(null);
-          setOpenItems(null);
-          setPane({ mode: "view" });
-          setQuery("");
+          patch({
+            selectedVaultId: id,
+            selectedItemId: null,
+            openItems: null,
+            pane: { mode: "view" },
+            query: "",
+          });
         }}
         principal={client?.me.toText() ?? ""}
         onCopyPrincipal={() =>
@@ -374,13 +370,12 @@ export function App() {
         vault={vault}
         items={visibleItems}
         query={query}
-        onQueryChange={setQuery}
+        onQueryChange={(next) => patch({ query: next })}
         selectedId={selectedItem?.id ?? null}
         onSelect={(id) => {
-          setSelectedItemId(id);
-          setPane({ mode: "view" });
+          patch({ selectedItemId: id, pane: { mode: "view" } });
         }}
-        onNew={() => setPane({ mode: "edit", item: emptyItem(), isNew: true })}
+        onNew={() => patch({ pane: { mode: "edit", item: emptyItem(), isNew: true } })}
         canWrite={writable}
         loading={itemsLoading}
       />
@@ -395,7 +390,7 @@ export function App() {
             {canManage(vault) && (
               <button
                 className="btn btn--ghost btn--sm"
-                onClick={() => setSharing(true)}
+                onClick={() => patch({ sharing: true })}
                 title={
                   vault.sharedWith.length > 0
                     ? "Manage who can open this vault"
@@ -423,12 +418,11 @@ export function App() {
             item={pane.item}
             isNew={pane.isNew}
             saving={busy}
-            onCancel={() => setPane({ mode: "view" })}
+            onCancel={() => patch({ pane: { mode: "view" } })}
             onSave={(item) =>
               run(async () => {
                 await client!.saveItem(vault, item);
-                setSelectedItemId(item.id);
-                setPane({ mode: "view" });
+                patch({ selectedItemId: item.id, pane: { mode: "view" } });
               }, pane.isNew ? "Item saved" : "Changes saved")
             }
           />
@@ -437,12 +431,12 @@ export function App() {
             item={selectedItem}
             canWrite={writable}
             onCopy={copyField}
-            onEdit={() => setPane({ mode: "edit", item: selectedItem, isNew: false })}
+            onEdit={() => patch({ pane: { mode: "edit", item: selectedItem, isNew: false } })}
             onDelete={() => {
               if (!window.confirm(`Delete “${selectedItem.title || "this item"}” permanently?`)) return;
               void run(async () => {
                 await client!.deleteItem(vault, selectedItem.id);
-                setSelectedItemId(null);
+                patch({ selectedItemId: null });
               }, "Item deleted");
             }}
           />
@@ -460,7 +454,7 @@ export function App() {
         <ShareDialog
           vault={vault}
           busy={busy}
-          onClose={() => setSharing(false)}
+          onClose={() => patch({ sharing: false })}
           onShare={(user: Principal, level: AccessLevel) =>
             void run(() => client!.share(vault, user, level), "Access granted")
           }
