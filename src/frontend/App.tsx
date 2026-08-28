@@ -13,22 +13,28 @@ import { startSession, type RunningSession } from "./lib/session";
 import { CLIPBOARD_CLEAR_SECONDS, copyPlain, copySecret } from "./lib/clipboard";
 import { compareItems, emptyItem, matchesQuery } from "./lib/items";
 import {
-  canManage,
-  canWrite,
   VaultClient,
   vaultId,
   type AccessLevel,
   type Vault,
 } from "./lib/vault";
+import {
+  offers,
+  refusalMessage,
+  verdictFor,
+  withDenial,
+  type Capability,
+} from "./lib/capabilities";
 import { reconcile } from "./lib/reconcile";
 import { createLoadGuard, NO_VAULT_SESSION, type VaultSessionState } from "./lib/vault-session";
 import { ItemDetail } from "./components/ItemDetail";
 import { ItemEditor } from "./components/ItemEditor";
 import { ItemList } from "./components/ItemList";
 import { LockScreen } from "./components/LockScreen";
+import { EmptyVaultDialog } from "./components/EmptyVaultDialog";
 import { ShareDialog } from "./components/ShareDialog";
 import { Sidebar } from "./components/Sidebar";
-import { CheckIcon, ShareIcon } from "./components/Icons";
+import { CheckIcon, ShareIcon, TrashIcon } from "./components/Icons";
 
 /** How often to re-read the vault list. Queries only, so this is cheap. */
 const POLL_INTERVAL_MS = 15_000;
@@ -42,7 +48,7 @@ export function App() {
   const [client, setClient] = useState<VaultClient | null>(null);
   // One object, cleared as a unit on lock — see lib/vault-session for why.
   const [vaultSession, setVaultSession] = useState<VaultSessionState>(NO_VAULT_SESSION);
-  const { vaults, openItems, selectedVaultId, selectedItemId, syncedAt, pane, query, sharing } =
+  const { vaults, openItems, selectedVaultId, selectedItemId, syncedAt, pane, query, sharing, wiping, denials } =
     vaultSession;
   // Updated synchronously by `patch` below. The poll reads state across an
   // await, and React state is not visible until the next commit — reading the
@@ -138,6 +144,10 @@ export function App() {
         });
         if (outcome.selection.vaultId !== before.selectedVaultId) {
           patch({ selectedVaultId: outcome.selection.vaultId });
+          // Any banner was about the vault we just left. "You no longer have
+          // access to this vault" is worse than useless once "this vault" is a
+          // different one — and reconcile's own notice says what happened.
+          setError(null);
         }
         if (outcome.selection.itemId !== before.selectedItemId) {
           // Whatever was on screen is gone; do not leave an editor open on it.
@@ -156,7 +166,13 @@ export function App() {
   );
 
   const run = useCallback(
-    async (action: () => Promise<void>, success?: string) => {
+    async (
+      action: () => Promise<void>,
+      success?: string,
+      // What was attempted, so a refusal can be learned from rather than shown
+      // as a raw error. Omitted for actions that cannot be refused on rights.
+      attempt?: { vault: string; capability: Capability },
+    ) => {
       setBusy(true);
       setError(null);
       const open = loads.open();
@@ -169,6 +185,23 @@ export function App() {
         // signature error. That is the lock working, not something the user did
         // wrong, and it must not surface as a banner on the lock screen.
         if (!open()) return;
+        // The canister is the authority on rights, and this is it answering.
+        // Record it so the control stops being offered, and say it plainly
+        // instead of surfacing "unauthorized" at the user.
+        const refusal = attempt ? refusalMessage(caught, attempt.capability) : null;
+        if (attempt && refusal) {
+          patch({
+            denials: withDenial(vaultStateRef.current.denials, attempt.vault, attempt.capability),
+            // Close whatever was open to do the thing that was just refused: an
+            // editor that can no longer save, or a dialog whose buttons are now
+            // all dead ends, is worse than no dialog at all.
+            ...(attempt.capability === "write"
+              ? { pane: { mode: "view" as const }, wiping: false }
+              : { sharing: false }),
+          });
+          notify(refusal);
+          return;
+        }
         setError(message(caught));
       } finally {
         // Unguarded: `busy` gates the sign-in button, so leaving it set would
@@ -177,7 +210,7 @@ export function App() {
         setBusy(false);
       }
     },
-    [refresh, notify, loads],
+    [refresh, notify, loads, patch],
   );
 
   const handleSignIn = async () => {
@@ -287,7 +320,16 @@ export function App() {
         if (!cancelled) patch({ openItems: items });
       })
       .catch((caught) => {
-        if (!cancelled) setError(message(caught));
+        if (cancelled) return;
+        // Read access can be revoked while a decrypt is in flight — the one
+        // remaining path that can put the word `unauthorized` in front of the
+        // user. Translating is all that is needed: the next poll drops the
+        // vault from the listing and reconcile moves the selection.
+        //
+        // Deliberately does not call refresh() here. `summary` is a reference
+        // into the vaults array, so a refresh would give it a new identity,
+        // re-run this effect, and fail again — a tight loop, not a retry.
+        setError(refusalMessage(caught, "open") ?? message(caught));
       });
 
     return () => {
@@ -312,7 +354,14 @@ export function App() {
   const itemsLoading = openItems === null;
 
   const selectedItem = openItems?.find((item) => item.id === selectedItemId) ?? null;
-  const writable = summary !== null && canWrite(summary);
+  // Offered unless the canister has actually refused. For a shared vault our
+  // rights come back empty rather than absent (dfinity/vetkeys#438), so the
+  // alternative — inferring read-only from silence — is what made every access
+  // level behave like `Read`. Enforcement is unaffected: the canister decides.
+  const writeVerdict = summary ? verdictFor(summary, "write", denials) : "denied";
+  const manageVerdict = summary ? verdictFor(summary, "manage", denials) : "denied";
+  const writable = offers(writeVerdict);
+  const manageable = offers(manageVerdict);
 
   // Poll for changes so a newly shared vault, a new item or a revocation shows
   // up without a reload. Queries only, no key derivation — and deliberately not
@@ -376,6 +425,9 @@ export function App() {
             pane: { mode: "view" },
             query: "",
           });
+          // Errors name "this vault"; carrying one across a switch makes it a
+          // false statement about the vault now on screen.
+          setError(null);
         }}
         principal={client?.me.toText() ?? ""}
         onCopyPrincipal={() =>
@@ -413,7 +465,7 @@ export function App() {
             {!vault.isOwned && <span className="tag">shared by {vault.owner.toText().slice(0, 8)}…</span>}
           </div>
           <div className="pane__tools">
-            {canManage(vault) && (
+            {manageable && (
               <button
                 className="btn btn--ghost btn--sm"
                 onClick={() => patch({ sharing: true })}
@@ -425,6 +477,16 @@ export function App() {
               >
                 <ShareIcon />
                 {vault.sharedWith.length > 0 ? `Shared with ${vault.sharedWith.length}` : "Share"}
+              </button>
+            )}
+            {writable && vault.itemIds.length > 0 && (
+              <button
+                className="btn btn--danger btn--sm"
+                onClick={() => patch({ wiping: true })}
+                title="Delete every item in this vault"
+              >
+                <TrashIcon />
+                Empty vault
               </button>
             )}
           </div>
@@ -446,10 +508,14 @@ export function App() {
             saving={busy}
             onCancel={() => patch({ pane: { mode: "view" } })}
             onSave={(item) =>
-              run(async () => {
-                await client!.saveItem(vault, item);
-                patch({ selectedItemId: item.id, pane: { mode: "view" } });
-              }, pane.isNew ? "Item saved" : "Changes saved")
+              run(
+                async () => {
+                  await client!.saveItem(vault, item);
+                  patch({ selectedItemId: item.id, pane: { mode: "view" } });
+                },
+                pane.isNew ? "Item saved" : "Changes saved",
+                { vault: vaultId(vault), capability: "write" },
+              )
             }
           />
         ) : selectedItem ? (
@@ -460,10 +526,14 @@ export function App() {
             onEdit={() => patch({ pane: { mode: "edit", item: selectedItem, isNew: false } })}
             onDelete={() => {
               if (!window.confirm(`Delete “${selectedItem.title || "this item"}” permanently?`)) return;
-              void run(async () => {
-                await client!.deleteItem(vault, selectedItem.id);
-                patch({ selectedItemId: null });
-              }, "Item deleted");
+              void run(
+                async () => {
+                  await client!.deleteItem(vault, selectedItem.id);
+                  patch({ selectedItemId: null });
+                },
+                "Item deleted",
+                { vault: vaultId(vault), capability: "write" },
+              );
             }}
           />
         ) : (
@@ -476,15 +546,41 @@ export function App() {
         )}
       </main>
 
+      {wiping && (
+        <EmptyVaultDialog
+          vault={vault}
+          busy={busy}
+          onClose={() => patch({ wiping: false })}
+          onConfirm={() =>
+            void run(
+              async () => {
+                await client!.wipe(vault);
+                patch({ wiping: false, selectedItemId: null, openItems: null });
+              },
+              "Vault emptied",
+              { vault: vaultId(vault), capability: "write" },
+            )
+          }
+        />
+      )}
+
       {sharing && (
         <ShareDialog
           vault={vault}
           busy={busy}
           onClose={() => patch({ sharing: false })}
           onShare={(user: Principal, level: AccessLevel) =>
-            void run(() => client!.share(vault, user, level), "Access granted")
+            void run(() => client!.share(vault, user, level), "Access granted", {
+              vault: vaultId(vault),
+              capability: "manage",
+            })
           }
-          onRevoke={(user: Principal) => void run(() => client!.revoke(vault, user), "Access revoked")}
+          onRevoke={(user: Principal) =>
+            void run(() => client!.revoke(vault, user), "Access revoked", {
+              vault: vaultId(vault),
+              capability: "manage",
+            })
+          }
         />
       )}
 
