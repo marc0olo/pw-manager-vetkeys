@@ -19,9 +19,19 @@ password — the vault key is derived for your Internet Identity principal.
 - **Password generator** with length, digits and symbols, plus a strength read-out.
 - **Reveal / copy.** Passwords are masked, auto-hide after 30s, and copying one
   clears the clipboard after 45s (only if it still holds that value).
-- **Vault sharing** at three levels — read, read/write, read/write/manage. The
-  vault key is re-encrypted for the grantee, so no secret changes hands. The
-  sidebar and the pane header both show how many people a vault is shared with.
+- **Vault sharing** at three levels, and collaborators can actually use them:
+  someone granted read/write edits items in your vault, and read/write/manage
+  can re-share it. The vault key is re-encrypted for the grantee, so no secret
+  changes hands. The sidebar and the pane header both show how many people a
+  vault is shared with.
+  - Read/write is **destructive**: the canister guards "delete every item" with
+    the same write check, so there is no separate delete right. The share dialog
+    says so rather than calling it "can edit items".
+  - Your own rights on a vault shared *with* you are not disclosed by the
+    canister ([dfinity/vetkeys#438]), so the app offers the controls and adapts
+    if a write is refused, rather than guessing read-only from silence.
+- **Empty vault** removes every item at once, behind a typed confirmation. The
+  vault and its sharing survive; the items do not.
 - **Lock** discards the derived key material. The sidebar shows both deadlines
   that end a session — the sliding idle lock and the fixed sign-in expiry — with
   whichever comes first highlighted.
@@ -36,10 +46,12 @@ src/frontend/lib/reconcile.ts  What the UI does when the canister changes undern
 src/frontend/lib/auth.ts   Internet Identity, and the load-time session gate
 src/frontend/lib/session.ts  Idle timeout, activity mark, cross-tab lock, key purge
 src/frontend/lib/lock.ts     The lock sequence: ordering and failure safety
+src/frontend/lib/capabilities.ts  What we may do on a vault, and learning from a refusal
 src/frontend/components/   Sidebar, item list, detail, editor, share dialog, session status
 src/frontend/lib/__tests__/  Unit tests: session lifetime, load-time gate, lock sequence
 scripts/smoke-test.mjs     End-to-end check against a running local replica
 scripts/check-poll-cost.mjs  Asserts a poll derives no keys and opening one vault derives one
+scripts/check-capabilities.mjs  Verifies the access-level table the share dialog states
 ```
 
 The backend is ~20 lines: `include EncryptedMapsCanister(state)` contributes every
@@ -234,6 +246,8 @@ voids the whole document — so run `npm run check-ii-metadata` after editing it
   would need the `EncryptedMapsControlPlaneCanister` variant and app-owned value
   endpoints.
 - No browser extension, autofill, TOTP, attachments, or trash/undo.
-- Deleting an item is immediate and permanent.
+- Deleting an item — or emptying a vault — is immediate and permanent.
 - Sharing is by principal — you paste the other person's principal (the **My
   principal** button copies yours).
+
+[dfinity/vetkeys#438]: https://github.com/dfinity/vetkeys/issues/438

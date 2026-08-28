@@ -13,8 +13,22 @@ interface Props {
 
 const LEVEL_LABEL: Record<AccessLevel, string> = {
   Read: "Read only",
-  ReadWrite: "Can edit items",
+  ReadWrite: "Can edit",
   ReadWriteManage: "Can edit and re-share",
+};
+
+/**
+ * What each level actually permits, which the short labels cannot carry.
+ *
+ * `ReadWrite` is the one that matters: `remove_map_values` is guarded by
+ * `ensureUserCanWrite`, so there is no separate delete right and "Can edit
+ * items" materially understated a level that can destroy the vault's contents.
+ * Verified against a replica.
+ */
+const LEVEL_DETAIL: Record<AccessLevel, string> = {
+  Read: "Can open this vault and copy its secrets. Cannot change anything.",
+  ReadWrite: "Can add, edit and delete items — including deleting every item at once.",
+  ReadWriteManage: "All of the above, plus granting and revoking access for other people.",
 };
 
 export function ShareDialog({ vault, busy, onShare, onRevoke, onClose }: Props) {
@@ -62,6 +76,7 @@ export function ShareDialog({ vault, busy, onShare, onRevoke, onClose }: Props) 
               ))}
             </select>
           </label>
+          <p className="modal__hint">{LEVEL_DETAIL[level]}</p>
           <button className="btn btn--primary" type="submit" disabled={busy || !principalText.trim()}>
             {busy ? "Working…" : "Grant access"}
           </button>
@@ -81,7 +96,7 @@ export function ShareDialog({ vault, busy, onShare, onRevoke, onClose }: Props) 
             {vault.sharedWith.map(([user, rights]) => (
               <li key={user.toText()}>
                 <code>{user.toText()}</code>
-                <span>{LEVEL_LABEL[accessLevel(rights)]}</span>
+                <span title={LEVEL_DETAIL[accessLevel(rights)]}>{LEVEL_LABEL[accessLevel(rights)]}</span>
                 <button
                   className="iconBtn"
                   onClick={() => onRevoke(user)}

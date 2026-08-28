@@ -283,6 +283,18 @@ export class VaultClient {
     await this.encryptedMaps.removeEncryptedValue(vault.owner, nameBytes(vault.name), encoder.encode(itemId));
   }
 
+  /**
+   * Removes every item in the vault.
+   *
+   * Guarded by `ensureUserCanWrite`, so any `ReadWrite` collaborator can do
+   * this — there is no separate delete right. The map itself and its access
+   * list survive, so the vault stays listed and shared; only its contents go.
+   * That is why the UI calls this "empty", not "delete".
+   */
+  async wipe(vault: VaultSummary): Promise<void> {
+    await this.encryptedMaps.removeMapValues(vault.owner, nameBytes(vault.name));
+  }
+
   async share(vault: VaultSummary, user: Principal, level: AccessLevel): Promise<void> {
     if (user.compareTo(vault.owner) === "eq") throw new Error("The vault owner already has full access.");
     await this.encryptedMaps.setUserRights(vault.owner, nameBytes(vault.name), user, toAccessRights(level));

@@ -839,6 +839,25 @@ code,
   font-size: 13px;
 }
 
+/* Sits directly under the access <select>, so it reads as a caption for the
+   chosen level rather than as body copy. */
+.modal__hint {
+  margin: -6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.modal__danger {
+  margin: 0 0 18px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.modal__danger strong {
+  color: var(--danger);
+}
+
 .modal__subhead {
   margin: 24px 0 10px;
   font-size: 13px;

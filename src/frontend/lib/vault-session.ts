@@ -1,3 +1,4 @@
+import type { Denials } from "./capabilities";
 import type { VaultItem } from "./items";
 import type { VaultSummary } from "./vault";
 
@@ -36,7 +37,15 @@ export interface VaultSessionState {
   pane: Pane;
   /** A search term can itself reveal what the user was looking for. */
   query: string;
+  /**
+   * Capabilities the canister refused this session, so the UI stops offering
+   * them. Session-scoped: a denial must not outlive a re-share, and it names
+   * vaults, so it goes when the rest of the session does.
+   */
+  denials: Denials;
   sharing: boolean;
+  /** The empty-vault confirmation. A dialog must never survive a lock. */
+  wiping: boolean;
 }
 
 /** The locked state: nothing about any previous session survives it. */
@@ -48,7 +57,9 @@ export const NO_VAULT_SESSION: VaultSessionState = {
   syncedAt: null,
   pane: { mode: "view" },
   query: "",
+  denials: [],
   sharing: false,
+  wiping: false,
 };
 
 /**
