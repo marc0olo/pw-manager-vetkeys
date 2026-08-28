@@ -55,3 +55,33 @@ describe("createLoadGuard", () => {
     expect(load()).toBe(true);
   });
 });
+
+/**
+ * Work that overlaps with polling by design — a save, a delete — and so must
+ * survive being overtaken, but not survive the lock.
+ */
+describe("createLoadGuard.open", () => {
+  it("survives a newer load starting", () => {
+    const guard = createLoadGuard();
+    const saving = guard.open();
+    guard.begin(); // a poll fires mid-save
+    guard.begin();
+    expect(saving()).toBe(true);
+  });
+
+  it("does not survive the vault locking", () => {
+    const guard = createLoadGuard();
+    const saving = guard.open();
+    guard.invalidate();
+    // The save rejects because the lock destroyed the delegation. Reporting
+    // that agent error would put it on the lock screen as the user's failure.
+    expect(saving()).toBe(false);
+  });
+
+  it("does not invalidate loads when work merely begins", () => {
+    const guard = createLoadGuard();
+    const load = guard.begin();
+    guard.open();
+    expect(load()).toBe(true);
+  });
+});

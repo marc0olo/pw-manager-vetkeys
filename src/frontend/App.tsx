@@ -159,17 +159,25 @@ export function App() {
     async (action: () => Promise<void>, success?: string) => {
       setBusy(true);
       setError(null);
+      const open = loads.open();
       try {
         await action();
         await refresh();
         if (success) notify(success);
       } catch (caught) {
+        // A lock destroys the delegation, so anything in flight rejects with a
+        // signature error. That is the lock working, not something the user did
+        // wrong, and it must not surface as a banner on the lock screen.
+        if (!open()) return;
         setError(message(caught));
       } finally {
+        // Unguarded: `busy` gates the sign-in button, so leaving it set would
+        // strand the lock screen. The lock clears it too, to close the window
+        // between locking and this settling.
         setBusy(false);
       }
     },
-    [refresh, notify],
+    [refresh, notify, loads],
   );
 
   const handleSignIn = async () => {
@@ -208,6 +216,9 @@ export function App() {
           // Anything already on the wire belongs to the session that just
           // ended; without this, its result lands in the state cleared below.
           loads.invalidate();
+          // Otherwise the lock screen renders its sign-in button disabled and
+          // reading "Unlocking…" until a request killed by the lock settles.
+          setBusy(false);
           // Wholesale, not field by field: that is what stops decrypted items
           // and a draft password surviving into the next session.
           vaultStateRef.current = NO_VAULT_SESSION;

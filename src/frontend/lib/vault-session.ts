@@ -65,23 +65,40 @@ export const NO_VAULT_SESSION: VaultSessionState = {
  * this decides whether anyone listens to it.
  */
 export function createLoadGuard() {
-  let current = 0;
+  // Two independent questions, deliberately not one counter: "was this load
+  // overtaken by a newer one" and "did the session end under it". A save runs
+  // alongside polls, so being overtaken is normal for it and must not silence
+  // it — but the lock must.
+  let session = 0;
+  let latest = 0;
   return {
     /**
-     * Begin a load. The returned predicate is true only while this load is
-     * still the newest and its session is still open — check it after every
-     * await, before writing state.
+     * Begin a load of the vault list. The returned predicate is true only while
+     * this load is still the newest *and* its session is still open. Check it
+     * after every await, before writing state.
      */
     begin(): () => boolean {
-      const mine = ++current;
-      return () => mine === current;
+      const mine = ++latest;
+      const era = session;
+      return () => mine === latest && era === session;
     },
     /**
-     * Abandon everything in flight. Called by the lock: those results belong to
+     * Mark the start of work that must be abandoned if the vault locks, but is
+     * not invalidated by a newer load: a save or delete, which legitimately
+     * overlaps with polling. Its failure path is the one that matters — a lock
+     * destroys the delegation, so whatever was in flight rejects with an agent
+     * error that must not be shown on the lock screen as if the user caused it.
+     */
+    open(): () => boolean {
+      const era = session;
+      return () => era === session;
+    },
+    /**
+     * End the session. Everything in flight is abandoned: its results belong to
      * a session that no longer exists.
      */
     invalidate(): void {
-      current++;
+      session++;
     },
   };
 }
