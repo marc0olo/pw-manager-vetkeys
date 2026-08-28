@@ -220,9 +220,12 @@ export class VaultClient {
     );
 
     // A ReadWriteManage grantee can get the owner's own map listed twice — once
-    // from the ACL and once as owned — because the canister concatenates the two
-    // without de-duplicating. See #10 / dfinity/vetkeys#437. Two entries with the
-    // same id would also collide as React keys.
+    // from the ACL and once as owned — because an ACL mutation targeting the
+    // owner is accepted, and the canister then concatenates the two sources
+    // without de-duplicating. Both halves are dfinity/vetkeys#437 (see #10),
+    // which is also why that issue is cited for owner-targeted ACL writes in
+    // scripts/check-capabilities.mjs. Two entries with the same id would also
+    // collide as React keys.
     const seen = new Set<string>();
     const vaults = summaries.filter((summary) => {
       const id = vaultId(summary);

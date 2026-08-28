@@ -141,8 +141,11 @@ check(
 // granted anything. `getUserRights` meanwhile synthesises the owner's rights
 // and reports `ReadWriteManage`, so the two endpoints disagree about whether
 // the owner is a member, and a caller cannot tell "the owner is protected"
-// from "that principal had nothing". Upstream dfinity/vetkeys#437 proposes
-// rejecting ACL mutations that target the owner, which resolves both.
+// from "that principal had nothing". Upstream dfinity/vetkeys#437 covers this:
+// the owner guard uses `&&`, so it only fires when the owner targets
+// themselves. Its suggested fix — reject any ACL mutation where `user == owner`
+// — resolves this and the duplicate listing that vault.ts de-duplicates, which
+// is why one issue number is cited for two symptoms.
 //
 // Unreachable from our UI, which filters the owner out of the share list.
 {
