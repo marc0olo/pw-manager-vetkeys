@@ -15,16 +15,37 @@ export type { AccessRights };
 /** The one vault every user owns. Vault names are capped at 32 bytes. */
 export const OWN_VAULT_NAME = "Personal";
 
-export interface Vault {
+/**
+ * What a poll knows about a vault, without decrypting anything.
+ *
+ * `itemIds` is available because EncryptedMaps encrypts values but not keys, so
+ * the poll can see which items exist — and therefore which have been deleted —
+ * with no key material involved.
+ */
+export interface VaultSummary {
   /** Principal that owns the vault — half of the vault's identity. */
   owner: Principal;
   name: string;
   /** False for a vault someone else shared with us. */
   isOwned: boolean;
-  /** Our rights on a shared vault; owners implicitly have full rights. */
+  /**
+   * Our rights on a shared vault; owners implicitly have full rights.
+   *
+   * Null for every vault shared *with* us: the canister will not disclose a
+   * vault's membership to a non-manager, and the library flattens that refusal
+   * to an empty list. See issue #9 and dfinity/vetkeys#438.
+   */
   rights: AccessRights | null;
-  /** Who this vault is shared with (owner excluded). */
+  /** Who this vault is shared with (owner excluded). Owned vaults only. */
   sharedWith: [Principal, AccessRights][];
+  /** Item ids present on the canister. Plaintext map keys, so no key needed. */
+  itemIds: string[];
+  /** Digest of the stored ciphertext, to spot a change without decrypting. */
+  fingerprint: string;
+}
+
+/** A vault whose items have been decrypted. */
+export interface Vault extends VaultSummary {
   items: VaultItem[];
 }
 
@@ -39,15 +60,15 @@ export function toAccessRights(level: AccessLevel): AccessRights {
   return { [level]: null } as AccessRights;
 }
 
-export function canWrite(vault: Vault): boolean {
+export function canWrite(vault: VaultSummary): boolean {
   return vault.isOwned || (vault.rights !== null && accessLevel(vault.rights) !== "Read");
 }
 
-export function canManage(vault: Vault): boolean {
+export function canManage(vault: VaultSummary): boolean {
   return vault.isOwned || (vault.rights !== null && accessLevel(vault.rights) === "ReadWriteManage");
 }
 
-export function vaultId(vault: Pick<Vault, "owner" | "name">): string {
+export function vaultId(vault: Pick<VaultSummary, "owner" | "name">): string {
   return `${vault.owner.toText()}/${vault.name}`;
 }
 
@@ -68,14 +89,60 @@ function backendCanisterId(): string {
   return id;
 }
 
+/** Fingerprint of an empty vault — no bytes to digest. */
+const EMPTY_FINGERPRINT = "";
+
+/**
+ * Digest the stored ciphertext of a vault, so a poll can tell whether its
+ * contents changed without holding a key. Keys are sorted first, since the
+ * canister does not promise an order.
+ */
+async function fingerprintOf(keyvals: [{ inner: Uint8Array }, { inner: Uint8Array }][]): Promise<string> {
+  if (keyvals.length === 0) return EMPTY_FINGERPRINT;
+  const parts = keyvals
+    .map(([key, value]) => `${hex(key.inner)}:${hex(value.inner)}`)
+    .sort();
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(parts.join("|")));
+  return hex(new Uint8Array(digest));
+}
+
+function hex(bytes: Uint8Array): string {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+/**
+ * The single choke point for turning a vault name into the bytes that identify a
+ * map. Every read, write, share and revoke goes through it.
+ *
+ * Rejects surrounding whitespace rather than trimming it. A vault *is*
+ * `(owner, name)`, so trimming here would silently address a different map than
+ * the caller named — and two vaults called `"Work"` and `"Work "` would be
+ * indistinguishable on screen while being separate stores. Validating where
+ * names enter the system keeps that state from ever existing.
+ */
 function nameBytes(name: string): Uint8Array {
+  if (name !== name.trim()) {
+    throw new Error("A vault name cannot start or end with a space.");
+  }
   const bytes = encoder.encode(name);
   if (bytes.length === 0) throw new Error("A vault name cannot be empty.");
+  // Bytes, not characters: the Rust implementation types a map name as
+  // Blob<32>, so a longer name would be data only a Motoko backend could hold.
   if (bytes.length > 32) throw new Error("A vault name must be at most 32 bytes.");
   return bytes;
+}
+
+/** True if a name can address a map. Use before offering it as a vault name. */
+export function isValidVaultName(name: string): boolean {
+  try {
+    nameBytes(name);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -123,22 +190,45 @@ export class VaultClient {
    * The canister only reports *non-empty* owned vaults, so a brand-new user has
    * nothing to list — the caller always shows their own vault regardless.
    */
-  async loadVaults(): Promise<Vault[]> {
-    const maps = await this.encryptedMaps.getAllAccessibleMaps();
+  /**
+   * Every vault we can see, with **no decryption and no key derivation**.
+   *
+   * Reads through the raw canister client rather than
+   * `EncryptedMaps.getAllAccessibleMaps()`, which would decrypt every value in
+   * every vault and so cost one `vetkd_derive_key` per vault on every call. This
+   * is one query returning ciphertext, which is what makes polling affordable:
+   * a user with 26 accessible vaults pays 0 derivations here instead of 26.
+   */
+  async listVaults(): Promise<VaultSummary[]> {
+    const maps = await this.encryptedMaps.canisterClient.get_all_accessible_encrypted_maps();
 
-    const vaults = maps.map((map): Vault => {
-      const isOwned = map.mapOwner.compareTo(this.me) === "eq";
-      const rights = map.accessControl.find(([who]) => who.compareTo(this.me) === "eq")?.[1] ?? null;
-      return {
-        owner: map.mapOwner,
-        name: decoder.decode(map.mapName),
-        isOwned,
-        rights: isOwned ? null : rights,
-        sharedWith: map.accessControl.filter(([who]) => who.compareTo(map.mapOwner) !== "eq"),
-        items: map.keyvals
-          .map(([key, value]) => decodeItem(decoder.decode(key), value))
-          .sort(compareItems),
-      };
+    const summaries = await Promise.all(
+      maps.map(async (map): Promise<VaultSummary> => {
+        const owner = map.map_owner;
+        const isOwned = owner.compareTo(this.me) === "eq";
+        const rights = map.access_control.find(([who]) => who.compareTo(this.me) === "eq")?.[1] ?? null;
+        return {
+          owner,
+          name: decoder.decode(Uint8Array.from(map.map_name.inner)),
+          isOwned,
+          rights: isOwned ? null : rights,
+          sharedWith: map.access_control.filter(([who]) => who.compareTo(owner) !== "eq"),
+          itemIds: map.keyvals.map(([key]) => decoder.decode(Uint8Array.from(key.inner))),
+          fingerprint: await fingerprintOf(map.keyvals),
+        };
+      }),
+    );
+
+    // A ReadWriteManage grantee can get the owner's own map listed twice — once
+    // from the ACL and once as owned — because the canister concatenates the two
+    // without de-duplicating. See #10 / dfinity/vetkeys#437. Two entries with the
+    // same id would also collide as React keys.
+    const seen = new Set<string>();
+    const vaults = summaries.filter((summary) => {
+      const id = vaultId(summary);
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
     });
 
     if (!vaults.some((vault) => vault.isOwned && vault.name === OWN_VAULT_NAME)) {
@@ -152,10 +242,20 @@ export class VaultClient {
         // sharing looks like it did not take effect until the first item is
         // added. A query, and only reached while the own vault is empty.
         sharedWith: await this.accessListFor(OWN_VAULT_NAME),
-        items: [],
+        itemIds: [],
+        fingerprint: EMPTY_FINGERPRINT,
       });
     }
     return vaults;
+  }
+
+  /**
+   * Decrypt one vault's items. The only call here that derives a key, and the
+   * derivation is cached per vault, so reopening is free.
+   */
+  async openVault(vault: VaultSummary): Promise<VaultItem[]> {
+    const values = await this.encryptedMaps.getValuesForMap(vault.owner, nameBytes(vault.name));
+    return values.map(([key, value]) => decodeItem(decoder.decode(key), value)).sort(compareItems);
   }
 
   /** Who an owned vault is shared with. Empty rather than throwing if unknown. */
@@ -170,7 +270,7 @@ export class VaultClient {
     }
   }
 
-  async saveItem(vault: Vault, item: VaultItem): Promise<void> {
+  async saveItem(vault: VaultSummary, item: VaultItem): Promise<void> {
     await this.encryptedMaps.setValue(
       vault.owner,
       nameBytes(vault.name),
@@ -179,16 +279,16 @@ export class VaultClient {
     );
   }
 
-  async deleteItem(vault: Vault, itemId: string): Promise<void> {
+  async deleteItem(vault: VaultSummary, itemId: string): Promise<void> {
     await this.encryptedMaps.removeEncryptedValue(vault.owner, nameBytes(vault.name), encoder.encode(itemId));
   }
 
-  async share(vault: Vault, user: Principal, level: AccessLevel): Promise<void> {
+  async share(vault: VaultSummary, user: Principal, level: AccessLevel): Promise<void> {
     if (user.compareTo(vault.owner) === "eq") throw new Error("The vault owner already has full access.");
     await this.encryptedMaps.setUserRights(vault.owner, nameBytes(vault.name), user, toAccessRights(level));
   }
 
-  async revoke(vault: Vault, user: Principal): Promise<void> {
+  async revoke(vault: VaultSummary, user: Principal): Promise<void> {
     await this.encryptedMaps.removeUser(vault.owner, nameBytes(vault.name), user);
   }
 

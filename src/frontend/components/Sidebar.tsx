@@ -1,9 +1,9 @@
-import { CopyIcon, LockIcon, ShareIcon, ShieldIcon } from "./Icons";
+import { CopyIcon, LockIcon, RefreshIcon, ShareIcon, ShieldIcon } from "./Icons";
 import { SessionStatus } from "./SessionStatus";
-import { accessLevel, vaultId, type Vault } from "../lib/vault";
+import { accessLevel, vaultId, type VaultSummary } from "../lib/vault";
 
 interface Props {
-  vaults: Vault[];
+  vaults: VaultSummary[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   principal: string;
@@ -13,6 +13,17 @@ interface Props {
   remainingMs: (() => number) | null;
   /** When the delegation stops being valid, in ms since the epoch. */
   sessionExpiresAt: number | null;
+  onRefresh: () => void;
+  syncing: boolean;
+  /** When the vault list was last read, in ms since the epoch. */
+  syncedAt: number | null;
+}
+
+function relativeTime(at: number): string {
+  const seconds = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (seconds < 10) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  return `${Math.round(seconds / 60)}m ago`;
 }
 
 const LEVEL_LABEL = { Read: "read-only", ReadWrite: "can edit", ReadWriteManage: "can manage" } as const;
@@ -26,6 +37,9 @@ export function Sidebar({
   onSignOut,
   remainingMs,
   sessionExpiresAt,
+  onRefresh,
+  syncing,
+  syncedAt,
 }: Props) {
   const owned = vaults.filter((vault) => vault.isOwned);
   const shared = vaults.filter((vault) => !vault.isOwned);
@@ -37,6 +51,17 @@ export function Sidebar({
           <ShieldIcon />
         </span>
         vetVault
+        {/* App-scoped: it re-reads the vault list, not one vault's contents, so
+            it belongs beside the app name rather than in a vault's own header. */}
+        <button
+          className={`iconBtn sidebar__sync ${syncing ? "sidebar__sync--busy" : ""}`}
+          onClick={onRefresh}
+          disabled={syncing}
+          title={`Check for changes${syncedAt === null ? "" : ` — last checked ${relativeTime(syncedAt)}`}`}
+          aria-label="Check for changes"
+        >
+          <RefreshIcon />
+        </button>
       </div>
 
       <nav className="sidebar__nav">
@@ -80,7 +105,7 @@ function VaultGroup({
   onSelect,
 }: {
   title: string;
-  vaults: Vault[];
+  vaults: VaultSummary[];
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
@@ -98,7 +123,7 @@ function VaultGroup({
                 onClick={() => onSelect(id)}
               >
                 <span className="vaultRow__name">{vault.name}</span>
-                <span className="vaultRow__count">{vault.items.length}</span>
+                <span className="vaultRow__count">{vault.itemIds.length}</span>
                 {vault.isOwned && sharedCount > 0 && (
                   <span
                     className="vaultRow__meta vaultRow__meta--shared"

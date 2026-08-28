@@ -992,3 +992,29 @@ code,
 .sessionStatus__expiry--warn {
   color: var(--fair);
 }
+
+/* Manual re-read of the vault list, beside the app name. */
+.sidebar__brand {
+  position: relative;
+}
+
+.sidebar__sync {
+  margin-left: auto;
+}
+
+.sidebar__sync--busy svg {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar__sync--busy svg {
+    animation: none;
+    opacity: 0.5;
+  }
+}
