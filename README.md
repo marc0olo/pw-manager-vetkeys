@@ -51,6 +51,7 @@ src/frontend/lib/poll.ts     What a poll changes, as one patch
 src/frontend/components/   Sidebar, item list, detail, editor, share dialog, session status
 src/frontend/lib/__tests__/  Unit tests: session lifetime, load-time gate, lock sequence,
                            locked state, poll reconciliation, capabilities, vault names
+src/frontend/__tests__/    Component tests: the transitions — lock, sign-in, refusal, revocation
 scripts/smoke-test.mjs     End-to-end check against a running local replica
 scripts/check-poll-cost.mjs  Asserts a poll derives no keys and opening one vault derives one
 scripts/check-capabilities.mjs  Verifies the access-level table the share dialog states
