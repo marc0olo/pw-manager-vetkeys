@@ -20,7 +20,10 @@ interface Props {
 export function EmptyVaultDialog({ vault, busy, onConfirm, onClose }: Props) {
   const [typed, setTyped] = useState("");
   const armed = typed === vault.name && !busy;
-  const count = vault.items.length;
+  // Canister state, not decryption progress: `itemIds` is what the wipe will
+  // actually remove, and it is right even mid-decrypt or when a poll has landed
+  // items the re-decrypt has not caught up with.
+  const count = vault.itemIds.length;
   const others = vault.sharedWith.length;
 
   return (

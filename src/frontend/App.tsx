@@ -319,7 +319,20 @@ export function App() {
         if (!cancelled) patch({ openItems: items });
       })
       .catch((caught) => {
-        if (!cancelled) setError(message(caught));
+        if (cancelled) return;
+        // Read access can be revoked while a decrypt is in flight — the one
+        // remaining path that can put the word `unauthorized` in front of the
+        // user. Translating is all that is needed: the next poll drops the
+        // vault from the listing and reconcile moves the selection.
+        //
+        // Deliberately does not call refresh() here. `summary` is a reference
+        // into the vaults array, so a refresh would give it a new identity,
+        // re-run this effect, and fail again — a tight loop, not a retry.
+        setError(
+          isUnauthorized(caught)
+            ? "You no longer have access to this vault."
+            : message(caught),
+        );
       });
 
     return () => {
@@ -466,7 +479,7 @@ export function App() {
                 {vault.sharedWith.length > 0 ? `Shared with ${vault.sharedWith.length}` : "Share"}
               </button>
             )}
-            {writable && vault.items.length > 0 && (
+            {writable && vault.itemIds.length > 0 && (
               <button
                 className="btn btn--danger btn--sm"
                 onClick={() => patch({ wiping: true })}
