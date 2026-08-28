@@ -113,11 +113,36 @@ function hex(bytes: Uint8Array): string {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+/**
+ * The single choke point for turning a vault name into the bytes that identify a
+ * map. Every read, write, share and revoke goes through it.
+ *
+ * Rejects surrounding whitespace rather than trimming it. A vault *is*
+ * `(owner, name)`, so trimming here would silently address a different map than
+ * the caller named — and two vaults called `"Work"` and `"Work "` would be
+ * indistinguishable on screen while being separate stores. Validating where
+ * names enter the system keeps that state from ever existing.
+ */
 function nameBytes(name: string): Uint8Array {
+  if (name !== name.trim()) {
+    throw new Error("A vault name cannot start or end with a space.");
+  }
   const bytes = encoder.encode(name);
   if (bytes.length === 0) throw new Error("A vault name cannot be empty.");
+  // Bytes, not characters: the Rust implementation types a map name as
+  // Blob<32>, so a longer name would be data only a Motoko backend could hold.
   if (bytes.length > 32) throw new Error("A vault name must be at most 32 bytes.");
   return bytes;
+}
+
+/** True if a name can address a map. Use before offering it as a vault name. */
+export function isValidVaultName(name: string): boolean {
+  try {
+    nameBytes(name);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
