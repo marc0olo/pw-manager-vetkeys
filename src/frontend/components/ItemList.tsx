@@ -1,6 +1,6 @@
 import { PlusIcon, SearchIcon } from "./Icons";
 import { displayHost, type VaultItem } from "../lib/items";
-import type { VaultSummary } from "../lib/vault";
+import { vaultLabel, type VaultSummary } from "../lib/vault";
 
 interface Props {
   vault: VaultSummary;
@@ -34,7 +34,7 @@ export function ItemList({
           <input
             type="search"
             value={query}
-            placeholder={`Search ${vault.name}`}
+            placeholder={`Search ${vaultLabel(vault)}`}
             onChange={(event) => onQueryChange(event.target.value)}
             aria-label="Search items"
           />

@@ -17,6 +17,7 @@ function summary(overrides: Partial<VaultSummary> = {}): VaultSummary {
   return {
     owner: me,
     name: OWN_VAULT_NAME,
+    displayName: null,
     isOwned: true,
     rights: null,
     sharedWith: [],

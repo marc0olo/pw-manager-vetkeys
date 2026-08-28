@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Principal } from "@icp-sdk/core/principal";
 import { TrashIcon } from "./Icons";
-import { ACCESS_LEVELS, accessLevel, type AccessLevel, type Vault } from "../lib/vault";
+import { ACCESS_LEVELS, accessLevel, vaultLabel, type AccessLevel, type Vault } from "../lib/vault";
 
 interface Props {
   vault: Vault;
@@ -48,9 +48,9 @@ export function ShareDialog({ vault, busy, onShare, onRevoke, onClose }: Props) 
   };
 
   return (
-    <div className="modal" role="dialog" aria-modal="true" aria-label={`Share ${vault.name}`}>
+    <div className="modal" role="dialog" aria-modal="true" aria-label={`Share ${vaultLabel(vault)}`}>
       <div className="modal__panel">
-        <h2>Share “{vault.name}”</h2>
+        <h2>Share “{vaultLabel(vault)}”</h2>
         <p className="modal__lede">
           The vault key is re-encrypted for the principal you name, so they can decrypt these items
           without you ever handing over a secret.

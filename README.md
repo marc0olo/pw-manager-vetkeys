@@ -32,6 +32,13 @@ password — the vault key is derived for your Internet Identity principal.
     if a write is refused, rather than guessing read-only from silence.
 - **Empty vault** removes every item at once, behind a typed confirmation. The
   vault and its sharing survive; the items do not.
+- **Rename a vault** you own. A vault *is* `(owner, name)` and its vetKey
+  derives from that pair, so the map never moves: the backend stores a display
+  name beside it and a rename is one write — nothing re-encrypted, nobody
+  re-invited, collaborators see the change immediately.
+  - The original name stays in the clear and cannot be changed, which the
+    dialog says plainly. Renaming is a label, not a way to hide what a vault
+    was called.
 - **Lock** discards the derived key material. The sidebar shows both deadlines
   that end a session — the sliding idle lock and the fixed sign-in expiry — with
   whichever comes first highlighted.
@@ -47,6 +54,7 @@ src/frontend/lib/auth.ts   Internet Identity, and the load-time session gate
 src/frontend/lib/session.ts  Idle timeout, activity mark, cross-tab lock, key purge
 src/frontend/lib/lock.ts     The lock sequence: ordering and failure safety
 src/frontend/lib/capabilities.ts  What we may do on a vault, and learning from a refusal
+src/frontend/lib/names.ts    Vault display names: this app's own two endpoints
 src/frontend/lib/poll.ts     What a poll changes, as one patch
 src/frontend/components/   Sidebar, item list, detail, editor, share dialog, session status
 src/frontend/lib/__tests__/  Unit tests: session lifetime, load-time gate, lock sequence,
@@ -55,9 +63,15 @@ src/frontend/__tests__/    Component tests: the transitions — lock, sign-in, r
 scripts/smoke-test.mjs     End-to-end check against a running local replica
 scripts/check-poll-cost.mjs  Asserts a poll derives no keys and opening one vault derives one
 scripts/check-capabilities.mjs  Verifies the access-level table the share dialog states
+scripts/check-vault-names.mjs  Verifies renaming moves no map and derives no key
 ```
 
-The backend is ~20 lines: `include EncryptedMapsCanister(state)` contributes every
+The backend adds two endpoints of its own — `set_vault_name` and
+`get_vault_names` — beside the mixin. Additive only: every endpoint the
+`@icp-sdk/vetkeys` client calls is still the mixin's, so the stock client keeps
+working and only our two need a hand-written binding.
+
+`include EncryptedMapsCanister(state)` contributes every
 endpoint the `@icp-sdk/vetkeys` client calls, so the Candid interface matches the
 client by construction.
 

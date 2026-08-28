@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check-poll-cost": "node scripts/check-poll-cost.mjs",
-    "check-capabilities": "node scripts/check-capabilities.mjs"
+    "check-capabilities": "node scripts/check-capabilities.mjs",
+    "check-vault-names": "node scripts/check-vault-names.mjs"
   },
   "dependencies": {
     "@icp-sdk/auth": "^8.0.3",

@@ -46,6 +46,8 @@ export interface VaultSessionState {
   sharing: boolean;
   /** The empty-vault confirmation. A dialog must never survive a lock. */
   wiping: boolean;
+  /** The rename dialog, which holds a draft name. */
+  renaming: boolean;
 }
 
 /** The locked state: nothing about any previous session survives it. */
@@ -60,6 +62,7 @@ export const NO_VAULT_SESSION: VaultSessionState = {
   denials: [],
   sharing: false,
   wiping: false,
+  renaming: false,
 };
 
 /**

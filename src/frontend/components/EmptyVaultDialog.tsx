@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Vault } from "../lib/vault";
+import { vaultLabel, type Vault } from "../lib/vault";
 
 interface Props {
   vault: Vault;
@@ -19,7 +19,8 @@ interface Props {
  */
 export function EmptyVaultDialog({ vault, busy, onConfirm, onClose }: Props) {
   const [typed, setTyped] = useState("");
-  const armed = typed === vault.name && !busy;
+  const label = vaultLabel(vault);
+  const armed = typed === label && !busy;
   // Canister state, not decryption progress: `itemIds` is what the wipe will
   // actually remove, and it is right even mid-decrypt or when a poll has landed
   // items the re-decrypt has not caught up with.
@@ -27,9 +28,9 @@ export function EmptyVaultDialog({ vault, busy, onConfirm, onClose }: Props) {
   const others = vault.sharedWith.length;
 
   return (
-    <div className="modal" role="dialog" aria-modal="true" aria-label={`Empty ${vault.name}`}>
+    <div className="modal" role="dialog" aria-modal="true" aria-label={`Empty ${label}`}>
       <div className="modal__panel">
-        <h2>Empty “{vault.name}”?</h2>
+        <h2>Empty “{label}”?</h2>
 
         <p className="modal__danger">
           This deletes{" "}
@@ -47,7 +48,7 @@ export function EmptyVaultDialog({ vault, busy, onConfirm, onClose }: Props) {
 
         <label className="input">
           <span>
-            Type <code>{vault.name}</code> to confirm
+            Type <code>{label}</code> to confirm
           </span>
           <input
             value={typed}

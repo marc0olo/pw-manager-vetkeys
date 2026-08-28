@@ -17,6 +17,7 @@ function vault(overrides: Partial<VaultSummary> = {}): VaultSummary {
   return {
     owner: other,
     name: "Team infra",
+    displayName: null,
     isOwned: false,
     rights: null,
     sharedWith: [],

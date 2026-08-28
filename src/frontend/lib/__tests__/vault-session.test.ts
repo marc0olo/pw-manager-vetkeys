@@ -42,6 +42,7 @@ describe("NO_VAULT_SESSION", () => {
   it("closes any open dialog", () => {
     expect(NO_VAULT_SESSION.sharing).toBe(false);
     expect(NO_VAULT_SESSION.wiping).toBe(false);
+    expect(NO_VAULT_SESSION.renaming).toBe(false);
   });
 
   /**
@@ -69,6 +70,7 @@ describe("NO_VAULT_SESSION", () => {
       "openItems",
       "pane",
       "query",
+      "renaming",
       "selectedItemId",
       "selectedVaultId",
       "sharing",

@@ -8,6 +8,7 @@ import {
   type AccessRights,
 } from "@icp-sdk/vetkeys/encrypted_maps";
 import { compareItems, decodeItem, encodeItem, type VaultItem } from "./items";
+import { namesActor } from "./names";
 import { keyCacheName } from "./session";
 
 export type { AccessRights };
@@ -26,6 +27,15 @@ export interface VaultSummary {
   /** Principal that owns the vault — half of the vault's identity. */
   owner: Principal;
   name: string;
+  /**
+   * The name the owner chose for display, or null if they never renamed it.
+   *
+   * Separate from `name` because they are different things: `name` is half the
+   * vault's identity and the vetKey derivation input, so it can never change,
+   * while this is a label. Address the canister with `name`; show the user
+   * {@link vaultLabel}.
+   */
+  displayName: string | null;
   /** False for a vault someone else shared with us. */
   isOwned: boolean;
   /**
@@ -51,6 +61,19 @@ export interface Vault extends VaultSummary {
 
 export const ACCESS_LEVELS = ["Read", "ReadWrite", "ReadWriteManage"] as const;
 export type AccessLevel = (typeof ACCESS_LEVELS)[number];
+
+/**
+ * What to show the user for a vault.
+ *
+ * Never use `name` in the UI: a renamed vault would still display its original
+ * name, which is the whole thing renaming exists to avoid.
+ */
+export function vaultLabel(vault: VaultSummary): string {
+  // `||` rather than `??`: an empty display name means "no name", and rendering
+  // a blank vault title would be a bad way to discover one had been stored. The
+  // canister removes the row instead of storing "", so this is belt-and-braces.
+  return vault.displayName || vault.name;
+}
 
 export function accessLevel(rights: AccessRights): AccessLevel {
   return Object.keys(rights)[0] as AccessLevel;
@@ -181,6 +204,8 @@ export class VaultClient {
   private constructor(
     private readonly encryptedMaps: EncryptedMaps,
     readonly me: Principal,
+    /** This app's own endpoints, beside the ones the mixin contributes. */
+    private readonly names: ReturnType<typeof namesActor>,
   ) {}
 
   static async create(identity: Identity): Promise<VaultClient> {
@@ -194,7 +219,7 @@ export class VaultClient {
     const encryptedMaps = new EncryptedMaps(new DefaultEncryptedMapsClient(agent, canisterId), {
       cache: new IndexedDbDerivedKeyMaterialCache(keyCacheName(principal.toText())),
     });
-    return new VaultClient(encryptedMaps, principal);
+    return new VaultClient(encryptedMaps, principal, namesActor(agent, canisterId));
   }
 
   /**
@@ -213,16 +238,29 @@ export class VaultClient {
    * a user with 26 accessible vaults pays 0 derivations here instead of 26.
    */
   async listVaults(): Promise<VaultSummary[]> {
-    const maps = await this.encryptedMaps.canisterClient.get_all_accessible_encrypted_maps();
+    // Both are queries and neither derives a key, so they go together rather
+    // than adding a round trip to the poll path.
+    const [maps, named] = await Promise.all([
+      this.encryptedMaps.canisterClient.get_all_accessible_encrypted_maps(),
+      this.names.get_vault_names(),
+    ]);
+    const displayNames = new Map(
+      named.map((row) => [
+        `${row.owner.toText()}/${decoder.decode(Uint8Array.from(row.map_name.inner))}`,
+        row.display_name,
+      ]),
+    );
 
     const summaries = await Promise.all(
       maps.map(async (map): Promise<VaultSummary> => {
         const owner = map.map_owner;
         const isOwned = owner.compareTo(this.me) === "eq";
         const rights = map.access_control.find(([who]) => who.compareTo(this.me) === "eq")?.[1] ?? null;
+        const name = decoder.decode(Uint8Array.from(map.map_name.inner));
         return {
           owner,
-          name: decoder.decode(Uint8Array.from(map.map_name.inner)),
+          name,
+          displayName: displayNames.get(`${owner.toText()}/${name}`) ?? null,
           isOwned,
           rights: isOwned ? null : rights,
           sharedWith: map.access_control.filter(([who]) => who.compareTo(owner) !== "eq"),
@@ -251,6 +289,7 @@ export class VaultClient {
       vaults.unshift({
         owner: this.me,
         name: OWN_VAULT_NAME,
+        displayName: displayNames.get(`${this.me.toText()}/${OWN_VAULT_NAME}`) ?? null,
         isOwned: true,
         rights: null,
         // An empty vault is absent from the listing above but can still be
@@ -307,6 +346,22 @@ export class VaultClient {
    * list survive, so the vault stays listed and shared; only its contents go.
    * That is why the UI calls this "empty", not "delete".
    */
+  /**
+   * Rename a vault you own, or clear the name by passing "".
+   *
+   * One write. The map does not move, so nothing is re-encrypted, no key is
+   * re-derived, and collaborators see the new name immediately with no
+   * interruption — which is the entire reason for storing a label rather than
+   * renaming the map.
+   */
+  async rename(vault: VaultSummary, displayName: string): Promise<void> {
+    const result = await this.names.set_vault_name(
+      { inner: Array.from(nameBytes(vault.name)) },
+      displayName,
+    );
+    if ("Err" in result) throw new Error(result.Err);
+  }
+
   async wipe(vault: VaultSummary): Promise<void> {
     await this.encryptedMaps.removeMapValues(vault.owner, nameBytes(vault.name));
   }

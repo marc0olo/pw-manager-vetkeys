@@ -16,6 +16,7 @@ import {
   VaultClient,
   defaultVaultId,
   vaultId,
+  vaultLabel,
   type AccessLevel,
   type Vault,
 } from "./lib/vault";
@@ -33,9 +34,10 @@ import { ItemEditor } from "./components/ItemEditor";
 import { ItemList } from "./components/ItemList";
 import { LockScreen } from "./components/LockScreen";
 import { EmptyVaultDialog } from "./components/EmptyVaultDialog";
+import { RenameVaultDialog } from "./components/RenameVaultDialog";
 import { ShareDialog } from "./components/ShareDialog";
 import { Sidebar } from "./components/Sidebar";
-import { CheckIcon, ShareIcon, TrashIcon } from "./components/Icons";
+import { CheckIcon, PencilIcon, ShareIcon, TrashIcon } from "./components/Icons";
 
 /** How often to re-read the vault list. Queries only, so this is cheap. */
 export const POLL_INTERVAL_MS = 15_000;
@@ -49,7 +51,7 @@ export function App() {
   const [client, setClient] = useState<VaultClient | null>(null);
   // One object, cleared as a unit on lock — see lib/vault-session for why.
   const [vaultSession, setVaultSession] = useState<VaultSessionState>(NO_VAULT_SESSION);
-  const { vaults, openItems, selectedVaultId, selectedItemId, syncedAt, pane, query, sharing, wiping, denials } =
+  const { vaults, openItems, selectedVaultId, selectedItemId, syncedAt, pane, query, sharing, wiping, renaming, denials } =
     vaultSession;
   // Updated synchronously by `patch` below. The poll reads state across an
   // await, and React state is not visible until the next commit — reading the
@@ -456,7 +458,7 @@ export function App() {
       <main className="pane">
         <header className="pane__bar">
           <div className="pane__title">
-            {vault.name}
+            {vaultLabel(vault)}
             {!vault.isOwned && <span className="tag">shared by {vault.owner.toText().slice(0, 8)}…</span>}
           </div>
           <div className="pane__tools">
@@ -472,6 +474,16 @@ export function App() {
               >
                 <ShareIcon />
                 {vault.sharedWith.length > 0 ? `Shared with ${vault.sharedWith.length}` : "Share"}
+              </button>
+            )}
+            {vault.isOwned && (
+              <button
+                className="btn btn--ghost btn--sm"
+                onClick={() => patch({ renaming: true })}
+                title="Change what this vault is called"
+              >
+                <PencilIcon />
+                Rename
               </button>
             )}
             {writable && vault.itemIds.length > 0 && (
@@ -540,6 +552,23 @@ export function App() {
           </div>
         )}
       </main>
+
+      {renaming && (
+        <RenameVaultDialog
+          vault={vault}
+          busy={busy}
+          onClose={() => patch({ renaming: false })}
+          onRename={(displayName) =>
+            void run(
+              async () => {
+                await client!.rename(vault, displayName);
+                patch({ renaming: false });
+              },
+              displayName === "" ? "Name reset" : "Vault renamed",
+            )
+          }
+        />
+      )}
 
       {wiping && (
         <EmptyVaultDialog
