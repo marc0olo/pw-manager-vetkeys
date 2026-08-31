@@ -244,9 +244,12 @@ export class VaultClient {
       this.encryptedMaps.canisterClient.get_all_accessible_encrypted_maps(),
       this.names.get_vault_names(),
     ]);
+    // Keyed with `vaultId` rather than a hand-rolled `owner/name`: it is the
+    // canonical form, and a second answer to "how is a vault addressed" is
+    // exactly what #16 was.
     const displayNames = new Map(
       named.map((row) => [
-        `${row.owner.toText()}/${decoder.decode(Uint8Array.from(row.map_name.inner))}`,
+        vaultId({ owner: row.owner, name: decoder.decode(Uint8Array.from(row.map_name.inner)) }),
         row.display_name,
       ]),
     );
@@ -260,7 +263,7 @@ export class VaultClient {
         return {
           owner,
           name,
-          displayName: displayNames.get(`${owner.toText()}/${name}`) ?? null,
+          displayName: displayNames.get(vaultId({ owner, name })) ?? null,
           isOwned,
           rights: isOwned ? null : rights,
           sharedWith: map.access_control.filter(([who]) => who.compareTo(owner) !== "eq"),
@@ -289,7 +292,7 @@ export class VaultClient {
       vaults.unshift({
         owner: this.me,
         name: OWN_VAULT_NAME,
-        displayName: displayNames.get(`${this.me.toText()}/${OWN_VAULT_NAME}`) ?? null,
+        displayName: displayNames.get(vaultId({ owner: this.me, name: OWN_VAULT_NAME })) ?? null,
         isOwned: true,
         rights: null,
         // An empty vault is absent from the listing above but can still be
@@ -339,14 +342,6 @@ export class VaultClient {
   }
 
   /**
-   * Removes every item in the vault.
-   *
-   * Guarded by `ensureUserCanWrite`, so any `ReadWrite` collaborator can do
-   * this — there is no separate delete right. The map itself and its access
-   * list survive, so the vault stays listed and shared; only its contents go.
-   * That is why the UI calls this "empty", not "delete".
-   */
-  /**
    * Rename a vault you own, or clear the name by passing "".
    *
    * One write. The map does not move, so nothing is re-encrypted, no key is
@@ -362,6 +357,14 @@ export class VaultClient {
     if ("Err" in result) throw new Error(result.Err);
   }
 
+  /**
+   * Removes every item in the vault.
+   *
+   * Guarded by `ensureUserCanWrite`, so any `ReadWrite` collaborator can do
+   * this — there is no separate delete right. The map itself and its access
+   * list survive, so the vault stays listed and shared; only its contents go.
+   * That is why the UI calls this "empty", not "delete".
+   */
   async wipe(vault: VaultSummary): Promise<void> {
     await this.encryptedMaps.removeMapValues(vault.owner, nameBytes(vault.name));
   }

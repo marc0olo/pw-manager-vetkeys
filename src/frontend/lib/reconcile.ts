@@ -1,5 +1,5 @@
 import type { VaultItem } from "./items";
-import { defaultVaultId, vaultId, type VaultSummary } from "./vault";
+import { defaultVaultId, vaultId, vaultLabel, type VaultSummary } from "./vault";
 
 export interface Selection {
   vaultId: string | null;
@@ -55,7 +55,10 @@ export function reconcile({
   // access is revoked — emptying it keeps it, since it is listed from the access
   // control list — so the message can say what happened rather than hedge.
   if (after === null) {
-    const name = before?.name ?? "That vault";
+    // The label, never the map name. A renamed vault must not be announced by
+    // the name the user replaced — they may never have seen it, and reciting it
+    // unprompted is exactly what the rename dialog warns cannot be undone.
+    const name = before ? vaultLabel(before) : "That vault";
     return {
       selection: { vaultId: defaultVaultId(next), itemId: null },
       notice:

@@ -150,6 +150,31 @@ check("64 bytes exactly is accepted", "Ok" in atCap);
 const emojiTooLong = await A.names.set_vault_name(bytes("Personal"), "🔐".repeat(17));
 check("the cap counts bytes, not characters", "Err" in emojiTooLong, "17 emoji is 68 bytes");
 
+// ---- bounded in count, not just in size -------------------------------------
+{
+  const hoarder = await connect(Ed25519KeyIdentity.generate());
+  let refusedAt = null;
+  for (let i = 0; i < 105; i++) {
+    const result = await hoarder.names.set_vault_name(bytes(`v${i}`), `Name ${i}`);
+    if ("Err" in result) {
+      refusedAt = i;
+      break;
+    }
+  }
+  check("a principal cannot occupy unbounded rows", refusedAt === 100, `refused at ${refusedAt}`);
+  // Renaming replaces a row, so it must not be turned away by the cap.
+  const rename = await hoarder.names.set_vault_name(bytes("v0"), "Renamed");
+  check("but renaming an already-named vault still works at the cap", "Ok" in rename, JSON.stringify(rename));
+}
+
+// ---- anonymous callers cannot store rows ------------------------------------
+{
+  const { AnonymousIdentity } = await import("@icp-sdk/core/agent");
+  const anon = await connect(new AnonymousIdentity());
+  const result = await anon.names.set_vault_name(bytes("Personal"), "Anon");
+  check("an anonymous caller is refused", "Err" in result, JSON.stringify(result));
+}
+
 // ---- an EMPTY vault can be renamed ------------------------------------------
 //
 // The reported bug. `get_owned_non_empty_map_names` omits an empty owned map

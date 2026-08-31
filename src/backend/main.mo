@@ -54,6 +54,11 @@ actor PasswordManager {
   /// not something to leave open.
   transient let MAX_DISPLAY_NAME_BYTES = 64;
 
+  /// Bounds how many rows one principal can occupy. Row *size* was bounded from
+  /// the start and row *count* was not, which left an open-ended write for any
+  /// caller. Generous enough that no real user meets it.
+  transient let MAX_NAMES_PER_OWNER = 100;
+
   /// `owner -> mapName -> display name`. Absent means "show the map name", so
   /// nothing needs migrating or backfilling.
   ///
@@ -82,6 +87,14 @@ actor PasswordManager {
   /// vault for everyone would be a surprise, and this makes it unrepresentable
   /// rather than merely checked.
   public shared (msg) func set_vault_name(map_name : ByteBuf, display_name : Text) : async Result<(), Text> {
+    // Nothing an anonymous caller stores can ever be read back — every row is
+    // keyed on its author and only surfaces for them or for someone they shared
+    // a vault with, and the anonymous principal owns no vaults. Refuse rather
+    // than accumulate rows nobody can reach.
+    if (Principal.isAnonymous(msg.caller)) {
+      return #Err("Sign in to name a vault.");
+    };
+
     let trimmed = Text.trim(display_name, #predicate(Char.isWhitespace));
     let mine = namesOwnedBy(msg.caller);
 
@@ -105,6 +118,12 @@ actor PasswordManager {
     // saves the user a pointless error.
     if (Text.encodeUtf8(trimmed).size() > MAX_DISPLAY_NAME_BYTES) {
       return #Err("A vault name may be at most " # debug_show (MAX_DISPLAY_NAME_BYTES) # " bytes.");
+    };
+
+    // Renaming a vault that already has a name replaces its row, so only a new
+    // one counts against the cap.
+    if (Map.size(mine) >= MAX_NAMES_PER_OWNER and mine.get(Blob.compare, map_name.inner) == null) {
+      return #Err("You have named the maximum of " # debug_show (MAX_NAMES_PER_OWNER) # " vaults.");
     };
 
     store(mine.add(Blob.compare, map_name.inner, trimmed));
