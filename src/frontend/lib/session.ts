@@ -167,9 +167,15 @@ function deleteDatabase(name: string): Promise<void> {
  * whose connection is still open. It is skipped, because deleting it would be
  * actively harmful: the delete is refused while a connection is open, and a
  * refused delete stays **queued**, which stalls the next `open` on that name
- * indefinitely. The SDK's cache is built on `idb-keyval`, which offers no way
- * to close the connection, so the stall outlasts the session — the next sign-in
- * hangs on "Decrypting…" until the page is reloaded.
+ * indefinitely — so the stall outlasts the session, and the next sign-in hangs
+ * on "Decrypting…" until the page is reloaded.
+ *
+ * The root cause is upstream (dfinity/vetkeys#440): the SDK's cache is built on
+ * `idb-keyval`, which registers no `onversionchange` handler, so its connection
+ * never yields to another client's delete — and exposes no `close()` either. If
+ * that is fixed, this skip can go and the store can be deleted again, which
+ * would also stop a per-principal database name recording which identities have
+ * used the app on that profile.
  *
  * Pass it only when the clear actually succeeded. If it did not, deleting is
  * the right call even at the cost of a stall: a stall is recoverable by

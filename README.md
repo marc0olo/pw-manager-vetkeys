@@ -274,7 +274,9 @@ Three of these trace to open upstream issues, all filed from this project:
 | [dfinity/vetkeys#437] | A `ReadWriteManage` grantee can get the owner's vault listed twice, and ACL writes targeting the owner are accepted. The client de-duplicates. |
 | [dfinity/vetkeys#438] | A grantee cannot read their own rights, so the UI offers capabilities and adapts to a refusal instead of asking. |
 | [dfinity/vetkeys#439] | An owned vault cannot exist while empty, so the client synthesises a placeholder for it. |
+| [dfinity/vetkeys#440] | The derived-key cache holds an IndexedDB connection that never yields, so its store cannot be deleted — only cleared. The purge skips it. |
 
 [dfinity/vetkeys#437]: https://github.com/dfinity/vetkeys/issues/437
 [dfinity/vetkeys#438]: https://github.com/dfinity/vetkeys/issues/438
 [dfinity/vetkeys#439]: https://github.com/dfinity/vetkeys/issues/439
+[dfinity/vetkeys#440]: https://github.com/dfinity/vetkeys/issues/440
