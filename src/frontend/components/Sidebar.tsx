@@ -1,6 +1,6 @@
 import { CopyIcon, LockIcon, RefreshIcon, ShareIcon, ShieldIcon } from "./Icons";
 import { SessionStatus } from "./SessionStatus";
-import { accessLevel, vaultId, type VaultSummary } from "../lib/vault";
+import { accessLevel, vaultId, vaultLabel, type VaultSummary } from "../lib/vault";
 
 interface Props {
   vaults: VaultSummary[];
@@ -122,7 +122,7 @@ function VaultGroup({
                 className={`vaultRow ${selectedId === id ? "vaultRow--active" : ""}`}
                 onClick={() => onSelect(id)}
               >
-                <span className="vaultRow__name">{vault.name}</span>
+                <span className="vaultRow__name">{vaultLabel(vault)}</span>
                 <span className="vaultRow__count">{vault.itemIds.length}</span>
                 {vault.isOwned && sharedCount > 0 && (
                   <span

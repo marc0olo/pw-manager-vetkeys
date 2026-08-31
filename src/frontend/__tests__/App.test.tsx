@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ALICE, BOB, FakeClient, identityFor, item, vault } from "./harness";
 
 /**
@@ -268,5 +268,69 @@ describe("polling for changes", () => {
     } finally {
       hidden.mockRestore();
     }
+  });
+});
+
+describe("renaming a vault", () => {
+  const renamed = () =>
+    new FakeClient(ALICE, [vault({ itemIds: ["a"], fingerprint: "own-1", displayName: "Home" })], {
+      Personal: [item({ id: "a", title: "GitHub" })],
+    });
+
+  it("shows the chosen name everywhere, never the map name", async () => {
+    signedInAs(ALICE, renamed());
+    render(<App />);
+
+    // The map name is identity and the key-derivation input; showing it would
+    // defeat the point of renaming.
+    expect(await screen.findAllByText("Home")).not.toHaveLength(0);
+    expect(screen.queryByText("Personal")).not.toBeInTheDocument();
+  });
+
+  it("is offered for a vault you own", async () => {
+    signedInAs(ALICE);
+    render(<App />);
+    expect(await screen.findByRole("button", { name: /rename/i })).toBeInTheDocument();
+  });
+
+  it("is not offered for a vault shared with you", async () => {
+    // Owner-only by construction on the canister; the UI should not imply
+    // otherwise and then fail.
+    signedInAs(ALICE, new FakeClient(ALICE, [personal, shared], {
+      "Team infra": [item({ id: "x", title: "Grafana" })],
+    }));
+    render(<App />);
+    fireEvent.click(await screen.findByText("Team infra"));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /rename/i })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("says the original name cannot be changed", async () => {
+    // Without this a rename implies a privacy property it does not have:
+    // "Divorce lawyer" renamed to "Misc" is still Divorce lawyer in the listing.
+    signedInAs(ALICE, renamed());
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /rename/i }));
+
+    expect(await screen.findByText(/original name cannot be changed/i)).toBeInTheDocument();
+    expect(screen.getByText("Personal")).toBeInTheDocument();
+  });
+
+  it("saves the new name and closes", async () => {
+    const client = signedInAs(ALICE);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /rename/i }));
+
+    const field = await screen.findByDisplayValue("Personal");
+    fireEvent.change(field, { target: { value: "Home" } });
+    client.vaults = [vault({ itemIds: ["a"], fingerprint: "own-1", displayName: "Home" })];
+    // Both the toolbar control and the dialog's submit are called "Rename".
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^rename$/i }));
+
+    await waitFor(() => expect(client.rename).toHaveBeenCalled());
+    expect(await screen.findAllByText("Home")).not.toHaveLength(0);
   });
 });

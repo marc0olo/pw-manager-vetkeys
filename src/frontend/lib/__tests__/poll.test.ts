@@ -11,6 +11,7 @@ const other = Principal.fromText("aaaaa-aa");
 const summary = (o: Partial<VaultSummary> = {}): VaultSummary => ({
   owner: me,
   name: OWN_VAULT_NAME,
+  displayName: null,
   isOwned: true,
   rights: null,
   sharedWith: [],

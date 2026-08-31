@@ -38,6 +38,13 @@ export const CopyIcon = () => (
   </svg>
 );
 
+export const PencilIcon = () => (
+  <svg {...base}>
+    <path d="M4 20h4l10.5-10.5a2.83 2.83 0 10-4-4L4 16v4z" />
+    <path d="M13.5 6.5l4 4" />
+  </svg>
+);
+
 export const EyeIcon = () => (
   <svg {...base}>
     <path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />

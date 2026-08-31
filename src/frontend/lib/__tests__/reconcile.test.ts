@@ -17,6 +17,7 @@ function summary(overrides: Partial<VaultSummary> = {}): VaultSummary {
   return {
     owner: me,
     name: OWN_VAULT_NAME,
+    displayName: null,
     isOwned: true,
     rights: null,
     sharedWith: [],
@@ -224,6 +225,45 @@ describe("access to the selected vault was revoked", () => {
       openItems: null,
     });
     expect(result.notice).toBe(`“${OWN_VAULT_NAME}” is no longer available.`);
+  });
+});
+
+describe("a vault the owner renamed", () => {
+  // Every other fixture leaves `displayName` null, which makes `vaultLabel` and
+  // `.name` indistinguishable — so no other test here can tell them apart.
+  const aliased = { ...shared, displayName: "Infra secrets" };
+
+  it("is announced by its chosen name when access is revoked", () => {
+    const result = reconcile({
+      previous: [own, aliased],
+      next: [own],
+      selection: { vaultId: vaultId(aliased), itemId: null },
+      openItems: null,
+    });
+    expect(result.notice).toBe("“Infra secrets” is no longer shared with you.");
+  });
+
+  it("never volunteers the original name", () => {
+    // The rename dialog says the original stays readable. Saying it out loud in
+    // a toast, unprompted, is the thing that makes that warning ring hollow.
+    const result = reconcile({
+      previous: [own, aliased],
+      next: [own],
+      selection: { vaultId: vaultId(aliased), itemId: null },
+      openItems: null,
+    });
+    expect(result.notice).not.toContain(shared.name);
+  });
+
+  it("does the same for a vanished owned vault", () => {
+    const mine = { ...own, displayName: "Home" };
+    const result = reconcile({
+      previous: [mine],
+      next: [],
+      selection: { vaultId: vaultId(mine), itemId: null },
+      openItems: null,
+    });
+    expect(result.notice).toBe("“Home” is no longer available.");
   });
 });
 

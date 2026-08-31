@@ -18,6 +18,7 @@ export const item = (o: Partial<VaultItem> & { id: string; title: string }): Vau
 export const vault = (o: Partial<VaultSummary> = {}): VaultSummary => ({
   owner: ALICE,
   name: "Personal",
+  displayName: null,
   isOwned: true,
   rights: null,
   sharedWith: [],
@@ -60,6 +61,7 @@ export class FakeClient {
   saveItem = vi.fn(async () => this.guard("write"));
   deleteItem = vi.fn(async () => this.guard("write"));
   wipe = vi.fn(async () => this.guard("write"));
+  rename = vi.fn(async () => this.guard("write"));
   share = vi.fn(async () => this.guard("manage"));
   revoke = vi.fn(async () => this.guard("manage"));
   lock = vi.fn(async () => {});
