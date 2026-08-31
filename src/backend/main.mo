@@ -54,18 +54,20 @@ actor PasswordManager {
   /// not something to leave open.
   transient let MAX_DISPLAY_NAME_BYTES = 64;
 
-  func compareVaultIds(a : (Principal, Blob), b : (Principal, Blob)) : {
-    #less;
-    #greater;
-    #equal;
-  } {
-    let byOwner = Principal.compare(a.0, b.0);
-    if (byOwner == #equal) { Blob.compare(a.1, b.1) } else { byOwner };
-  };
+  /// `owner -> mapName -> display name`. Absent means "show the map name", so
+  /// nothing needs migrating or backfilling.
+  ///
+  /// Keyed by owner rather than by the `(owner, mapName)` pair, because the
+  /// primary read is "every name *I* own" and that runs on the poll path. The
+  /// pair-keyed form made it O(rows across all users) per poll.
+  var vaultNames : Map.Map<Principal, Map.Map<Blob, Text>> = Map.empty<Principal, Map.Map<Blob, Text>>();
 
-  /// `(owner, mapName) -> display name`. Absent means "show the map name", so
-  /// existing vaults need no migration and nothing has to be backfilled.
-  var vaultNames : Map.Map<(Principal, Blob), Text> = Map.empty<(Principal, Blob), Text>();
+  func namesOwnedBy(owner : Principal) : Map.Map<Blob, Text> {
+    switch (vaultNames.get(Principal.compare, owner)) {
+      case (null) { Map.empty<Blob, Text>() };
+      case (?names) { names };
+    };
+  };
 
   public type VaultName = {
     owner : Principal;
@@ -81,11 +83,19 @@ actor PasswordManager {
   /// rather than merely checked.
   public shared (msg) func set_vault_name(map_name : ByteBuf, display_name : Text) : async Result<(), Text> {
     let trimmed = Text.trim(display_name, #predicate(Char.isWhitespace));
-    let id = (msg.caller, map_name.inner);
+    let mine = namesOwnedBy(msg.caller);
+
+    func store(names : Map.Map<Blob, Text>) {
+      vaultNames := if (Map.isEmpty(names)) {
+        vaultNames.remove(Principal.compare, msg.caller);
+      } else {
+        vaultNames.add(Principal.compare, msg.caller, names);
+      };
+    };
 
     // Clearing reverts to the map name, which is the same thing "unset" means.
     if (trimmed == "") {
-      vaultNames := vaultNames.remove(compareVaultIds, id);
+      store(mine.remove(Blob.compare, map_name.inner));
       return #Ok();
     };
 
@@ -97,7 +107,7 @@ actor PasswordManager {
       return #Err("A vault name may be at most " # debug_show (MAX_DISPLAY_NAME_BYTES) # " bytes.");
     };
 
-    vaultNames := vaultNames.add(compareVaultIds, id, trimmed);
+    store(mine.add(Blob.compare, map_name.inner, trimmed));
     #Ok();
   };
 
@@ -110,20 +120,30 @@ actor PasswordManager {
   public query (msg) func get_vault_names() : async [VaultName] {
     let found = List.empty<VaultName>();
 
-    func collect(owner : Principal, name : Blob) {
-      switch (vaultNames.get(compareVaultIds, (owner, name))) {
+    // Your own rows, straight from the store.
+    //
+    // Deliberately *not* filtered against the library's map enumeration.
+    // `get_owned_non_empty_map_names` omits an empty owned map (upstream
+    // dfinity/vetkeys#439), and filtering through it meant a renamed *empty*
+    // vault reported no name at all — a rename that silently did nothing, on
+    // precisely the vault a new user has. A row for a map that does not exist
+    // is harmless: the client joins these against the vault listing, so it
+    // simply never matches.
+    //
+    for ((name, displayName) in Map.entries(namesOwnedBy(msg.caller))) {
+      List.add(found, { owner = msg.caller; map_name = { inner = name }; display_name = displayName });
+    };
+
+    // Rows for vaults shared with you, so collaborators see the same name the
+    // owner does. Listed from the access control list, which carries no such
+    // emptiness condition.
+    for ((owner, name) in encryptedMaps.getAccessibleSharedMapNames(msg.caller).values()) {
+      switch (namesOwnedBy(owner).get(Blob.compare, name)) {
         case (null) {};
         case (?displayName) {
           List.add(found, { owner; map_name = { inner = name }; display_name = displayName });
         };
       };
-    };
-
-    for ((owner, name) in encryptedMaps.getAccessibleSharedMapNames(msg.caller).values()) {
-      collect(owner, name);
-    };
-    for (name in encryptedMaps.getOwnedNonEmptyMapNames(msg.caller).values()) {
-      collect(msg.caller, name);
     };
 
     List.toArray(found);
