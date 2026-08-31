@@ -136,12 +136,19 @@ function deleteDatabase(name: string): Promise<void> {
       // Resolve on every outcome: a purge must never block sign-in.
       request.onsuccess = () => resolve();
       request.onerror = () => resolve();
-      // `blocked` means another connection still holds the store open. The delete
-      // is queued and completes when that connection closes, so the store does go
-      // away — just not before this resolves. Note that @icp-sdk/auth can leak a
-      // duplicate connection to its *own* store on concurrent first access
-      // (dfinity/icp-js-auth#137, merged but unreleased as of 8.0.3 — see issue #6); that store
-      // is not one of ours, so it cannot block these deletes.
+      // `blocked` means another connection still holds the store open. The
+      // delete is queued and completes when that connection closes, so the
+      // store does go away — just not before this resolves.
+      //
+      // The queued delete is not free, though: it also stalls the next `open`
+      // on that name, indefinitely, which is why `purgeKeyMaterial` skips a
+      // store the live client holds open. Reaching `blocked` here means we
+      // decided a possible stall was better than leaving key material behind.
+      //
+      // Note that @icp-sdk/auth can leak a duplicate connection to its *own*
+      // store on concurrent first access (dfinity/icp-js-auth#137, merged but
+      // unreleased as of 8.0.3 — see issue #6); that store is not one of ours,
+      // so it cannot block these deletes.
       request.onblocked = () => resolve();
     } catch {
       resolve();
@@ -155,8 +162,20 @@ function deleteDatabase(name: string): Promise<void> {
  * Enumerates where supported, so a store left by a principal no longer recorded
  * is still removed. `indexedDB.databases()` is **not implemented in Firefox**,
  * where this degrades to deleting the last recorded principal's store only.
+ *
+ * `held` names a store whose contents the live client has *already cleared* and
+ * whose connection is still open. It is skipped, because deleting it would be
+ * actively harmful: the delete is refused while a connection is open, and a
+ * refused delete stays **queued**, which stalls the next `open` on that name
+ * indefinitely. The SDK's cache is built on `idb-keyval`, which offers no way
+ * to close the connection, so the stall outlasts the session — the next sign-in
+ * hangs on "Decrypting…" until the page is reloaded.
+ *
+ * Pass it only when the clear actually succeeded. If it did not, deleting is
+ * the right call even at the cost of a stall: a stall is recoverable by
+ * reloading, retained key material is not.
  */
-export async function purgeKeyMaterial(): Promise<void> {
+export async function purgeKeyMaterial({ held }: { held?: string } = {}): Promise<void> {
   const names = new Set<string>();
 
   try {
@@ -171,6 +190,7 @@ export async function purgeKeyMaterial(): Promise<void> {
   const principal = storedPrincipal();
   if (principal) names.add(keyCacheName(principal));
 
+  names.delete(held ?? "");
   await Promise.all([...names].map(deleteDatabase));
 }
 
