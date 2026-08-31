@@ -267,7 +267,7 @@ voids the whole document — so run `npm run check-ii-metadata` after editing it
 - Sharing is by principal — you paste the other person's principal (the **My
   principal** button copies yours).
 
-Three of these trace to open upstream issues, all filed from this project:
+Some of the above, and other behaviour described earlier, is shaped by open upstream issues — all filed from this project:
 
 | Upstream | What it costs us |
 |---|---|
