@@ -9,7 +9,7 @@ import {
   type LockReason,
 } from "./lib/auth";
 import { lockVault } from "./lib/lock";
-import { startSession, type RunningSession } from "./lib/session";
+import { keyCacheName, startSession, type RunningSession } from "./lib/session";
 import { CLIPBOARD_CLEAR_SECONDS, copyPlain, copySecret } from "./lib/clipboard";
 import { compareItems, emptyItem, matchesQuery } from "./lib/items";
 import {
@@ -235,6 +235,10 @@ export function App() {
     async (reason: LockReason) => {
       const session = sessionRef.current;
       sessionRef.current = null;
+      // Whether the live client's cache was actually emptied. If it was not,
+      // the purge deletes its store even though that risks stalling the next
+      // sign-in — a stall is recoverable by reloading, key material is not.
+      let cleared = false;
       // Ordering and failure-safety live in lib/lock, where they are tested.
       await lockVault(reason, session, {
         resetUi: (locked) => {
@@ -255,8 +259,11 @@ export function App() {
         },
         clearVaultKeys: async () => {
           await client?.lock();
+          // Only now is the store both empty and still open, which is the one
+          // case the purge must not delete. See purgeKeyMaterial.
+          cleared = client !== null;
         },
-        endSession: signOut,
+        endSession: () => signOut({ held: cleared ? keyCacheName(client!.me.toText()) : undefined }),
       });
     },
     [client, loads],

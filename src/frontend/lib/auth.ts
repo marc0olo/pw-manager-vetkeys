@@ -188,9 +188,9 @@ export async function signIn(): Promise<Identity> {
  * mark. Every path that ends a session goes through here so key material can
  * never be left behind by one of them.
  */
-export async function signOut(): Promise<void> {
+export async function signOut(options: { held?: string } = {}): Promise<void> {
   try {
-    await purgeKeyMaterial();
+    await purgeKeyMaterial(options);
   } finally {
     try {
       await authClient.signOut();
