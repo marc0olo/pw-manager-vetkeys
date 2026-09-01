@@ -38,6 +38,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm install -g @icp-sdk/icp-cli @icp-sdk/ic-wasm
-      - run: npx mops check
+      # `mops` provides the Motoko compiler and `mops check`; icp-cli's Motoko
+      # recipe shells out to it. Locally these are global installs, so the
+      # workflow has to say so explicitly.
+      - run: npm install -g @icp-sdk/icp-cli @icp-sdk/ic-wasm ic-mops
+      - run: mops check
       - run: npm run check-bindings
