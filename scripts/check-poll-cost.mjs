@@ -145,6 +145,33 @@ check("polling after opening still derives nothing", derivations === 0, `${deriv
   );
 }
 
+// ---- what an empty vault digests to ----------------------------------------
+//
+// The client synthesises a placeholder for its own vault while that vault is
+// empty (#11), and seeds it with EMPTY_FINGERPRINT. That constant has to equal
+// what the canister reports for an empty vault, or the two routes to the same
+// vault would disagree and report a spurious change.
+{
+  const empty = Ed25519KeyIdentity.generate();
+  const E = await connect(empty);
+  const name = enc.encode("Emptied");
+  await E.maps.setValue(empty.getPrincipal(), name, enc.encode("k"), enc.encode("v"));
+  await E.maps.setUserRights(empty.getPrincipal(), name, me, { Read: null });
+  await E.maps.removeMapValues(empty.getPrincipal(), name);
+
+  const listed = (await app.poll.get_vault_summaries()).find(
+    (m) => new TextDecoder().decode(Uint8Array.from(m.map_name.inner)) === "Emptied",
+  );
+  const hex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  const EMPTY_FINGERPRINT =
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  check(
+    "an empty vault digests to the constant the client seeds its placeholder with",
+    listed !== undefined && hex(Uint8Array.from(listed.digest.inner)) === EMPTY_FINGERPRINT,
+    listed === undefined ? "not listed" : hex(Uint8Array.from(listed.digest.inner)).slice(0, 16),
+  );
+}
+
 // The regression this guards against: the old bulk call. Measured on a COLD
 // client, since `app` has already cached the own vault's key — reusing it here
 // would understate the cost of a page load.

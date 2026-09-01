@@ -125,14 +125,18 @@ function backendCanisterId(): string {
   return id;
 }
 
-/** Fingerprint of an empty vault — no bytes to digest. */
-const EMPTY_FINGERPRINT = "";
-
 /**
- * Digest the stored ciphertext of a vault, so a poll can tell whether its
- * contents changed without holding a key. Keys are sorted first, since the
- * canister does not promise an order.
+ * What the canister reports for a vault with no items: SHA-256 over nothing.
+ *
+ * Only the synthesised own-vault placeholder needs this — a real empty vault
+ * gets the value from `get_vault_summaries` like any other. It has to *match*
+ * that value rather than be an arbitrary sentinel: today the two paths are
+ * disjoint, because an empty owned map is absent from the listing (#11), but
+ * if that is fixed upstream the same vault would arrive by both routes and a
+ * mismatch would report a spurious change on the first poll after the upgrade.
  */
+const EMPTY_FINGERPRINT = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
 function hex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }

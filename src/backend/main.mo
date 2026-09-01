@@ -9,6 +9,7 @@ import Text "mo:core/Text";
 import Char "mo:core/Char";
 import List "mo:core/List";
 import Array "mo:core/Array";
+import Nat "mo:core/Nat";
 import Nat8 "mo:core/Nat8";
 import Nat64 "mo:core/Nat64";
 import Sha256 "mo:sha2/Sha256";
@@ -186,6 +187,14 @@ actor PasswordManager {
   // *keys* are kept — they are plaintext, small, and the client needs them to
   // tell which item was deleted. Values are the bulk and are only ever needed
   // when a vault is actually opened, which is a separate call.
+  //
+  // The hashing moved rather than went away: this recomputes over every
+  // accessible vault's full ciphertext on each poll, per client. It is well
+  // inside a query's instruction budget, and the obvious fix — cache the digest
+  // and invalidate on write — is *not available* here: writes go through the
+  // mixin's own value endpoints, which this canister neither wraps nor can
+  // hook. Making it incremental means owning those endpoints (the control-plane
+  // variant, #8), or the library maintaining a per-map version itself.
   // ---------------------------------------------------------------------------
 
   public type VaultSummary = {
@@ -204,12 +213,9 @@ actor PasswordManager {
   /// could be made to leave the digest unchanged and stay invisible to everyone
   /// else's poll. Framing the lengths makes the encoding injective.
   func writeFramed(digest : Sha256.Digest, blob : Blob) {
-    let size = Nat64.fromNat(blob.size());
+    let size = Nat.toNat64(blob.size());
     digest.writeArray(
-      Array.tabulate<Nat8>(
-        8,
-        func(i) { Nat8.fromNat(Nat64.toNat((size >> Nat64.fromNat(8 * (7 - i))) & 0xFF)) },
-      )
+      Array.tabulate<Nat8>(8, func(i) { Nat.toNat8(Nat64.toNat((size >> Nat.toNat64(8 * (7 - i))) & 0xFF)) })
     );
     digest.writeBlob(blob);
   };
