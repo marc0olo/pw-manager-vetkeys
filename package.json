@@ -2,6 +2,9 @@
   "name": "pw-manager-vetkeys",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.22.2"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

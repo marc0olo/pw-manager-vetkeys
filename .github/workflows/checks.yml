@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+# A new push to a pull request makes the previous run's answer irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Everything that needs only Node. Fast, and green or red on its own merits
   # even if the toolchain job below has a bad day fetching a compiler.
@@ -14,21 +22,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # 24 to match the backend job's dev image and local development.
+          # `engines` in package.json states the supported floor, which is
+          # lower; this is what the code is actually exercised on.
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm test
       - run: npm run build
+      # Needs no replica — it validates files in `public/`.
+      - run: npm run check-ii-metadata
 
-  # Needs the Motoko toolchain, because it rebuilds the canister to compare the
-  # committed Candid binding against what `src/backend` actually exposes.
-  #
-  # This is the job that matters for `src/bindings/`. Those files are generated
-  # but committed — so a clone can typecheck and run the suite without a Motoko
-  # toolchain — and the cost of committing generated code is that it goes stale
-  # silently. Candid ignores record fields it does not know, so an *added* field
-  # produces no error anywhere: the app simply never sees it.
   # Needs the Motoko toolchain, because it rebuilds the canister to compare the
   # committed Candid binding against what `src/backend` actually exposes.
   #

@@ -15,6 +15,10 @@ import { DefaultEncryptedMapsClient, EncryptedMaps } from "@icp-sdk/vetkeys/encr
 // declare its own copy, so it verified the canister while exercising a
 // different interface than the frontend.
 import { idlFactory } from "../src/bindings/declarations/backend.did.js";
+// The cap the client enforces, imported rather than restated, so the checks
+// below verify the canister agrees with it. Candid cannot carry a constant, so
+// this is the one value the generated binding leaves hand-synced with main.mo.
+import { MAX_DISPLAY_NAME_BYTES } from "../src/frontend/lib/backend.ts";
 
 const status = JSON.parse(execSync("icp network status --json", { encoding: "utf-8" }));
 const backendId = execSync("icp canister status backend --id-only", { encoding: "utf-8" }).trim();
@@ -136,12 +140,15 @@ check("an empty name clears the row, reverting to the map name",
   (await A.names.get_vault_names()).length === 0);
 
 // ---- bounded ----------------------------------------------------------------
-const tooLong = await A.names.set_vault_name(bytes("Personal"), "x".repeat(65));
-check("a name over 64 bytes is refused", "Err" in tooLong, JSON.stringify(tooLong));
-const atCap = await A.names.set_vault_name(bytes("Personal"), "x".repeat(64));
-check("64 bytes exactly is accepted", "Ok" in atCap);
-const emojiTooLong = await A.names.set_vault_name(bytes("Personal"), "🔐".repeat(17));
-check("the cap counts bytes, not characters", "Err" in emojiTooLong, "17 emoji is 68 bytes");
+const tooLong = await A.names.set_vault_name(bytes("Personal"), "x".repeat(MAX_DISPLAY_NAME_BYTES + 1));
+check(`a name over ${MAX_DISPLAY_NAME_BYTES} bytes is refused`, "Err" in tooLong, JSON.stringify(tooLong));
+const atCap = await A.names.set_vault_name(bytes("Personal"), "x".repeat(MAX_DISPLAY_NAME_BYTES));
+check(`${MAX_DISPLAY_NAME_BYTES} bytes exactly is accepted`, "Ok" in atCap);
+
+// 4 bytes per emoji, so one past the cap is one emoji past a quarter of it.
+const emoji = Math.floor(MAX_DISPLAY_NAME_BYTES / 4) + 1;
+const emojiTooLong = await A.names.set_vault_name(bytes("Personal"), "🔐".repeat(emoji));
+check("the cap counts bytes, not characters", "Err" in emojiTooLong, `${emoji} emoji is ${emoji * 4} bytes`);
 
 // ---- bounded in count, not just in size -------------------------------------
 {
