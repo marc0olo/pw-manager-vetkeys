@@ -174,10 +174,29 @@ icp deploy                    # builds the canister and the frontend, then syncs
 `icp deploy` prints the frontend URL: `http://frontend.local.localhost:8100/`.
 
 ```bash
-npm test                      # session lifetime and load-time gate (no replica needed)
-npm run smoke-test            # crypto + access control against the deployed canister
+npm test                      # unit tests and component transitions (no replica needed)
+npm run check-bindings        # the committed Candid binding still matches the canister
 npm run check-ii-metadata     # validates the II app-metadata document
+
+# these need a running replica and a deployed canister
+npm run smoke-test            # crypto + access control end to end
+npm run check-capabilities    # the access-level table the share dialog states
+npm run check-poll-cost       # a poll derives no keys and carries no ciphertext
+npm run check-vault-names     # renaming moves no map and derives no key
 ```
+
+The first three run in CI on every pull request; the replica ones do not, so
+run them locally before opening one.
+
+> **`IC0406 could not perform remote call`** from any of the replica checks
+> usually means the local canister is **out of cycles**, not that the network is
+> broken. Each `vetkd_derive_key` reserves ~26 B cycles, and these scripts derive
+> heavily — running them in sequence a few times drains a fresh canister. Check
+> with `icp canister status backend` and top up:
+>
+> ```bash
+> icp canister top-up backend --amount 10000000000000
+> ```
 
 ### Internet Identity
 
