@@ -201,11 +201,22 @@ actor PasswordManager {
   /// timers across upgrades, so one would stop silently after a deploy.
   ///
   /// Worth stating precisely, because two claims are easy to conflate and only
-  /// one is guaranteed: an entry is **unreachable** after 90 days, always,
-  /// because `visible` and `take` filter by age. It is **purged** only when
-  /// something next deletes from that vault. A vault wiped once and never
-  /// touched again keeps its trashed ciphertext indefinitely — bytes, not
-  /// exposure, but not "deleted after 90 days" either.
+  /// one is guaranteed:
+  ///
+  /// - **Unreachable** after 90 days, always and per entry, because `visible`
+  ///   and `take` filter by age. Nothing has to have run.
+  /// - **Purged** — the bytes actually dropped — when any deletion next happens
+  ///   in *any* vault. `Trash.purge` sweeps the whole store, not just the vault
+  ///   being touched, so one active user reclaims everyone's expired entries.
+  ///
+  /// So the residual case is narrow: if nobody ever deletes anything again,
+  /// expired ciphertext stays on disk. Unreachable, but stored — which is not
+  /// the same as "deleted after 90 days", and this is the only place that
+  /// distinction is written down.
+  ///
+  /// The sweep is O(all trash entries) per deletion. At this scale that is
+  /// nothing, and it is what makes reclamation self-healing rather than
+  /// dependent on which vault happens to be active.
   func recycle(deletedBy : Principal, owner : Principal, mapName : Blob, values : [(Blob, Blob)]) {
     let at = now();
     var next = Trash.purge(trash, at);
@@ -509,9 +520,50 @@ actor PasswordManager {
     trashed : Nat;
   };
 
+  /// Owned vaults that hold nothing but recoverable deletions.
+  ///
+  /// An emptied owned map is absent from the library's listing (#11, upstream
+  /// dfinity/vetkeys#439), so without this a vault whose every item was deleted
+  /// would take its trash out of reach with it — exactly when recovery matters
+  /// most. Deleting your last item, or a collaborator wiping the vault, would
+  /// leave nowhere to restore from.
+  func ownedVaultsWithOnlyTrash(caller : Principal, listed : [VaultSummary], at : Nat64) : [VaultSummary] {
+    let extra = List.empty<VaultSummary>();
+    let seen = func(name : Blob) : Bool {
+      for (summary in listed.values()) {
+        if (Principal.compare(summary.owner, caller) == #equal and Blob.compare(summary.map_name.inner, name) == #equal) {
+          return true;
+        };
+      };
+      false;
+    };
+    let added = List.empty<Blob>();
+    for (((owner, mapName, _), _) in Map.entries(trash)) {
+      if (Principal.compare(owner, caller) == #equal and not seen(mapName)) {
+        var already = false;
+        for (name in List.values(added)) { if (Blob.compare(name, mapName) == #equal) { already := true } };
+        if (not already and visibleTrashCount(caller, owner, mapName, at) > 0) {
+          List.add(added, mapName);
+          List.add(
+            extra,
+            {
+              owner = caller;
+              map_name = { inner = mapName };
+              access_control = [];
+              item_keys = [];
+              digest = { inner = Digest.ofKeyvals([]) };
+              trashed = visibleTrashCount(caller, owner, mapName, at);
+            },
+          );
+        };
+      };
+    };
+    List.toArray(extra);
+  };
+
   public query (msg) func get_vault_summaries() : async [VaultSummary] {
     let at = now();
-    Array.map<EncryptedMaps.EncryptedMapData<Types.AccessRights>, VaultSummary>(
+    let listed = Array.map<EncryptedMaps.EncryptedMapData<Types.AccessRights>, VaultSummary>(
       encryptedMaps.getAllAccessibleEncryptedMaps(msg.caller),
       func(map) {
         // Sorted so `item_keys` does not depend on the store's iteration
@@ -528,5 +580,6 @@ actor PasswordManager {
         };
       },
     );
+    Array.concat(listed, ownedVaultsWithOnlyTrash(msg.caller, listed, at));
   };
 };

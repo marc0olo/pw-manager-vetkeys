@@ -314,10 +314,12 @@ voids the whole document — so run `npm run check-ii-metadata` after editing it
   shared with you. Multiple owned vaults would need that fixed upstream, or the
   `EncryptedMapsControlPlaneCanister` variant and app-owned value endpoints.
 - No browser extension, autofill, TOTP, or attachments.
-- Trash is not purged on a schedule. An entry is *unreachable* after 90 days,
-  always — the read path filters by age — but the bytes are reclaimed only when
-  something next deletes from that vault, so a vault wiped once and abandoned
-  keeps its trashed ciphertext.
+- Trash is not purged on a schedule — there is no timer, because Motoko timers
+  do not survive an upgrade. An entry is *unreachable* after 90 days, always,
+  since the read path filters by age. The bytes are reclaimed on the next
+  deletion in **any** vault, which sweeps the whole store — so the only residual
+  case is a canister where nobody ever deletes anything again, which keeps
+  expired ciphertext on disk. Unreachable, but stored.
 - Sharing is by principal — you paste the other person's principal (the **My
   principal** button copies yours).
 

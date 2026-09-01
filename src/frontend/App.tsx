@@ -550,7 +550,14 @@ export function App() {
             onCopy={copyField}
             onEdit={() => patch({ pane: { mode: "edit", item: selectedItem, isNew: false } })}
             onDelete={() => {
-              if (!window.confirm(`Delete “${selectedItem.title || "this item"}” permanently?`)) return;
+              // Not "permanently" any more: it goes to the trash and can be
+              // restored for 90 days. A confirm still earns its place — the
+              // item leaves the list either way — but it must not claim the
+              // deletion is irreversible when it is not.
+              const label = selectedItem.title || "this item";
+              if (!window.confirm(`Delete “${label}”?\n\nIt moves to the trash and can be restored for 90 days.`)) {
+                return;
+              }
               void run(
                 async () => {
                   await client!.deleteItem(vault, selectedItem.id);

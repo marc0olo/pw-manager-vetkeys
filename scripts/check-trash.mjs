@@ -92,11 +92,34 @@ check("with both values intact",
   recovered.length === 2 && recovered.every(([, v]) => dec.decode(v).startsWith("secret")),
   `${recovered.length} items`);
 
-// ---- the count in the poll respects the same visibility ---------------------
+// ---- the count in the poll, and reaching trash in an emptied vault ----------
+//
+// Asserting the count is *zero* would have passed even if it never worked, and
+// did: manual testing found the owner seeing no trash at all. The cause was
+// that an emptied owned vault leaves the library's listing (#11), taking its
+// trash out of reach exactly when recovery matters most.
+const summaryFor = async (who) =>
+  (await who.api.get_vault_summaries()).find(
+    (v) => dec.decode(Uint8Array.from(v.map_name.inner)) === NAME,
+  );
 {
-  const summaries = await A.api.get_vault_summaries();
-  const mine = summaries.find((v) => dec.decode(Uint8Array.from(v.map_name.inner)) === NAME);
-  check("the poll reports the owner's visible trash count", Number(mine.trashed) === 0, String(mine?.trashed));
+  check("the poll reports no trash when there is none", Number((await summaryFor(A)).trashed) === 0);
+
+  await A.maps.removeEncryptedValue(me, N, enc.encode("k1"));
+  const after = await summaryFor(A);
+  check("and a non-zero count once something is deleted", Number(after.trashed) > 0, String(after.trashed));
+
+  // Empty it completely: every item deleted, nothing live left.
+  await A.maps.removeMapValues(me, N);
+  const emptied = await summaryFor(A);
+  check(
+    "a vault holding only trash is still listed to its owner",
+    emptied !== undefined,
+    emptied === undefined ? "vault vanished with its trash" : "",
+  );
+  check("with no items", emptied !== undefined && emptied.item_keys.length === 0);
+  check("and its trash still reachable", emptied !== undefined && Number(emptied.trashed) > 0, String(emptied?.trashed));
+  check("so it can be restored from", "Ok" in (await A.api.restore_trashed_values(me, buf(NAME))));
 }
 
 // ---- the retroactive-grant hole ---------------------------------------------
