@@ -2,6 +2,9 @@
   "name": "pw-manager-vetkeys",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.22.2"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -12,7 +15,9 @@
     "test:watch": "vitest",
     "check-poll-cost": "node scripts/check-poll-cost.mjs",
     "check-capabilities": "node scripts/check-capabilities.mjs",
-    "check-vault-names": "node scripts/check-vault-names.mjs"
+    "check-vault-names": "node scripts/check-vault-names.mjs",
+    "bindings": "icp build backend && icp-bindgen --did-file .mops/.build/backend.did --out-dir src/bindings --actor-disabled --force",
+    "check-bindings": "node scripts/check-bindings.mjs"
   },
   "dependencies": {
     "@icp-sdk/auth": "^8.0.3",
@@ -22,6 +27,7 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@icp-sdk/bindgen": "^0.4.0",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^26.4.0",

@@ -57,7 +57,16 @@ src/frontend/lib/auth.ts   Internet Identity, and the load-time session gate
 src/frontend/lib/session.ts  Idle timeout, activity mark, cross-tab lock, key purge
 src/frontend/lib/lock.ts     The lock sequence: ordering and failure safety
 src/frontend/lib/capabilities.ts  What we may do on a vault, and learning from a refusal
-src/frontend/lib/backend.ts  This app's own endpoints: vault names, and the poll summary
+src/frontend/lib/backend.ts  This app's own endpoints, over the generated binding
+src/bindings/              Generated from the canister's Candid — `npm run bindings`
+
+Bindings are generated but **committed**, so a clone can typecheck, test and run
+the replica scripts without a Motoko toolchain — without them `tsc` reports 10
+errors and 95 of 171 tests fail to load. The trade is that they can go stale:
+**after changing `src/backend/main.mo`, run `npm run bindings`**, and
+`npm run check-bindings` fails if you forget, and CI runs it on every pull request. Note that additive drift is the
+quiet kind — Candid ignores record fields it does not know, so a new field goes
+unnoticed, while a removed or retyped one fails loudly.
 src/frontend/lib/poll.ts     What a poll changes, as one patch
 src/frontend/components/   Sidebar, item list, detail, editor, share dialog, session status
 src/frontend/lib/__tests__/  Unit tests: session lifetime, load-time gate, lock sequence,
@@ -67,6 +76,7 @@ scripts/smoke-test.mjs     End-to-end check against a running local replica
 scripts/check-poll-cost.mjs  Asserts a poll derives no keys and opening one vault derives one
 scripts/check-capabilities.mjs  Verifies the access-level table the share dialog states
 scripts/check-vault-names.mjs  Verifies renaming moves no map and derives no key
+scripts/check-bindings.mjs  Fails if the committed Candid binding is stale
 ```
 
 The backend adds two endpoints of its own — `set_vault_name` and
@@ -164,10 +174,29 @@ icp deploy                    # builds the canister and the frontend, then syncs
 `icp deploy` prints the frontend URL: `http://frontend.local.localhost:8100/`.
 
 ```bash
-npm test                      # session lifetime and load-time gate (no replica needed)
-npm run smoke-test            # crypto + access control against the deployed canister
+npm test                      # unit tests and component transitions (no replica needed)
+npm run check-bindings        # the committed Candid binding still matches the canister
 npm run check-ii-metadata     # validates the II app-metadata document
+
+# these need a running replica and a deployed canister
+npm run smoke-test            # crypto + access control end to end
+npm run check-capabilities    # the access-level table the share dialog states
+npm run check-poll-cost       # a poll derives no keys and carries no ciphertext
+npm run check-vault-names     # renaming moves no map and derives no key
 ```
+
+The first three run in CI on every pull request; the replica ones do not, so
+run them locally before opening one.
+
+> **`IC0406 could not perform remote call`** from any of the replica checks
+> usually means the local canister is **out of cycles**, not that the network is
+> broken. Each `vetkd_derive_key` reserves ~26 B cycles, and these scripts derive
+> heavily — running them in sequence a few times drains a fresh canister. Check
+> with `icp canister status backend` and top up:
+>
+> ```bash
+> icp canister top-up backend --amount 10000000000000
+> ```
 
 ### Internet Identity
 

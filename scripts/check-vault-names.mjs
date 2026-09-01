@@ -10,24 +10,21 @@ import { execSync } from "node:child_process";
 import { Actor, HttpAgent } from "@icp-sdk/core/agent";
 import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
 import { DefaultEncryptedMapsClient, EncryptedMaps } from "@icp-sdk/vetkeys/encrypted_maps";
+// The binding the app itself ships, generated from the canister's Candid.
+// Importing it rather than restating it is the point: this script used to
+// declare its own copy, so it verified the canister while exercising a
+// different interface than the frontend.
+import { idlFactory } from "../src/bindings/declarations/backend.did.js";
+// The cap the client enforces, imported rather than restated, so the checks
+// below verify the canister agrees with it. Candid cannot carry a constant, so
+// this is the one value the generated binding leaves hand-synced with main.mo.
+import { MAX_DISPLAY_NAME_BYTES } from "../src/frontend/lib/backend.ts";
 
 const status = JSON.parse(execSync("icp network status --json", { encoding: "utf-8" }));
 const backendId = execSync("icp canister status backend --id-only", { encoding: "utf-8" }).trim();
 const rootKey = Uint8Array.from(Buffer.from(status.root_key, "hex"));
 const enc = new TextEncoder();
 
-const idl = ({ IDL }) => {
-  const ByteBuf = IDL.Record({ inner: IDL.Vec(IDL.Nat8) });
-  const VaultName = IDL.Record({
-    owner: IDL.Principal,
-    map_name: ByteBuf,
-    display_name: IDL.Text,
-  });
-  return IDL.Service({
-    set_vault_name: IDL.Func([ByteBuf, IDL.Text], [IDL.Variant({ Ok: IDL.Null, Err: IDL.Text })], []),
-    get_vault_names: IDL.Func([], [IDL.Vec(VaultName)], ["query"]),
-  });
-};
 
 let derivations = 0;
 async function connect(identity) {
@@ -41,7 +38,7 @@ async function connect(identity) {
   return {
     me: identity.getPrincipal(),
     maps: new EncryptedMaps(raw),
-    names: Actor.createActor(idl, { agent, canisterId: backendId }),
+    names: Actor.createActor(idlFactory, { agent, canisterId: backendId }),
   };
 }
 
@@ -143,12 +140,15 @@ check("an empty name clears the row, reverting to the map name",
   (await A.names.get_vault_names()).length === 0);
 
 // ---- bounded ----------------------------------------------------------------
-const tooLong = await A.names.set_vault_name(bytes("Personal"), "x".repeat(65));
-check("a name over 64 bytes is refused", "Err" in tooLong, JSON.stringify(tooLong));
-const atCap = await A.names.set_vault_name(bytes("Personal"), "x".repeat(64));
-check("64 bytes exactly is accepted", "Ok" in atCap);
-const emojiTooLong = await A.names.set_vault_name(bytes("Personal"), "🔐".repeat(17));
-check("the cap counts bytes, not characters", "Err" in emojiTooLong, "17 emoji is 68 bytes");
+const tooLong = await A.names.set_vault_name(bytes("Personal"), "x".repeat(MAX_DISPLAY_NAME_BYTES + 1));
+check(`a name over ${MAX_DISPLAY_NAME_BYTES} bytes is refused`, "Err" in tooLong, JSON.stringify(tooLong));
+const atCap = await A.names.set_vault_name(bytes("Personal"), "x".repeat(MAX_DISPLAY_NAME_BYTES));
+check(`${MAX_DISPLAY_NAME_BYTES} bytes exactly is accepted`, "Ok" in atCap);
+
+// 4 bytes per emoji, so one past the cap is one emoji past a quarter of it.
+const emoji = Math.floor(MAX_DISPLAY_NAME_BYTES / 4) + 1;
+const emojiTooLong = await A.names.set_vault_name(bytes("Personal"), "🔐".repeat(emoji));
+check("the cap counts bytes, not characters", "Err" in emojiTooLong, `${emoji} emoji is ${emoji * 4} bytes`);
 
 // ---- bounded in count, not just in size -------------------------------------
 {

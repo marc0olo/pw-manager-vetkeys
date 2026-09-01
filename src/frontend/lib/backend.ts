@@ -1,68 +1,30 @@
 import { Actor, type ActorSubclass, type HttpAgent } from "@icp-sdk/core/agent";
-import { IDL } from "@icp-sdk/core/candid";
-import type { Principal } from "@icp-sdk/core/principal";
-import type { AccessRights } from "@icp-sdk/vetkeys/encrypted_maps";
+import { idlFactory } from "../../bindings/declarations/backend.did.js";
+import type { _SERVICE } from "../../bindings/declarations/backend.did";
 
 /**
  * The endpoints this app adds on top of the EncryptedMaps mixin.
  *
- * Hand-written because `@icp-sdk/vetkeys`'s client only knows the library's own
- * interface. Adding endpoints beside the mixin is safe — the ones it contributes
- * are untouched, so the stock client keeps working — but nothing generates a
- * binding for ours.
+ * The interface is **generated** from the canister's own Candid by
+ * `npm run bindings`. It used to be hand-written here and again in two scripts,
+ * with nothing keeping the three in step — and Candid decodes a drifted record
+ * into something plausible rather than throwing, so a mismatch would have shown
+ * up as wrong data rather than an error. `npm run check-bindings` fails if the
+ * committed output no longer matches the canister.
+ *
+ * Deliberately the raw `idlFactory` rather than bindgen's generated
+ * `createActor` wrapper. The wrapper re-expresses candid variants in its own
+ * idiom — `AccessRights.Read` instead of `{ Read: null }` — which does not
+ * match the shape `@icp-sdk/vetkeys` uses for the very same values, and this
+ * app passes them straight back to `setUserRights`. One representation is worth
+ * more than the wrapper's conveniences, and it keeps this identical to what the
+ * scripts import.
+ *
+ * The actor is given our existing agent, so it carries the same identity as the
+ * EncryptedMaps client beside it.
  */
-const idl: IDL.InterfaceFactory = ({ IDL }) => {
-  const ByteBuf = IDL.Record({ inner: IDL.Vec(IDL.Nat8) });
-  const VaultName = IDL.Record({
-    owner: IDL.Principal,
-    map_name: ByteBuf,
-    display_name: IDL.Text,
-  });
-  const AccessRights = IDL.Variant({
-    Read: IDL.Null,
-    ReadWrite: IDL.Null,
-    ReadWriteManage: IDL.Null,
-  });
-  const VaultSummary = IDL.Record({
-    owner: IDL.Principal,
-    map_name: ByteBuf,
-    access_control: IDL.Vec(IDL.Tuple(IDL.Principal, AccessRights)),
-    item_keys: IDL.Vec(ByteBuf),
-    digest: ByteBuf,
-  });
-  return IDL.Service({
-    set_vault_name: IDL.Func([ByteBuf, IDL.Text], [IDL.Variant({ Ok: IDL.Null, Err: IDL.Text })], []),
-    get_vault_names: IDL.Func([], [IDL.Vec(VaultName)], ["query"]),
-    get_vault_summaries: IDL.Func([], [IDL.Vec(VaultSummary)], ["query"]),
-  });
-};
-
-interface BackendService {
-  set_vault_name: (
-    mapName: { inner: Uint8Array | number[] },
-    displayName: string,
-  ) => Promise<{ Ok: null } | { Err: string }>;
-  get_vault_names: () => Promise<
-    { owner: Principal; map_name: { inner: Uint8Array | number[] }; display_name: string }[]
-  >;
-  /**
-   * The vault listing the poll runs on: everything
-   * `get_all_accessible_encrypted_maps` returns *except* the values, which are
-   * replaced by one digest per vault. See the canister for why.
-   */
-  get_vault_summaries: () => Promise<
-    {
-      owner: Principal;
-      map_name: { inner: Uint8Array | number[] };
-      access_control: [Principal, AccessRights][];
-      item_keys: { inner: Uint8Array | number[] }[];
-      digest: { inner: Uint8Array | number[] };
-    }[]
-  >;
-}
-
-export function backendActor(agent: HttpAgent, canisterId: string): ActorSubclass<BackendService> {
-  return Actor.createActor<BackendService>(idl, { agent, canisterId });
+export function backendActor(agent: HttpAgent, canisterId: string): ActorSubclass<_SERVICE> {
+  return Actor.createActor<_SERVICE>(idlFactory, { agent, canisterId });
 }
 
 /** Longest display name the canister will store. Kept in step with main.mo. */

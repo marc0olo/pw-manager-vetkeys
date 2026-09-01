@@ -349,10 +349,7 @@ export class VaultClient {
    * renaming the map.
    */
   async rename(vault: VaultSummary, displayName: string): Promise<void> {
-    const result = await this.backend.set_vault_name(
-      { inner: Array.from(nameBytes(vault.name)) },
-      displayName,
-    );
+    const result = await this.backend.set_vault_name({ inner: nameBytes(vault.name) }, displayName);
     if ("Err" in result) throw new Error(result.Err);
   }
 
