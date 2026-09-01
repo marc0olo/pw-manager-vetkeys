@@ -79,11 +79,9 @@ export interface _SERVICE {
     Result_6
   >,
   /**
-   * / What is recoverable in one vault: keys and metadata, **never values**.
-   * /
-   * / Returning the ciphertext would put a whole wiped vault back on the wire,
-   * / which is the shape #14 removed from the poll — and a 500-item wipe sits
-   * / behind the same response limit. A value is fetched only by restoring it.
+   * / What is recoverable in one vault, with each item's ciphertext so a client
+   * / can show what it was rather than only when it went. See `TrashedItem` for
+   * / why returning values here is not the thing #14 removed from the poll.
    * /
    * / Visible to the vault's owner, and to whoever deleted the entry. Not to
    * / every reader: a collaborator added *after* a deletion would otherwise be
