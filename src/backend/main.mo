@@ -64,9 +64,18 @@ actor PasswordManager {
     access_control : [(Principal, Types.AccessRights)];
   };
 
-  // Written as the mixin writes it. A named `(Blob, Blob) -> (ByteBuf, ByteBuf)`
-  // helper does not typecheck here: Motoko reads that as returning *two* values,
-  // not one tuple, so it cannot be passed to `Array.map`.
+  // Written as the mixin writes it, with the mapping inline.
+  //
+  // A named helper declared `... : (ByteBuf, ByteBuf)` cannot be passed to
+  // `Array.map`, and the reason is the *return* type rather than the parameter:
+  //
+  //     expression of type   ((Blob, Blob)) -> (ByteBuf, ByteBuf)
+  //     cannot produce type  ((Blob, Blob)) -> ((ByteBuf, ByteBuf))
+  //
+  // Motoko reads `-> (A, B)` as returning two values, where `Array.map` wants
+  // one value that is a tuple. Writing the return type as `((ByteBuf, ByteBuf))`
+  // does compile — verified — but a stray pair of parentheses carrying that much
+  // meaning is the kind of thing a later tidy-up removes, so the lambda stays.
   func bufs(pairs : [(Blob, Blob)]) : [(ByteBuf, ByteBuf)] {
     Array.map<(Blob, Blob), (ByteBuf, ByteBuf)>(
       pairs,
