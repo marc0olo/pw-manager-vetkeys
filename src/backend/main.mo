@@ -1,4 +1,4 @@
-import EncryptedMapsCanister "mo:ic-vetkeys/encrypted_maps/Canister";
+import EncryptedMapsControlPlaneCanister "mo:ic-vetkeys/encrypted_maps/ControlPlaneCanister";
 import EncryptedMaps "mo:ic-vetkeys/encrypted_maps/EncryptedMaps";
 import Types "mo:ic-vetkeys/Types";
 import Runtime "mo:core/Runtime";
@@ -31,9 +31,126 @@ actor PasswordManager {
     "pw_manager_vetkeys",
   );
 
-  // Contributes the full endpoint set the @icp-sdk/vetkeys client expects:
-  // vetKD key derivation, access control, vault listing, and value storage.
-  include EncryptedMapsCanister(encryptedMapsState);
+  // The control-plane mixin: vetKD key derivation, access control and map-name
+  // enumeration, but *not* the value endpoints. Those are below.
+  //
+  // The full `EncryptedMapsCanister` mixin contributes them, and would be a
+  // couple of lines — but a mixin's methods cannot be wrapped, so owning them
+  // is the only way to keep app state moving with value writes. The
+  // `encrypted-maps` skill is explicit that exposing both the library's value
+  // mutators and our own desynchronises the two stores, which is why this is
+  // an either/or rather than an addition.
+  //
+  // Nothing about the interface changes: each endpoint below delegates to the
+  // same `encryptedMaps.*` call the mixin made, with the same signature, so
+  // `DefaultEncryptedMapsClient` cannot tell the difference. `npm run
+  // check-bindings` is what holds that claim to account — a drifted signature
+  // shows up as a diff in the generated Candid.
+  include EncryptedMapsControlPlaneCanister(encryptedMapsState);
+
+  // ---------------------------------------------------------------------------
+  // Value endpoints, taken over from the mixin
+  //
+  // Pure delegations for now. Trash (#8) hangs off `remove_encrypted_value` and
+  // `remove_map_values`; the audit log hangs off all three mutators. Kept as a
+  // separate, behaviour-free step so that if something breaks, it is obvious
+  // which change did it.
+  // ---------------------------------------------------------------------------
+
+  public type EncryptedMapData = {
+    map_owner : Principal;
+    map_name : ByteBuf;
+    keyvals : [(ByteBuf, ByteBuf)];
+    access_control : [(Principal, Types.AccessRights)];
+  };
+
+  // Written as the mixin writes it. A named `(Blob, Blob) -> (ByteBuf, ByteBuf)`
+  // helper does not typecheck here: Motoko reads that as returning *two* values,
+  // not one tuple, so it cannot be passed to `Array.map`.
+  func bufs(pairs : [(Blob, Blob)]) : [(ByteBuf, ByteBuf)] {
+    Array.map<(Blob, Blob), (ByteBuf, ByteBuf)>(
+      pairs,
+      func((a, b) : (Blob, Blob)) { ({ inner = a }, { inner = b }) },
+    );
+  };
+
+  public query (msg) func get_encrypted_values_for_map(
+    map_owner : Principal,
+    map_name : ByteBuf,
+  ) : async Result<[(ByteBuf, ByteBuf)], Text> {
+    switch (encryptedMaps.getEncryptedValuesForMap(msg.caller, (map_owner, map_name.inner))) {
+      case (#err(e)) { #Err(e) };
+      case (#ok(values)) { #Ok(bufs(values)) };
+    };
+  };
+
+  public query (msg) func get_all_accessible_encrypted_values() : async [((Principal, ByteBuf), [(ByteBuf, ByteBuf)])] {
+    Array.map<((Principal, Blob), [(Blob, Blob)]), ((Principal, ByteBuf), [(ByteBuf, ByteBuf)])>(
+      encryptedMaps.getAllAccessibleEncryptedValues(msg.caller),
+      func(((owner, name), values)) { ((owner, { inner = name }), bufs(values)) },
+    );
+  };
+
+  public query (msg) func get_all_accessible_encrypted_maps() : async [EncryptedMapData] {
+    Array.map<EncryptedMaps.EncryptedMapData<Types.AccessRights>, EncryptedMapData>(
+      encryptedMaps.getAllAccessibleEncryptedMaps(msg.caller),
+      func(map) {
+        {
+          map_owner = map.map_owner;
+          map_name = { inner = map.map_name };
+          keyvals = bufs(map.keyvals);
+          access_control = map.access_control;
+        };
+      },
+    );
+  };
+
+  public query (msg) func get_encrypted_value(
+    map_owner : Principal,
+    map_name : ByteBuf,
+    map_key : ByteBuf,
+  ) : async Result<?ByteBuf, Text> {
+    switch (encryptedMaps.getEncryptedValue(msg.caller, (map_owner, map_name.inner), map_key.inner)) {
+      case (#err(e)) { #Err(e) };
+      case (#ok(null)) { #Ok(null) };
+      case (#ok(?blob)) { #Ok(?{ inner = blob }) };
+    };
+  };
+
+  public shared (msg) func insert_encrypted_value(
+    map_owner : Principal,
+    map_name : ByteBuf,
+    map_key : ByteBuf,
+    value : ByteBuf,
+  ) : async Result<?ByteBuf, Text> {
+    switch (encryptedMaps.insertEncryptedValue(msg.caller, (map_owner, map_name.inner), map_key.inner, value.inner)) {
+      case (#err(e)) { #Err(e) };
+      case (#ok(null)) { #Ok(null) };
+      case (#ok(?blob)) { #Ok(?{ inner = blob }) };
+    };
+  };
+
+  public shared (msg) func remove_encrypted_value(
+    map_owner : Principal,
+    map_name : ByteBuf,
+    map_key : ByteBuf,
+  ) : async Result<?ByteBuf, Text> {
+    switch (encryptedMaps.removeEncryptedValue(msg.caller, (map_owner, map_name.inner), map_key.inner)) {
+      case (#err(e)) { #Err(e) };
+      case (#ok(null)) { #Ok(null) };
+      case (#ok(?blob)) { #Ok(?{ inner = blob }) };
+    };
+  };
+
+  public shared (msg) func remove_map_values(
+    map_owner : Principal,
+    map_name : ByteBuf,
+  ) : async Result<[ByteBuf], Text> {
+    switch (encryptedMaps.removeMapValues(msg.caller, (map_owner, map_name.inner))) {
+      case (#err(e)) { #Err(e) };
+      case (#ok(values)) { #Ok(Array.map<Blob, ByteBuf>(values, func(b : Blob) : ByteBuf { { inner = b } })) };
+    };
+  };
 
   // ---------------------------------------------------------------------------
   // Vault display names
