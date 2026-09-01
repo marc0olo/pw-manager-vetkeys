@@ -54,6 +54,7 @@ export interface VaultSummary {
   'item_keys' : Array<ByteBuf>,
   'access_control' : Array<[Principal, AccessRights]>,
   'trashed' : bigint,
+  'my_rights' : [] | [AccessRights],
   'digest' : ByteBuf,
   'map_name' : ByteBuf,
 }

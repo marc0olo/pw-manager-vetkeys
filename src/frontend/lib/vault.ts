@@ -39,11 +39,18 @@ export interface VaultSummary {
   /** False for a vault someone else shared with us. */
   isOwned: boolean;
   /**
-   * Our rights on a shared vault; owners implicitly have full rights.
+   * What we may do here, or null if the canister will not say.
    *
-   * Null for every vault shared *with* us: the canister will not disclose a
-   * vault's membership to a non-manager, and the library flattens that refusal
-   * to an empty list. See issue #9 and dfinity/vetkeys#438.
+   * It used to be null for *every* shared vault: the library will not disclose
+   * a grantee's own rights (dfinity/vetkeys#438), so a read-only collaborator
+   * was shown Delete and Empty vault until one of them was refused. The backend
+   * now answers it directly — telling callers their own rights reveals nothing
+   * about anyone else — so the controls match the permissions from the first
+   * render.
+   *
+   * Still nullable, and the attempt-and-adapt path in `lib/capabilities` still
+   * exists: the canister remains the only authority, and a rights answer that
+   * is stale by a second must not be able to grant anything.
    */
   rights: AccessRights | null;
   /** Who this vault is shared with (owner excluded). Owned vaults only. */
@@ -275,7 +282,7 @@ export class VaultClient {
     const summaries = maps.map((map): VaultSummary => {
       const owner = map.owner;
       const isOwned = owner.compareTo(this.me) === "eq";
-      const rights = map.access_control.find(([who]) => who.compareTo(this.me) === "eq")?.[1] ?? null;
+      const rights = map.my_rights[0] ?? null;
       const name = decoder.decode(Uint8Array.from(map.map_name.inner));
       return {
         owner,

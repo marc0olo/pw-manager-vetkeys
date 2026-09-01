@@ -177,6 +177,43 @@ actor PasswordManager {
     };
   };
 
+  /// The caller's own rights on a vault, or null if they have none.
+  ///
+  /// Surfaced on {@link VaultSummary} rather than as its own endpoint, so the
+  /// client learns it from the listing it already polls.
+  ///
+  /// The library will not answer this: `get_user_rights` requires
+  /// `ReadWriteManage`, and the vault listing flattens the refusal to an empty
+  /// access-control list, so a `Read` or `ReadWrite` grantee cannot discover
+  /// what they are allowed to do (upstream dfinity/vetkeys#438).
+  ///
+  /// The client's workaround was to offer every control and withdraw the ones
+  /// the canister refused — which meant a read-only collaborator was shown
+  /// "Delete" and "Empty vault" until they tried one. Correct, since the
+  /// canister remains the authority, but it asks the user to discover their
+  /// own permissions by bumping into them.
+  ///
+  /// We can answer it because we hold the state the library reads: the ACL is a
+  /// plain field of `KeyManagerState`. Telling callers their *own* rights
+  /// discloses nothing about anyone else, which is the whole of #438's request.
+  func rightsOf(caller : Principal, map_owner : Principal, mapName : Blob) : ?Types.AccessRights {
+    // Ownership is identity-derived rather than an ACL entry, so it is not in
+    // the map to look up.
+    if (Principal.compare(caller, map_owner) == #equal) return ?(#ReadWriteManage);
+
+    switch (encryptedMapsState.keyManager.accessControl.get(caller)) {
+      case (null) { null };
+      case (?entries) {
+        for (((owner, name), rights) in entries.values()) {
+          if (Principal.compare(owner, map_owner) == #equal and Blob.compare(name, mapName) == #equal) {
+            return ?rights;
+          };
+        };
+        null;
+      };
+    };
+  };
+
   // ---------------------------------------------------------------------------
   // Trash
   //
@@ -518,6 +555,10 @@ actor PasswordManager {
     /// Recoverable deletions the caller may see. Lets the UI offer restoring
     /// without a second round trip, and without hinting at entries it may not.
     trashed : Nat;
+    /// What *this caller* may do here. See `rightsOf` — the library will not
+    /// answer this, so a grantee otherwise has to discover their permissions by
+    /// being refused.
+    my_rights : ?Types.AccessRights;
   };
 
   /// Owned vaults that hold nothing but recoverable deletions.
@@ -553,6 +594,7 @@ actor PasswordManager {
               item_keys = [];
               digest = { inner = Digest.ofKeyvals([]) };
               trashed = visibleTrashCount(caller, owner, mapName, at);
+              my_rights = rightsOf(caller, caller, mapName);
             },
           );
         };
@@ -577,6 +619,7 @@ actor PasswordManager {
           item_keys = Array.map<(Blob, Blob), ByteBuf>(sorted, func((key, _)) { { inner = key } });
           digest = { inner = Digest.ofKeyvals(map.keyvals) };
           trashed = visibleTrashCount(msg.caller, map.map_owner, map.map_name, at);
+          my_rights = rightsOf(msg.caller, map.map_owner, map.map_name);
         };
       },
     );

@@ -30,9 +30,13 @@ password — the vault key is derived for your Internet Identity principal.
   - Read/write is **destructive**: the canister guards "delete every item" with
     the same write check, so there is no separate delete right. The share dialog
     says so rather than calling it "can edit items".
-  - Your own rights on a vault shared *with* you are not disclosed by the
-    canister ([dfinity/vetkeys#438]), so the app offers the controls and adapts
-    if a write is refused, rather than guessing read-only from silence.
+  - The library will not tell a grantee their own rights
+    ([dfinity/vetkeys#438]), so this backend does: it reads the access list it
+    already holds and reports what *you* may do, which discloses nothing about
+    anyone else. Controls match permissions from the first render, instead of a
+    read-only collaborator being shown Delete until it was refused. The
+    adapt-on-refusal path remains as a fallback — the canister is still the only
+    authority.
 - **Empty vault** removes every item at once, behind a typed confirmation. The
   vault and its sharing survive.
 - **Trash.** A deleted item — or a whole emptied vault — is recoverable for 90
