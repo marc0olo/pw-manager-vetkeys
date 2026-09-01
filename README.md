@@ -49,44 +49,44 @@ password — the vault key is derived for your Internet Identity principal.
 ## Architecture
 
 ```
-src/backend/main.mo        The whole backend: EncryptedMaps state + the canister mixin
+src/backend/main.mo        The whole backend: the mixin, vault names, poll summaries
 src/frontend/lib/vault.ts  Encrypt/decrypt and access control over EncryptedMaps
 src/frontend/lib/items.ts  The item model and its JSON encoding
 src/frontend/lib/reconcile.ts  What the UI does when the canister changes underneath
+src/frontend/lib/poll.ts     What a poll changes, as one patch
 src/frontend/lib/auth.ts   Internet Identity, and the load-time session gate
 src/frontend/lib/session.ts  Idle timeout, activity mark, cross-tab lock, key purge
 src/frontend/lib/lock.ts     The lock sequence: ordering and failure safety
 src/frontend/lib/capabilities.ts  What we may do on a vault, and learning from a refusal
 src/frontend/lib/backend.ts  This app's own endpoints, over the generated binding
 src/bindings/              Generated from the canister's Candid — `npm run bindings`
-
-Bindings are generated but **committed**, so a clone can typecheck, test and run
-the replica scripts without a Motoko toolchain — without them `tsc` reports 10
-errors and 95 of 171 tests fail to load. The trade is that they can go stale:
-**after changing `src/backend/main.mo`, run `npm run bindings`**, and
-`npm run check-bindings` fails if you forget, and CI runs it on every pull request. Note that additive drift is the
-quiet kind — Candid ignores record fields it does not know, so a new field goes
-unnoticed, while a removed or retyped one fails loudly.
-src/frontend/lib/poll.ts     What a poll changes, as one patch
 src/frontend/components/   Sidebar, item list, detail, editor, share dialog, session status
 src/frontend/lib/__tests__/  Unit tests: session lifetime, load-time gate, lock sequence,
                            locked state, poll reconciliation, capabilities, vault names
 src/frontend/__tests__/    Component tests: the transitions — lock, sign-in, refusal, revocation
 scripts/smoke-test.mjs     End-to-end check against a running local replica
-scripts/check-poll-cost.mjs  Asserts a poll derives no keys and opening one vault derives one
+scripts/check-poll-cost.mjs  Asserts a poll derives no keys and carries no ciphertext
 scripts/check-capabilities.mjs  Verifies the access-level table the share dialog states
 scripts/check-vault-names.mjs  Verifies renaming moves no map and derives no key
 scripts/check-bindings.mjs  Fails if the committed Candid binding is stale
+scripts/check-ii-metadata.mjs  Validates the II app-metadata document
 ```
 
-The backend adds two endpoints of its own — `set_vault_name` and
-`get_vault_names` — beside the mixin. Additive only: every endpoint the
-`@icp-sdk/vetkeys` client calls is still the mixin's, so the stock client keeps
-working and only our two need a hand-written binding.
+`include EncryptedMapsCanister(state)` contributes every endpoint the
+`@icp-sdk/vetkeys` client calls, so that interface matches the client by
+construction. The backend adds three of its own beside it — `set_vault_name`,
+`get_vault_names` and `get_vault_summaries` — which is additive: the stock
+client keeps working, and only these three need a binding of ours.
 
-`include EncryptedMapsCanister(state)` contributes every
-endpoint the `@icp-sdk/vetkeys` client calls, so the Candid interface matches the
-client by construction.
+That binding is **generated** from the canister's Candid, not written by hand.
+It is also **committed**, so a clone can typecheck, test and run the replica
+checks without a Motoko toolchain — without it `tsc` reports 10 errors and 95 of
+171 tests fail to load. The trade is that committed generated code can go stale,
+so **run `npm run bindings` after changing `src/backend/main.mo`**;
+`npm run check-bindings` fails if you forget, and CI runs it on every pull
+request. Additive drift is the quiet kind: Candid ignores record fields it does
+not know, so a new field goes unnoticed, while a removed or retyped one fails
+loudly.
 
 ### What the canister can and cannot see
 
@@ -130,7 +130,7 @@ load refuses and purges. A missing mark counts as expired, so it fails closed.
 #### Why key material is cached at all
 
 Opening a vault costs one `vetkd_derive_key` call — about 0.026 XDR on `key_1`,
-paid by the canister. Two things keep that bounded:
+paid by the canister. Three things keep that bounded:
 
 - **Vaults are opened lazily.** Listing costs **no derivations at all**; a key is
   derived only for the vault you actually open. A user with 1 owned + 25 shared
