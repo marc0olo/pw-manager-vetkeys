@@ -9,10 +9,7 @@ import Text "mo:core/Text";
 import Char "mo:core/Char";
 import List "mo:core/List";
 import Array "mo:core/Array";
-import Nat "mo:core/Nat";
-import Nat8 "mo:core/Nat8";
-import Nat64 "mo:core/Nat64";
-import Sha256 "mo:sha2/Sha256";
+import Digest "lib/Digest";
 
 // The whole vault backend (persistent by default via --default-persistent-actors). Every secret is encrypted in the browser under a
 // vetKey; this canister only ever sees ciphertext and enforces who may read or
@@ -332,40 +329,20 @@ actor PasswordManager {
     digest : ByteBuf;
   };
 
-  /// Length-prefix each blob before hashing it.
-  ///
-  /// Without this, `(key "aab", value "c")` and `(key "aa", value "bc")` hash
-  /// identically — and a caller with write access chooses both, so an edit
-  /// could be made to leave the digest unchanged and stay invisible to everyone
-  /// else's poll. Framing the lengths makes the encoding injective.
-  func writeFramed(digest : Sha256.Digest, blob : Blob) {
-    let size = Nat.toNat64(blob.size());
-    digest.writeArray(
-      Array.tabulate<Nat8>(8, func(i) { Nat.toNat8(Nat64.toNat((size >> Nat.toNat64(8 * (7 - i))) & 0xFF)) })
-    );
-    digest.writeBlob(blob);
-  };
-
   public query (msg) func get_vault_summaries() : async [VaultSummary] {
     Array.map<EncryptedMaps.EncryptedMapData<Types.AccessRights>, VaultSummary>(
       encryptedMaps.getAllAccessibleEncryptedMaps(msg.caller),
       func(map) {
-        // Sorted so the digest does not depend on the store's iteration order.
-        let sorted = Array.sort<(Blob, Blob)>(
-          map.keyvals,
-          func(a, b) { Blob.compare(a.0, b.0) },
-        );
-        let digest = Sha256.new();
-        for ((key, value) in sorted.values()) {
-          writeFramed(digest, key);
-          writeFramed(digest, value);
-        };
+        // Sorted so `item_keys` does not depend on the store's iteration
+        // order. `Digest.ofKeyvals` sorts independently, so it stays a pure
+        // function of the pairs and is testable without a canister.
+        let sorted = Array.sort<(Blob, Blob)>(map.keyvals, func(a, b) { Blob.compare(a.0, b.0) });
         {
           owner = map.map_owner;
           map_name = { inner = map.map_name };
           access_control = map.access_control;
           item_keys = Array.map<(Blob, Blob), ByteBuf>(sorted, func((key, _)) { { inner = key } });
-          digest = { inner = digest.sum() };
+          digest = { inner = Digest.ofKeyvals(map.keyvals) };
         };
       },
     );

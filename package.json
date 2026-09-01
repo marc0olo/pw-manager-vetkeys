@@ -12,6 +12,7 @@
     "smoke-test": "node scripts/smoke-test.mjs",
     "check-ii-metadata": "node scripts/check-ii-metadata.mjs",
     "test": "vitest run",
+    "test:motoko": "mops test",
     "test:watch": "vitest",
     "check-poll-cost": "node scripts/check-poll-cost.mjs",
     "check-capabilities": "node scripts/check-capabilities.mjs",

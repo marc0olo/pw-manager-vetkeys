@@ -53,4 +53,5 @@ jobs:
       - uses: actions/checkout@v4
       - run: npm ci
       - run: mops check
+      - run: npm run test:motoko
       - run: npm run check-bindings
