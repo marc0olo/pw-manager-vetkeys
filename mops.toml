@@ -9,3 +9,4 @@ main = "src/backend/main.mo"
 
 [dependencies]
 ic-vetkeys = "0.6.0"
+sha2 = "0.2.5"

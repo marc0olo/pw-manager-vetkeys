@@ -8,7 +8,7 @@ import {
   type AccessRights,
 } from "@icp-sdk/vetkeys/encrypted_maps";
 import { compareItems, decodeItem, encodeItem, type VaultItem } from "./items";
-import { namesActor } from "./names";
+import { backendActor } from "./backend";
 import { keyCacheName } from "./session";
 
 export type { AccessRights };
@@ -133,15 +133,6 @@ const EMPTY_FINGERPRINT = "";
  * contents changed without holding a key. Keys are sorted first, since the
  * canister does not promise an order.
  */
-async function fingerprintOf(keyvals: [{ inner: Uint8Array }, { inner: Uint8Array }][]): Promise<string> {
-  if (keyvals.length === 0) return EMPTY_FINGERPRINT;
-  const parts = keyvals
-    .map(([key, value]) => `${hex(key.inner)}:${hex(value.inner)}`)
-    .sort();
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(parts.join("|")));
-  return hex(new Uint8Array(digest));
-}
-
 function hex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -205,7 +196,7 @@ export class VaultClient {
     private readonly encryptedMaps: EncryptedMaps,
     readonly me: Principal,
     /** This app's own endpoints, beside the ones the mixin contributes. */
-    private readonly names: ReturnType<typeof namesActor>,
+    private readonly backend: ReturnType<typeof backendActor>,
   ) {}
 
   static async create(identity: Identity): Promise<VaultClient> {
@@ -219,7 +210,7 @@ export class VaultClient {
     const encryptedMaps = new EncryptedMaps(new DefaultEncryptedMapsClient(agent, canisterId), {
       cache: new IndexedDbDerivedKeyMaterialCache(keyCacheName(principal.toText())),
     });
-    return new VaultClient(encryptedMaps, principal, namesActor(agent, canisterId));
+    return new VaultClient(encryptedMaps, principal, backendActor(agent, canisterId));
   }
 
   /**
@@ -240,9 +231,15 @@ export class VaultClient {
   async listVaults(): Promise<VaultSummary[]> {
     // Both are queries and neither derives a key, so they go together rather
     // than adding a round trip to the poll path.
+    //
+    // `get_vault_summaries` is this app's endpoint rather than the mixin's
+    // `get_all_accessible_encrypted_maps`: same listing, but the values are
+    // replaced by one digest per vault. The values are the bulk — 14.6 KiB of
+    // a 14.6 KiB response at 50 items — and the poll never needed them, only a
+    // way to tell whether they had changed. Opening a vault fetches them.
     const [maps, named] = await Promise.all([
-      this.encryptedMaps.canisterClient.get_all_accessible_encrypted_maps(),
-      this.names.get_vault_names(),
+      this.backend.get_vault_summaries(),
+      this.backend.get_vault_names(),
     ]);
     // Keyed with `vaultId` rather than a hand-rolled `owner/name`: it is the
     // canonical form, and a second answer to "how is a vault addressed" is
@@ -254,24 +251,22 @@ export class VaultClient {
       ]),
     );
 
-    const summaries = await Promise.all(
-      maps.map(async (map): Promise<VaultSummary> => {
-        const owner = map.map_owner;
-        const isOwned = owner.compareTo(this.me) === "eq";
-        const rights = map.access_control.find(([who]) => who.compareTo(this.me) === "eq")?.[1] ?? null;
-        const name = decoder.decode(Uint8Array.from(map.map_name.inner));
-        return {
-          owner,
-          name,
-          displayName: displayNames.get(vaultId({ owner, name })) ?? null,
-          isOwned,
-          rights: isOwned ? null : rights,
-          sharedWith: map.access_control.filter(([who]) => who.compareTo(owner) !== "eq"),
-          itemIds: map.keyvals.map(([key]) => decoder.decode(Uint8Array.from(key.inner))),
-          fingerprint: await fingerprintOf(map.keyvals),
-        };
-      }),
-    );
+    const summaries = maps.map((map): VaultSummary => {
+      const owner = map.owner;
+      const isOwned = owner.compareTo(this.me) === "eq";
+      const rights = map.access_control.find(([who]) => who.compareTo(this.me) === "eq")?.[1] ?? null;
+      const name = decoder.decode(Uint8Array.from(map.map_name.inner));
+      return {
+        owner,
+        name,
+        displayName: displayNames.get(vaultId({ owner, name })) ?? null,
+        isOwned,
+        rights: isOwned ? null : rights,
+        sharedWith: map.access_control.filter(([who]) => who.compareTo(owner) !== "eq"),
+        itemIds: map.item_keys.map((key) => decoder.decode(Uint8Array.from(key.inner))),
+        fingerprint: hex(Uint8Array.from(map.digest.inner)),
+      };
+    });
 
     // A ReadWriteManage grantee can get the owner's own map listed twice — once
     // from the ACL and once as owned — because an ACL mutation targeting the
@@ -350,7 +345,7 @@ export class VaultClient {
    * renaming the map.
    */
   async rename(vault: VaultSummary, displayName: string): Promise<void> {
-    const result = await this.names.set_vault_name(
+    const result = await this.backend.set_vault_name(
       { inner: Array.from(nameBytes(vault.name)) },
       displayName,
     );

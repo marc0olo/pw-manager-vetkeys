@@ -14,8 +14,11 @@ password — the vault key is derived for your Internet Identity principal.
 - **Items**: title, username, password, website, notes — create, edit, delete.
 - **Search** across every field except the password.
 - **Live updates.** The vault list is re-read every 15 s, so a newly shared vault,
-  a new item or a revocation appears without a reload — and because listing needs
-  no key, polling costs no derivations. A manual check sits beside the app name.
+  a new item or a revocation appears without a reload. Listing needs no key, so
+  polling costs no derivations — and it carries no ciphertext either: the
+  canister returns one digest per vault instead of its contents, which is ~89 %
+  less on the wire and no hashing in the browser. A manual check sits beside the
+  app name.
 - **Password generator** with length, digits and symbols, plus a strength read-out.
 - **Reveal / copy.** Passwords are masked, auto-hide after 30s, and copying one
   clears the clipboard after 45s (only if it still holds that value).
@@ -54,7 +57,7 @@ src/frontend/lib/auth.ts   Internet Identity, and the load-time session gate
 src/frontend/lib/session.ts  Idle timeout, activity mark, cross-tab lock, key purge
 src/frontend/lib/lock.ts     The lock sequence: ordering and failure safety
 src/frontend/lib/capabilities.ts  What we may do on a vault, and learning from a refusal
-src/frontend/lib/names.ts    Vault display names: this app's own two endpoints
+src/frontend/lib/backend.ts  This app's own endpoints: vault names, and the poll summary
 src/frontend/lib/poll.ts     What a poll changes, as one patch
 src/frontend/components/   Sidebar, item list, detail, editor, share dialog, session status
 src/frontend/lib/__tests__/  Unit tests: session lifetime, load-time gate, lock sequence,
@@ -119,10 +122,15 @@ load refuses and purges. A missing mark counts as expired, so it fails closed.
 Opening a vault costs one `vetkd_derive_key` call — about 0.026 XDR on `key_1`,
 paid by the canister. Two things keep that bounded:
 
-- **Vaults are opened lazily.** The vault list is one query returning ciphertext,
-  so listing costs **no derivations at all**; a key is derived only for the vault
-  you actually open. A user with 1 owned + 25 shared vaults pays 1 derivation
-  instead of 26. `npm run check-poll-cost` asserts this against a live replica.
+- **Vaults are opened lazily.** Listing costs **no derivations at all**; a key is
+  derived only for the vault you actually open. A user with 1 owned + 25 shared
+  vaults pays 1 derivation instead of 26.
+- **The listing carries no ciphertext.** `get_vault_summaries` returns each
+  vault's owner, name, access control and item *keys* — plus one SHA-256 digest
+  standing in for its contents, so the client can still tell whether a vault
+  changed without downloading it. The values are the bulk, and the poll never
+  needed them. Both properties are asserted against a live replica by
+  `npm run check-poll-cost`.
 - **The derived key is cached**, so reopening a vault, and any reload inside the
   session window, costs nothing.
 

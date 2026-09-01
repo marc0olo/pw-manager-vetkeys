@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Principal } from "@icp-sdk/core/principal";
-import { isValidDisplayName, MAX_DISPLAY_NAME_BYTES } from "../names";
+import { isValidDisplayName, MAX_DISPLAY_NAME_BYTES } from "../backend";
 import { OWN_VAULT_NAME, vaultLabel, type VaultSummary } from "../vault";
 
 const summary = (o: Partial<VaultSummary> = {}): VaultSummary => ({
