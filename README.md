@@ -64,7 +64,7 @@ Bindings are generated but **committed**, so a clone can typecheck, test and run
 the replica scripts without a Motoko toolchain — without them `tsc` reports 10
 errors and 95 of 171 tests fail to load. The trade is that they can go stale:
 **after changing `src/backend/main.mo`, run `npm run bindings`**, and
-`npm run check-bindings` fails if you forget. Note that additive drift is the
+`npm run check-bindings` fails if you forget, and CI runs it on every pull request. Note that additive drift is the
 quiet kind — Candid ignores record fields it does not know, so a new field goes
 unnoticed, while a removed or retyped one fails loudly.
 src/frontend/lib/poll.ts     What a poll changes, as one patch
