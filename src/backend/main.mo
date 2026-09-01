@@ -199,9 +199,13 @@ actor PasswordManager {
   ///
   /// Lazy reclamation rather than a timer: `mo:core/Timer` does not persist
   /// timers across upgrades, so one would stop silently after a deploy.
-  /// Correctness never depended on it — expiry is a read-path rule — so the
-  /// only cost of not having one is that an abandoned vault's expired entries
-  /// occupy storage until it is touched again.
+  ///
+  /// Worth stating precisely, because two claims are easy to conflate and only
+  /// one is guaranteed: an entry is **unreachable** after 90 days, always,
+  /// because `visible` and `take` filter by age. It is **purged** only when
+  /// something next deletes from that vault. A vault wiped once and never
+  /// touched again keeps its trashed ciphertext indefinitely — bytes, not
+  /// exposure, but not "deleted after 90 days" either.
   func recycle(deletedBy : Principal, owner : Principal, mapName : Blob, values : [(Blob, Blob)]) {
     let at = now();
     var next = Trash.purge(trash, at);
@@ -242,6 +246,19 @@ actor PasswordManager {
 
   public type TrashedItem = {
     map_key : ByteBuf;
+    /// The ciphertext, so the client can show what an item actually was.
+    ///
+    /// #14 removed values from the *poll* — automatic, every 15 s, every
+    /// accessible vault. This is none of those: user-initiated, one vault, off
+    /// the poll path. That is the same profile as opening a vault, which
+    /// returns every value in it, and trash is a subset of one vault. The rule
+    /// #14 established is that values never ride the poll, not that they never
+    /// cross the wire.
+    ///
+    /// Costs the client nothing extra to read: the value was never
+    /// re-encrypted, so the key material cached from opening the vault
+    /// decrypts it.
+    value : ByteBuf;
     deleted_at : Nat64;
     deleted_by : Principal;
   };
@@ -265,7 +282,12 @@ actor PasswordManager {
         rows,
         func((mapKey, entry)) {
           if (isOwner or Principal.compare(entry.deletedBy, msg.caller) == #equal) {
-            ?{ map_key = { inner = mapKey }; deleted_at = entry.deletedAt; deleted_by = entry.deletedBy };
+            ?{
+              map_key = { inner = mapKey };
+              value = { inner = entry.value };
+              deleted_at = entry.deletedAt;
+              deleted_by = entry.deletedBy;
+            };
           } else { null };
         },
       )

@@ -39,6 +39,7 @@ export type Result_7 = { 'Ok' : ByteBuf } |
 export type Result_8 = { 'Ok' : Array<[ByteBuf, ByteBuf]> } |
   { 'Err' : string };
 export interface TrashedItem {
+  'value' : ByteBuf,
   'map_key' : ByteBuf,
   'deleted_at' : bigint,
   'deleted_by' : Principal,

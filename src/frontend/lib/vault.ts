@@ -57,13 +57,15 @@ export interface VaultSummary {
 }
 
 /**
- * A deleted item, as the canister reports it.
+ * A deleted item, decrypted, with who removed it and when.
  *
- * No title: the canister returns keys and metadata only, so the title — which
- * lives inside the encrypted value — is not available until it is restored.
+ * The canister returns the ciphertext, and the key material cached from opening
+ * the vault decrypts it — a trashed value was never re-encrypted, so the same
+ * key works and no extra derivation is needed. Without this the dialog could
+ * only offer "restore something deleted at 14:22", which is not recovery.
  */
 export interface TrashedItem {
-  id: string;
+  item: VaultItem;
   /** Milliseconds, converted from the canister's nanoseconds. */
   deletedAt: number;
   deletedBy: Principal;
@@ -379,20 +381,31 @@ export class VaultClient {
    * That is why the UI calls this "empty", not "delete".
    */
   /**
-   * What is recoverable in this vault.
+   * What is recoverable in this vault, decrypted.
    *
-   * Keys and metadata only — the canister deliberately does not return the
-   * ciphertext, so a wiped vault's contents never cross the wire twice. That
-   * means a trashed item cannot show its title: the title is inside the value.
+   * One query and no key derivation in practice: the vault is open, so its key
+   * material is already cached, and a trashed value was never re-encrypted.
    */
   async listTrash(vault: VaultSummary): Promise<TrashedItem[]> {
     const result = await this.backend.get_trash(vault.owner, { inner: nameBytes(vault.name) });
     if ("Err" in result) throw new Error(result.Err);
-    return result.Ok.map((row) => ({
-      id: decoder.decode(Uint8Array.from(row.map_key.inner)),
-      deletedAt: Number(row.deleted_at / 1_000_000n),
-      deletedBy: row.deleted_by,
-    }));
+    const name = nameBytes(vault.name);
+    return Promise.all(
+      result.Ok.map(async (row) => {
+        const id = decoder.decode(Uint8Array.from(row.map_key.inner));
+        const plaintext = await this.encryptedMaps.decryptFor(
+          vault.owner,
+          name,
+          Uint8Array.from(row.map_key.inner),
+          Uint8Array.from(row.value.inner),
+        );
+        return {
+          item: decodeItem(id, plaintext),
+          deletedAt: Number(row.deleted_at / 1_000_000n),
+          deletedBy: row.deleted_by,
+        };
+      }),
+    );
   }
 
   async restoreItem(vault: VaultSummary, itemId: string): Promise<void> {

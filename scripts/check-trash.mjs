@@ -69,8 +69,13 @@ check("trash is empty again", (await trashOf(A, me, NAME)).length === 0);
 // ---- the listing must not carry ciphertext ----------------------------------
 await A.maps.removeEncryptedValue(me, N, enc.encode("k2"));
 const rows = await trashOf(A, me, NAME);
-check("the listing carries no values", rows.every((r) => !("value" in r)));
-check("but does say who deleted it and when",
+// The listing carries the ciphertext, so a client can show what an item was.
+// #14's rule is that values never ride the *poll*; this is user-initiated and
+// scoped to one vault, the same profile as opening it.
+check("the listing carries the value", rows[0].value.inner.length > 0);
+check("which still decrypts to the original",
+  dec.decode(await A.maps.decryptFor(me, N, enc.encode("k2"), Uint8Array.from(rows[0].value.inner))) === "secret two");
+check("and says who deleted it and when",
   rows[0].deleted_by.compareTo(me) === "eq" && rows[0].deleted_at > 0n);
 await A.api.restore_trashed_value(me, buf(NAME), buf("k2"));
 

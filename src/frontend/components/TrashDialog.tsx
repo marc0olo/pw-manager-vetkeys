@@ -22,8 +22,8 @@ export function TrashDialog({ vault, items, busy, onRestore, onRestoreAll, onClo
       <div className="modal__panel">
         <h2>Deleted from “{vaultLabel(vault)}”</h2>
         <p className="modal__lede">
-          Deleted items can be restored for 90 days, then they are gone for good. Restoring one
-          returns it exactly as it was — nothing is re-encrypted.
+          Restorable for 90 days, then unreachable for good. Restoring one returns it exactly as
+          it was — nothing is re-encrypted, so it decrypts under the key it always had.
         </p>
 
         {items.length === 0 ? (
@@ -31,17 +31,19 @@ export function TrashDialog({ vault, items, busy, onRestore, onRestoreAll, onClo
         ) : (
           <>
             {/*
-              No titles here on purpose: the canister returns keys and metadata
-              only, never the encrypted values, so a wiped vault's contents do
-              not cross the wire a second time. The title lives inside the value.
+              Real titles, decrypted in the browser. Without them a row reads
+              "deleted at 14:22" and three deletions in one minute are
+              indistinguishable — recovery would mean restoring everything and
+              deleting again.
             */}
             <ul className="shareList">
-              {items.map((item) => (
+              {items.map(({ item, deletedAt, deletedBy }) => (
                 <li key={item.id}>
                   <div>
-                    <div>Deleted {when(item.deletedAt)}</div>
-                    <code title={`Recoverable until ${recoverableUntil(item.deletedAt)}`}>
-                      by {item.deletedBy.toText().slice(0, 12)}…
+                    <div>{item.title || "Untitled"}</div>
+                    <code title={`Recoverable until ${recoverableUntil(deletedAt)}`}>
+                      {item.username ? `${item.username} · ` : ""}deleted {when(deletedAt)} by{" "}
+                      {deletedBy.toText().slice(0, 8)}…
                     </code>
                   </div>
                   <button className="btn btn--ghost btn--sm" onClick={() => onRestore(item.id)} disabled={busy}>

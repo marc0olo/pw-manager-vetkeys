@@ -38,8 +38,11 @@ password — the vault key is derived for your Internet Identity principal.
 - **Trash.** A deleted item — or a whole emptied vault — is recoverable for 90
   days. The map key never changes, so a restored value decrypts under exactly
   the key material it always did: nothing is re-encrypted and no client is
-  involved. Visible to the vault's owner and to whoever deleted it, which stops
-  someone added *later* being shown a secret destroyed before they had access.
+  involved. The dialog shows real titles — the ciphertext comes back with the
+  listing and is decrypted in the browser under the key already cached from
+  opening the vault, so a deleted item is recognisable rather than a timestamp.
+  Visible to the vault's owner and to whoever deleted it, which stops someone
+  added *later* being shown a secret destroyed before they had access.
 - **Rename a vault** you own. A vault *is* `(owner, name)` and its vetKey
   derives from that pair, so the map never moves: the backend stores a display
   name beside it and a rename is one write — nothing re-encrypted, nobody
@@ -311,8 +314,10 @@ voids the whole document — so run `npm run check-ii-metadata` after editing it
   shared with you. Multiple owned vaults would need that fixed upstream, or the
   `EncryptedMapsControlPlaneCanister` variant and app-owned value endpoints.
 - No browser extension, autofill, TOTP, or attachments.
-- Trash has no preview: the listing carries keys and metadata only, never the
-  encrypted values, so a deleted item cannot show its title until it is restored.
+- Trash is not purged on a schedule. An entry is *unreachable* after 90 days,
+  always — the read path filters by age — but the bytes are reclaimed only when
+  something next deletes from that vault, so a vault wiped once and abandoned
+  keeps its trashed ciphertext.
 - Sharing is by principal — you paste the other person's principal (the **My
   principal** button copies yours).
 

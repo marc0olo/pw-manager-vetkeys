@@ -32,6 +32,7 @@ export const idlFactory = ({ IDL }) => {
     'Err' : IDL.Text,
   });
   const TrashedItem = IDL.Record({
+    'value' : ByteBuf,
     'map_key' : ByteBuf,
     'deleted_at' : IDL.Nat64,
     'deleted_by' : IDL.Principal,
