@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { isValidDisplayName, MAX_DISPLAY_NAME_BYTES } from "../lib/names";
+import { isValidDisplayName, MAX_DISPLAY_NAME_BYTES } from "../lib/backend";
 import { vaultLabel, type Vault } from "../lib/vault";
 
 interface Props {

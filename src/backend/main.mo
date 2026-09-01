@@ -8,6 +8,11 @@ import Principal "mo:core/Principal";
 import Text "mo:core/Text";
 import Char "mo:core/Char";
 import List "mo:core/List";
+import Array "mo:core/Array";
+import Nat "mo:core/Nat";
+import Nat8 "mo:core/Nat8";
+import Nat64 "mo:core/Nat64";
+import Sha256 "mo:sha2/Sha256";
 
 // The whole vault backend (persistent by default via --default-persistent-actors). Every secret is encrypted in the browser under a
 // vetKey; this canister only ever sees ciphertext and enforces who may read or
@@ -166,5 +171,77 @@ actor PasswordManager {
     };
 
     List.toArray(found);
+  };
+
+  // ---------------------------------------------------------------------------
+  // Vault summaries for the poll
+  //
+  // The client polls every 15 s to notice a new item, an edit, or a revoked
+  // vault. It used to do that with `get_all_accessible_encrypted_maps`, which
+  // returns every accessible vault's complete ciphertext — measured at 14.6 KiB
+  // for 50 items, re-downloaded and SHA-256'd on the main thread every tick,
+  // purely to answer "did anything change".
+  //
+  // This returns the same listing with the values replaced by one digest per
+  // vault: 1.2 KiB for the same 50 items, and no hashing in the browser. Item
+  // *keys* are kept — they are plaintext, small, and the client needs them to
+  // tell which item was deleted. Values are the bulk and are only ever needed
+  // when a vault is actually opened, which is a separate call.
+  //
+  // The hashing moved rather than went away: this recomputes over every
+  // accessible vault's full ciphertext on each poll, per client. It is well
+  // inside a query's instruction budget, and the obvious fix — cache the digest
+  // and invalidate on write — is *not available* here: writes go through the
+  // mixin's own value endpoints, which this canister neither wraps nor can
+  // hook. Making it incremental means owning those endpoints (the control-plane
+  // variant, #8), or the library maintaining a per-map version itself.
+  // ---------------------------------------------------------------------------
+
+  public type VaultSummary = {
+    owner : Principal;
+    map_name : ByteBuf;
+    access_control : [(Principal, Types.AccessRights)];
+    item_keys : [ByteBuf];
+    /// SHA-256 over the vault's contents. Changes iff the contents change.
+    digest : ByteBuf;
+  };
+
+  /// Length-prefix each blob before hashing it.
+  ///
+  /// Without this, `(key "aab", value "c")` and `(key "aa", value "bc")` hash
+  /// identically — and a caller with write access chooses both, so an edit
+  /// could be made to leave the digest unchanged and stay invisible to everyone
+  /// else's poll. Framing the lengths makes the encoding injective.
+  func writeFramed(digest : Sha256.Digest, blob : Blob) {
+    let size = Nat.toNat64(blob.size());
+    digest.writeArray(
+      Array.tabulate<Nat8>(8, func(i) { Nat.toNat8(Nat64.toNat((size >> Nat.toNat64(8 * (7 - i))) & 0xFF)) })
+    );
+    digest.writeBlob(blob);
+  };
+
+  public query (msg) func get_vault_summaries() : async [VaultSummary] {
+    Array.map<EncryptedMaps.EncryptedMapData<Types.AccessRights>, VaultSummary>(
+      encryptedMaps.getAllAccessibleEncryptedMaps(msg.caller),
+      func(map) {
+        // Sorted so the digest does not depend on the store's iteration order.
+        let sorted = Array.sort<(Blob, Blob)>(
+          map.keyvals,
+          func(a, b) { Blob.compare(a.0, b.0) },
+        );
+        let digest = Sha256.new();
+        for ((key, value) in sorted.values()) {
+          writeFramed(digest, key);
+          writeFramed(digest, value);
+        };
+        {
+          owner = map.map_owner;
+          map_name = { inner = map.map_name };
+          access_control = map.access_control;
+          item_keys = Array.map<(Blob, Blob), ByteBuf>(sorted, func((key, _)) { { inner = key } });
+          digest = { inner = digest.sum() };
+        };
+      },
+    );
   };
 };
