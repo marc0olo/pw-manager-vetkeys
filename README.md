@@ -50,6 +50,8 @@ password — the vault key is derived for your Internet Identity principal.
 
 ```
 src/backend/main.mo        The whole backend: the mixin, vault names, poll summaries
+src/backend/lib/Digest.mo  The vault content digest — pure, and unit-tested
+test/Digest.test.mo        Motoko tests: `mops test`, no replica needed
 src/frontend/lib/vault.ts  Encrypt/decrypt and access control over EncryptedMaps
 src/frontend/lib/items.ts  The item model and its JSON encoding
 src/frontend/lib/reconcile.ts  What the UI does when the canister changes underneath
@@ -175,6 +177,7 @@ icp deploy                    # builds the canister and the frontend, then syncs
 
 ```bash
 npm test                      # unit tests and component transitions (no replica needed)
+npm run test:motoko           # backend unit tests (no replica needed)
 npm run check-bindings        # the committed Candid binding still matches the canister
 npm run check-ii-metadata     # validates the II app-metadata document
 
@@ -185,7 +188,7 @@ npm run check-poll-cost       # a poll derives no keys and carries no ciphertext
 npm run check-vault-names     # renaming moves no map and derives no key
 ```
 
-The first three run in CI on every pull request; the replica ones do not, so
+The first four run in CI on every pull request; the replica ones do not, so
 run them locally before opening one.
 
 > **`IC0406 could not perform remote call`** from any of the replica checks
