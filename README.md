@@ -57,7 +57,8 @@ src/frontend/lib/auth.ts   Internet Identity, and the load-time session gate
 src/frontend/lib/session.ts  Idle timeout, activity mark, cross-tab lock, key purge
 src/frontend/lib/lock.ts     The lock sequence: ordering and failure safety
 src/frontend/lib/capabilities.ts  What we may do on a vault, and learning from a refusal
-src/frontend/lib/backend.ts  This app's own endpoints: vault names, and the poll summary
+src/frontend/lib/backend.ts  This app's own endpoints, over the generated binding
+src/bindings/              Generated from the canister's Candid — `npm run bindings`
 src/frontend/lib/poll.ts     What a poll changes, as one patch
 src/frontend/components/   Sidebar, item list, detail, editor, share dialog, session status
 src/frontend/lib/__tests__/  Unit tests: session lifetime, load-time gate, lock sequence,
@@ -67,6 +68,7 @@ scripts/smoke-test.mjs     End-to-end check against a running local replica
 scripts/check-poll-cost.mjs  Asserts a poll derives no keys and opening one vault derives one
 scripts/check-capabilities.mjs  Verifies the access-level table the share dialog states
 scripts/check-vault-names.mjs  Verifies renaming moves no map and derives no key
+scripts/check-bindings.mjs  Fails if the committed Candid binding is stale
 ```
 
 The backend adds two endpoints of its own — `set_vault_name` and

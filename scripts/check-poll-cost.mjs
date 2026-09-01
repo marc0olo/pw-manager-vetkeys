@@ -13,19 +13,10 @@ import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
 import { Actor } from "@icp-sdk/core/agent";
 import { DefaultEncryptedMapsClient, EncryptedMaps } from "@icp-sdk/vetkeys/encrypted_maps";
 
-/** The app's own poll endpoint, mirroring src/frontend/lib/backend.ts. */
-const idl = ({ IDL }) => {
-  const ByteBuf = IDL.Record({ inner: IDL.Vec(IDL.Nat8) });
-  const AccessRights = IDL.Variant({ Read: IDL.Null, ReadWrite: IDL.Null, ReadWriteManage: IDL.Null });
-  const VaultSummary = IDL.Record({
-    owner: IDL.Principal,
-    map_name: ByteBuf,
-    access_control: IDL.Vec(IDL.Tuple(IDL.Principal, AccessRights)),
-    item_keys: IDL.Vec(ByteBuf),
-    digest: ByteBuf,
-  });
-  return IDL.Service({ get_vault_summaries: IDL.Func([], [IDL.Vec(VaultSummary)], ["query"]) });
-};
+// The binding the app itself ships, generated from the canister's Candid — so
+// this measures the interface the frontend actually polls, not a restatement
+// of it that could drift from it silently.
+import { idlFactory } from "../src/bindings/declarations/backend.did.js";
 
 const status = JSON.parse(execSync("icp network status --json", { encoding: "utf-8" }));
 const backendId = execSync("icp canister status backend --id-only", { encoding: "utf-8" }).trim();
@@ -46,7 +37,7 @@ async function connect(identity) {
   };
   return {
     maps: new EncryptedMaps(client),
-    poll: Actor.createActor(idl, { agent, canisterId: backendId }),
+    poll: Actor.createActor(idlFactory, { agent, canisterId: backendId }),
   };
 }
 

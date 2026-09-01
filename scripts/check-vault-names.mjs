@@ -10,24 +10,17 @@ import { execSync } from "node:child_process";
 import { Actor, HttpAgent } from "@icp-sdk/core/agent";
 import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
 import { DefaultEncryptedMapsClient, EncryptedMaps } from "@icp-sdk/vetkeys/encrypted_maps";
+// The binding the app itself ships, generated from the canister's Candid.
+// Importing it rather than restating it is the point: this script used to
+// declare its own copy, so it verified the canister while exercising a
+// different interface than the frontend.
+import { idlFactory } from "../src/bindings/declarations/backend.did.js";
 
 const status = JSON.parse(execSync("icp network status --json", { encoding: "utf-8" }));
 const backendId = execSync("icp canister status backend --id-only", { encoding: "utf-8" }).trim();
 const rootKey = Uint8Array.from(Buffer.from(status.root_key, "hex"));
 const enc = new TextEncoder();
 
-const idl = ({ IDL }) => {
-  const ByteBuf = IDL.Record({ inner: IDL.Vec(IDL.Nat8) });
-  const VaultName = IDL.Record({
-    owner: IDL.Principal,
-    map_name: ByteBuf,
-    display_name: IDL.Text,
-  });
-  return IDL.Service({
-    set_vault_name: IDL.Func([ByteBuf, IDL.Text], [IDL.Variant({ Ok: IDL.Null, Err: IDL.Text })], []),
-    get_vault_names: IDL.Func([], [IDL.Vec(VaultName)], ["query"]),
-  });
-};
 
 let derivations = 0;
 async function connect(identity) {
@@ -41,7 +34,7 @@ async function connect(identity) {
   return {
     me: identity.getPrincipal(),
     maps: new EncryptedMaps(raw),
-    names: Actor.createActor(idl, { agent, canisterId: backendId }),
+    names: Actor.createActor(idlFactory, { agent, canisterId: backendId }),
   };
 }
 
