@@ -34,7 +34,12 @@ password — the vault key is derived for your Internet Identity principal.
     canister ([dfinity/vetkeys#438]), so the app offers the controls and adapts
     if a write is refused, rather than guessing read-only from silence.
 - **Empty vault** removes every item at once, behind a typed confirmation. The
-  vault and its sharing survive; the items do not.
+  vault and its sharing survive.
+- **Trash.** A deleted item — or a whole emptied vault — is recoverable for 90
+  days. The map key never changes, so a restored value decrypts under exactly
+  the key material it always did: nothing is re-encrypted and no client is
+  involved. Visible to the vault's owner and to whoever deleted it, which stops
+  someone added *later* being shown a secret destroyed before they had access.
 - **Rename a vault** you own. A vault *is* `(owner, name)` and its vetKey
   derives from that pair, so the map never moves: the backend stores a display
   name beside it and a rename is one write — nothing re-encrypted, nobody
@@ -51,7 +56,9 @@ password — the vault key is derived for your Internet Identity principal.
 ```
 src/backend/main.mo        The whole backend: the mixin, vault names, poll summaries
 src/backend/lib/Digest.mo  The vault content digest — pure, and unit-tested
+src/backend/lib/Trash.mo   Retention and visibility — pure, and unit-tested
 test/Digest.test.mo        Motoko tests: `mops test`, no replica needed
+test/Trash.test.mo         Retention, expiry-on-read, per-vault isolation
 src/frontend/lib/vault.ts  Encrypt/decrypt and access control over EncryptedMaps
 src/frontend/lib/items.ts  The item model and its JSON encoding
 src/frontend/lib/reconcile.ts  What the UI does when the canister changes underneath
@@ -186,6 +193,7 @@ npm run smoke-test            # crypto + access control end to end
 npm run check-capabilities    # the access-level table the share dialog states
 npm run check-poll-cost       # a poll derives no keys and carries no ciphertext
 npm run check-vault-names     # renaming moves no map and derives no key
+npm run check-trash           # deletions recover, and disclose nothing new
 ```
 
 The first four run in CI on every pull request; the replica ones do not, so
@@ -302,8 +310,9 @@ voids the whole document — so run `npm run check-ii-metadata` after editing it
   ([dfinity/vetkeys#439]). You get one vault named `Personal`, plus every vault
   shared with you. Multiple owned vaults would need that fixed upstream, or the
   `EncryptedMapsControlPlaneCanister` variant and app-owned value endpoints.
-- No browser extension, autofill, TOTP, attachments, or trash/undo.
-- Deleting an item — or emptying a vault — is immediate and permanent.
+- No browser extension, autofill, TOTP, or attachments.
+- Trash has no preview: the listing carries keys and metadata only, never the
+  encrypted values, so a deleted item cannot show its title until it is restored.
 - Sharing is by principal — you paste the other person's principal (the **My
   principal** button copies yours).
 

@@ -1,5 +1,6 @@
 import type { Denials } from "./capabilities";
 import type { VaultItem } from "./items";
+import type { TrashedItem } from "./vault";
 import type { VaultSummary } from "./vault";
 
 export type Pane = { mode: "view" } | { mode: "edit"; item: VaultItem; isNew: boolean };
@@ -48,6 +49,8 @@ export interface VaultSessionState {
   wiping: boolean;
   /** The rename dialog, which holds a draft name. */
   renaming: boolean;
+  /** The trash dialog. Null when closed; the deleted items when open. */
+  trash: TrashedItem[] | null;
 }
 
 /** The locked state: nothing about any previous session survives it. */
@@ -63,6 +66,7 @@ export const NO_VAULT_SESSION: VaultSessionState = {
   sharing: false,
   wiping: false,
   renaming: false,
+  trash: null,
 };
 
 /**

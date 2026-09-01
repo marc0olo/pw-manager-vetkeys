@@ -52,6 +52,21 @@ export interface VaultSummary {
   itemIds: string[];
   /** Digest of the stored ciphertext, to spot a change without decrypting. */
   fingerprint: string;
+  /** Recoverable deletions this caller may see. See `listTrash`. */
+  trashed: number;
+}
+
+/**
+ * A deleted item, as the canister reports it.
+ *
+ * No title: the canister returns keys and metadata only, so the title — which
+ * lives inside the encrypted value — is not available until it is restored.
+ */
+export interface TrashedItem {
+  id: string;
+  /** Milliseconds, converted from the canister's nanoseconds. */
+  deletedAt: number;
+  deletedBy: Principal;
 }
 
 /** A vault whose items have been decrypted. */
@@ -269,6 +284,7 @@ export class VaultClient {
         sharedWith: map.access_control.filter(([who]) => who.compareTo(owner) !== "eq"),
         itemIds: map.item_keys.map((key) => decoder.decode(Uint8Array.from(key.inner))),
         fingerprint: hex(Uint8Array.from(map.digest.inner)),
+        trashed: Number(map.trashed),
       };
     });
 
@@ -301,6 +317,7 @@ export class VaultClient {
         sharedWith: await this.accessListFor(OWN_VAULT_NAME),
         itemIds: [],
         fingerprint: EMPTY_FINGERPRINT,
+        trashed: 0,
       });
     }
     return vaults;
@@ -361,6 +378,37 @@ export class VaultClient {
    * list survive, so the vault stays listed and shared; only its contents go.
    * That is why the UI calls this "empty", not "delete".
    */
+  /**
+   * What is recoverable in this vault.
+   *
+   * Keys and metadata only — the canister deliberately does not return the
+   * ciphertext, so a wiped vault's contents never cross the wire twice. That
+   * means a trashed item cannot show its title: the title is inside the value.
+   */
+  async listTrash(vault: VaultSummary): Promise<TrashedItem[]> {
+    const result = await this.backend.get_trash(vault.owner, { inner: nameBytes(vault.name) });
+    if ("Err" in result) throw new Error(result.Err);
+    return result.Ok.map((row) => ({
+      id: decoder.decode(Uint8Array.from(row.map_key.inner)),
+      deletedAt: Number(row.deleted_at / 1_000_000n),
+      deletedBy: row.deleted_by,
+    }));
+  }
+
+  async restoreItem(vault: VaultSummary, itemId: string): Promise<void> {
+    const result = await this.backend.restore_trashed_value(vault.owner, { inner: nameBytes(vault.name) }, {
+      inner: encoder.encode(itemId),
+    });
+    if ("Err" in result) throw new Error(result.Err);
+  }
+
+  /** Undo a whole wipe without one call per item. */
+  async restoreAll(vault: VaultSummary): Promise<number> {
+    const result = await this.backend.restore_trashed_values(vault.owner, { inner: nameBytes(vault.name) });
+    if ("Err" in result) throw new Error(result.Err);
+    return Number(result.Ok);
+  }
+
   async wipe(vault: VaultSummary): Promise<void> {
     await this.encryptedMaps.removeMapValues(vault.owner, nameBytes(vault.name));
   }

@@ -17,6 +17,7 @@
     "check-poll-cost": "node scripts/check-poll-cost.mjs",
     "check-capabilities": "node scripts/check-capabilities.mjs",
     "check-vault-names": "node scripts/check-vault-names.mjs",
+    "check-trash": "node scripts/check-trash.mjs",
     "bindings": "icp build backend && icp-bindgen --did-file .mops/.build/backend.did --out-dir src/bindings --actor-disabled --force",
     "check-bindings": "node scripts/check-bindings.mjs"
   },

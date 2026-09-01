@@ -35,6 +35,7 @@ import { ItemList } from "./components/ItemList";
 import { LockScreen } from "./components/LockScreen";
 import { EmptyVaultDialog } from "./components/EmptyVaultDialog";
 import { RenameVaultDialog } from "./components/RenameVaultDialog";
+import { TrashButton, TrashDialog } from "./components/TrashDialog";
 import { ShareDialog } from "./components/ShareDialog";
 import { Sidebar } from "./components/Sidebar";
 import { CheckIcon, PencilIcon, ShareIcon, TrashIcon } from "./components/Icons";
@@ -51,7 +52,7 @@ export function App() {
   const [client, setClient] = useState<VaultClient | null>(null);
   // One object, cleared as a unit on lock — see lib/vault-session for why.
   const [vaultSession, setVaultSession] = useState<VaultSessionState>(NO_VAULT_SESSION);
-  const { vaults, openItems, selectedVaultId, selectedItemId, syncedAt, pane, query, sharing, wiping, renaming, denials } =
+  const { vaults, openItems, selectedVaultId, selectedItemId, syncedAt, pane, query, sharing, wiping, renaming, trash, denials } =
     vaultSession;
   // Updated synchronously by `patch` below. The poll reads state across an
   // await, and React state is not visible until the next commit — reading the
@@ -493,6 +494,16 @@ export function App() {
                 Rename
               </button>
             )}
+            {writable && (
+              <TrashButton
+                count={vault.trashed}
+                onOpen={() =>
+                  void run(async () => {
+                    patch({ trash: await client!.listTrash(vault) });
+                  })
+                }
+              />
+            )}
             {writable && vault.itemIds.length > 0 && (
               <button
                 className="btn btn--danger btn--sm"
@@ -559,6 +570,36 @@ export function App() {
           </div>
         )}
       </main>
+
+      {trash !== null && (
+        <TrashDialog
+          vault={vault}
+          items={trash}
+          busy={busy}
+          onClose={() => patch({ trash: null })}
+          onRestore={(itemId) =>
+            void run(
+              async () => {
+                await client!.restoreItem(vault, itemId);
+                patch({ trash: await client!.listTrash(vault), openItems: null });
+              },
+              "Item restored",
+              { vault: vaultId(vault), capability: "write" },
+            )
+          }
+          onRestoreAll={() =>
+            void run(
+              async () => {
+                const n = await client!.restoreAll(vault);
+                patch({ trash: null, openItems: null });
+                notify(`${n} item${n === 1 ? "" : "s"} restored`);
+              },
+              undefined,
+              { vault: vaultId(vault), capability: "write" },
+            )
+          }
+        />
+      )}
 
       {renaming && (
         <RenameVaultDialog

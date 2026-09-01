@@ -21,14 +21,23 @@ export const idlFactory = ({ IDL }) => {
     'map_name' : ByteBuf,
     'map_owner' : IDL.Principal,
   });
-  const Result_3 = IDL.Variant({ 'Ok' : IDL.Opt(ByteBuf), 'Err' : IDL.Text });
-  const Result_6 = IDL.Variant({
+  const Result_4 = IDL.Variant({ 'Ok' : IDL.Opt(ByteBuf), 'Err' : IDL.Text });
+  const Result_8 = IDL.Variant({
     'Ok' : IDL.Vec(IDL.Tuple(ByteBuf, ByteBuf)),
     'Err' : IDL.Text,
   });
-  const Result_5 = IDL.Variant({ 'Ok' : ByteBuf, 'Err' : IDL.Text });
-  const Result_4 = IDL.Variant({
+  const Result_7 = IDL.Variant({ 'Ok' : ByteBuf, 'Err' : IDL.Text });
+  const Result_6 = IDL.Variant({
     'Ok' : IDL.Vec(IDL.Tuple(IDL.Principal, AccessRights)),
+    'Err' : IDL.Text,
+  });
+  const TrashedItem = IDL.Record({
+    'map_key' : ByteBuf,
+    'deleted_at' : IDL.Nat64,
+    'deleted_by' : IDL.Principal,
+  });
+  const Result_5 = IDL.Variant({
+    'Ok' : IDL.Vec(TrashedItem),
     'Err' : IDL.Text,
   });
   const Result_1 = IDL.Variant({
@@ -44,11 +53,13 @@ export const idlFactory = ({ IDL }) => {
     'owner' : IDL.Principal,
     'item_keys' : IDL.Vec(ByteBuf),
     'access_control' : IDL.Vec(IDL.Tuple(IDL.Principal, AccessRights)),
+    'trashed' : IDL.Nat,
     'digest' : ByteBuf,
     'map_name' : ByteBuf,
   });
-  const Result_2 = IDL.Variant({ 'Ok' : IDL.Vec(ByteBuf), 'Err' : IDL.Text });
+  const Result_3 = IDL.Variant({ 'Ok' : IDL.Vec(ByteBuf), 'Err' : IDL.Text });
   const Result = IDL.Variant({ 'Ok' : IDL.Null, 'Err' : IDL.Text });
+  const Result_2 = IDL.Variant({ 'Ok' : IDL.Nat, 'Err' : IDL.Text });
   
   return IDL.Service({
     'get_accessible_shared_map_names' : IDL.Func(
@@ -75,17 +86,17 @@ export const idlFactory = ({ IDL }) => {
       ),
     'get_encrypted_value' : IDL.Func(
         [IDL.Principal, ByteBuf, ByteBuf],
-        [Result_3],
+        [Result_4],
         ['query'],
       ),
     'get_encrypted_values_for_map' : IDL.Func(
         [IDL.Principal, ByteBuf],
-        [Result_6],
+        [Result_8],
         ['query'],
       ),
     'get_encrypted_vetkey' : IDL.Func(
         [IDL.Principal, ByteBuf, ByteBuf],
-        [Result_5],
+        [Result_7],
         [],
       ),
     'get_owned_non_empty_map_names' : IDL.Func(
@@ -95,9 +106,10 @@ export const idlFactory = ({ IDL }) => {
       ),
     'get_shared_user_access_for_map' : IDL.Func(
         [IDL.Principal, ByteBuf],
-        [Result_4],
+        [Result_6],
         ['query'],
       ),
+    'get_trash' : IDL.Func([IDL.Principal, ByteBuf], [Result_5], ['query']),
     'get_user_rights' : IDL.Func(
         [IDL.Principal, ByteBuf, IDL.Principal],
         [Result_1],
@@ -108,18 +120,28 @@ export const idlFactory = ({ IDL }) => {
     'get_vetkey_verification_key' : IDL.Func([], [ByteBuf], []),
     'insert_encrypted_value' : IDL.Func(
         [IDL.Principal, ByteBuf, ByteBuf, ByteBuf],
-        [Result_3],
+        [Result_4],
         [],
       ),
     'remove_encrypted_value' : IDL.Func(
         [IDL.Principal, ByteBuf, ByteBuf],
-        [Result_3],
+        [Result_4],
         [],
       ),
-    'remove_map_values' : IDL.Func([IDL.Principal, ByteBuf], [Result_2], []),
+    'remove_map_values' : IDL.Func([IDL.Principal, ByteBuf], [Result_3], []),
     'remove_user' : IDL.Func(
         [IDL.Principal, ByteBuf, IDL.Principal],
         [Result_1],
+        [],
+      ),
+    'restore_trashed_value' : IDL.Func(
+        [IDL.Principal, ByteBuf, ByteBuf],
+        [Result],
+        [],
+      ),
+    'restore_trashed_values' : IDL.Func(
+        [IDL.Principal, ByteBuf],
+        [Result_2],
         [],
       ),
     'set_user_rights' : IDL.Func(

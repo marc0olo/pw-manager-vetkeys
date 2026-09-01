@@ -10,6 +10,9 @@ import Char "mo:core/Char";
 import List "mo:core/List";
 import Array "mo:core/Array";
 import Digest "lib/Digest";
+import Trash "lib/Trash";
+import Time "mo:core/Time";
+import Nat64 "mo:core/Nat64";
 
 // The whole vault backend (persistent by default via --default-persistent-actors). Every secret is encrypted in the browser under a
 // vetKey; this canister only ever sees ciphertext and enforces who may read or
@@ -141,10 +144,16 @@ actor PasswordManager {
     map_name : ByteBuf,
     map_key : ByteBuf,
   ) : async Result<?ByteBuf, Text> {
+    // The library call first: it performs the access check, and hands back the
+    // value it removed. Only then is our store touched, so a caller without
+    // rights leaves no trace.
     switch (encryptedMaps.removeEncryptedValue(msg.caller, (map_owner, map_name.inner), map_key.inner)) {
       case (#err(e)) { #Err(e) };
       case (#ok(null)) { #Ok(null) };
-      case (#ok(?blob)) { #Ok(?{ inner = blob }) };
+      case (#ok(?blob)) {
+        recycle(msg.caller, map_owner, map_name.inner, [(map_key.inner, blob)]);
+        #Ok(?{ inner = blob });
+      };
     };
   };
 
@@ -152,10 +161,158 @@ actor PasswordManager {
     map_owner : Principal,
     map_name : ByteBuf,
   ) : async Result<[ByteBuf], Text> {
+    // `removeMapValues` returns only the *keys* it removed, so the values have
+    // to be read before the call — after it they are gone, and a wipe would
+    // trash nothing.
+    let before = switch (encryptedMaps.getEncryptedValuesForMap(msg.caller, (map_owner, map_name.inner))) {
+      case (#err(_)) { [] };
+      case (#ok(pairs)) { pairs };
+    };
     switch (encryptedMaps.removeMapValues(msg.caller, (map_owner, map_name.inner))) {
       case (#err(e)) { #Err(e) };
-      case (#ok(values)) { #Ok(Array.map<Blob, ByteBuf>(values, func(b : Blob) : ByteBuf { { inner = b } })) };
+      case (#ok(keys)) {
+        recycle(msg.caller, map_owner, map_name.inner, before);
+        #Ok(Array.map<Blob, ByteBuf>(keys, func(b : Blob) : ByteBuf { { inner = b } }));
+      };
     };
+  };
+
+  // ---------------------------------------------------------------------------
+  // Trash
+  //
+  // A deleted item moves here rather than vanishing, and can be restored for 90
+  // days. The move keeps the map key **unchanged**, which is what makes it
+  // cheap: the map key is the domain separator the item's AES key derives from,
+  // so a restored value decrypts under exactly the key material it always did.
+  // Nothing is re-encrypted and no client is involved.
+  //
+  // Expiry is enforced on read (see lib/Trash), so an expired entry is
+  // unreachable whether or not anything has purged it.
+  // ---------------------------------------------------------------------------
+
+  var trash : Trash.Store = Trash.empty();
+
+  func now() : Nat64 = Nat64.fromIntWrap(Time.now());
+
+  /// Move values into the trash, and reclaim anything of this vault's that has
+  /// expired while we are here.
+  ///
+  /// Lazy reclamation rather than a timer: `mo:core/Timer` does not persist
+  /// timers across upgrades, so one would stop silently after a deploy.
+  /// Correctness never depended on it — expiry is a read-path rule — so the
+  /// only cost of not having one is that an abandoned vault's expired entries
+  /// occupy storage until it is touched again.
+  func recycle(deletedBy : Principal, owner : Principal, mapName : Blob, values : [(Blob, Blob)]) {
+    let at = now();
+    var next = Trash.purge(trash, at);
+    for ((mapKey, value) in values.values()) {
+      next := Trash.put(next, (owner, mapName, mapKey), { value; deletedAt = at; deletedBy });
+    };
+    trash := next;
+  };
+
+  /// Whether the caller can see this vault at all, before asking whether they
+  /// may see a particular trash entry.
+  ///
+  /// Deliberately re-checked rather than inferred from having deleted something:
+  /// a collaborator who deleted an item and was later revoked should not keep a
+  /// window onto the vault through its trash.
+  func canRead(who : Principal, owner : Principal, mapName : Blob) : Bool {
+    if (Principal.compare(who, owner) == #equal) return true;
+    for ((sharedOwner, sharedName) in encryptedMaps.getAccessibleSharedMapNames(who).values()) {
+      if (Principal.compare(sharedOwner, owner) == #equal and Blob.compare(sharedName, mapName) == #equal) {
+        return true;
+      };
+    };
+    false;
+  };
+
+  /// How many trashed items in this vault the caller may see. The same
+  /// owner-or-deleter rule as `get_trash`, so the count never hints at the
+  /// existence of an entry the caller is not allowed to know about.
+  func visibleTrashCount(who : Principal, owner : Principal, mapName : Blob, at : Nat64) : Nat {
+    if (not canRead(who, owner, mapName)) return 0;
+    let isOwner = Principal.compare(who, owner) == #equal;
+    var count = 0;
+    for ((_, entry) in Trash.visible(trash, owner, mapName, at).values()) {
+      if (isOwner or Principal.compare(entry.deletedBy, who) == #equal) { count += 1 };
+    };
+    count;
+  };
+
+  public type TrashedItem = {
+    map_key : ByteBuf;
+    deleted_at : Nat64;
+    deleted_by : Principal;
+  };
+
+  /// What is recoverable in one vault: keys and metadata, **never values**.
+  ///
+  /// Returning the ciphertext would put a whole wiped vault back on the wire,
+  /// which is the shape #14 removed from the poll — and a 500-item wipe sits
+  /// behind the same response limit. A value is fetched only by restoring it.
+  ///
+  /// Visible to the vault's owner, and to whoever deleted the entry. Not to
+  /// every reader: a collaborator added *after* a deletion would otherwise be
+  /// shown a secret that was destroyed before they had any access to it, which
+  /// permanent deletion never allowed.
+  public query (msg) func get_trash(map_owner : Principal, map_name : ByteBuf) : async Result<[TrashedItem], Text> {
+    if (not canRead(msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
+    let isOwner = Principal.compare(msg.caller, map_owner) == #equal;
+    let rows = Trash.visible(trash, map_owner, map_name.inner, now());
+    #Ok(
+      Array.filterMap<(Blob, Trash.Entry), TrashedItem>(
+        rows,
+        func((mapKey, entry)) {
+          if (isOwner or Principal.compare(entry.deletedBy, msg.caller) == #equal) {
+            ?{ map_key = { inner = mapKey }; deleted_at = entry.deletedAt; deleted_by = entry.deletedBy };
+          } else { null };
+        },
+      )
+    );
+  };
+
+  /// Put one item back. Authorization is the library's: this is an insert, so a
+  /// caller without write rights is refused there and the entry stays put.
+  public shared (msg) func restore_trashed_value(
+    map_owner : Principal,
+    map_name : ByteBuf,
+    map_key : ByteBuf,
+  ) : async Result<(), Text> {
+    let id = (map_owner, map_name.inner, map_key.inner);
+    switch (trash.get(Trash.compareKeys, id)) {
+      case (null) { #Err("not in trash") };
+      case (?entry) {
+        if (Trash.isExpired(entry, now())) return #Err("not in trash");
+        switch (encryptedMaps.insertEncryptedValue(msg.caller, (map_owner, map_name.inner), map_key.inner, entry.value)) {
+          case (#err(e)) { #Err(e) };
+          case (#ok(_)) {
+            let (next, _) = Trash.take(trash, id, now());
+            trash := next;
+            #Ok();
+          };
+        };
+      };
+    };
+  };
+
+  /// Put a whole vault back, for undoing a wipe without one call per item.
+  public shared (msg) func restore_trashed_values(map_owner : Principal, map_name : ByteBuf) : async Result<Nat, Text> {
+    let at = now();
+    var restored = 0;
+    var next = trash;
+    for ((mapKey, entry) in Trash.visible(trash, map_owner, map_name.inner, at).values()) {
+      switch (encryptedMaps.insertEncryptedValue(msg.caller, (map_owner, map_name.inner), mapKey, entry.value)) {
+        case (#err(e)) { return #Err(e) };
+        case (#ok(_)) {
+          let (after, _) = Trash.take(next, (map_owner, map_name.inner, mapKey), at);
+          next := after;
+          restored += 1;
+        };
+      };
+    };
+    trash := next;
+    #Ok(restored);
   };
 
   // ---------------------------------------------------------------------------
@@ -327,9 +484,13 @@ actor PasswordManager {
     item_keys : [ByteBuf];
     /// SHA-256 over the vault's contents. Changes iff the contents change.
     digest : ByteBuf;
+    /// Recoverable deletions the caller may see. Lets the UI offer restoring
+    /// without a second round trip, and without hinting at entries it may not.
+    trashed : Nat;
   };
 
   public query (msg) func get_vault_summaries() : async [VaultSummary] {
+    let at = now();
     Array.map<EncryptedMaps.EncryptedMapData<Types.AccessRights>, VaultSummary>(
       encryptedMaps.getAllAccessibleEncryptedMaps(msg.caller),
       func(map) {
@@ -343,6 +504,7 @@ actor PasswordManager {
           access_control = map.access_control;
           item_keys = Array.map<(Blob, Blob), ByteBuf>(sorted, func((key, _)) { { inner = key } });
           digest = { inner = Digest.ofKeyvals(map.keyvals) };
+          trashed = visibleTrashCount(msg.caller, map.map_owner, map.map_name, at);
         };
       },
     );
