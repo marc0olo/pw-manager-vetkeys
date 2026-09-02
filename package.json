@@ -17,7 +17,7 @@
     "check-poll-cost": "node scripts/check-poll-cost.mjs",
     "check-capabilities": "node scripts/check-capabilities.mjs",
     "check-vault-names": "node scripts/check-vault-names.mjs",
-    "bindings": "icp build backend && icp-bindgen --did-file .mops/.build/backend.did --out-dir src/bindings --actor-disabled --force",
+    "bindings": "icp build backend && icp-bindgen --did-file .mops/.build/backend.did --out-dir src/bindings --actor-disabled --force && cp .mops/.build/backend.most src/bindings/backend.most",
     "check-bindings": "node scripts/check-bindings.mjs",
     "check-history": "node scripts/check-history.mjs"
   },

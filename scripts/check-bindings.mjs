@@ -11,6 +11,15 @@
  * plausible rather than throwing, so a stale binding surfaces as wrong data,
  * not an error — which is exactly the failure mode this whole change exists to
  * remove.
+ *
+ * The **stable signature** is committed for a different reason. Nothing reads
+ * it at runtime; it is here so that changing the type of a stable variable
+ * appears in a pull request diff. Twice now a Candid failure has been read as a
+ * state incompatibility and a wrong deploy instruction written from it — once
+ * claiming a reinstall was needed when it was not, once the reverse. A diff
+ * showing exactly which stable types moved is what a reviewer can act on;
+ * remembering to run `moc --stable-compatible` is not. See #42 for the check
+ * that answers "is this safe", which needs this file as its baseline.
  */
 import { execSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -18,7 +27,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const COMMITTED = "src/bindings";
+// Only the generated declarations are compared against a fresh bindgen run; the
+// stable signature lives beside them but comes from the build, not bindgen.
+const DECLARATIONS = "declarations";
 const DID = ".mops/.build/backend.did";
+const MOST = ".mops/.build/backend.most";
+const COMMITTED_MOST = "src/bindings/backend.most";
 
 console.log("Rebuilding the canister so the .did reflects src/backend…");
 execSync("icp build backend", { stdio: "pipe" });
@@ -35,9 +49,14 @@ try {
       .map((entry) => join(entry.parentPath.slice(root.length + 1), entry.name))
       .sort();
 
-  const committed = list(COMMITTED);
+  const committed = list(join(COMMITTED, DECLARATIONS)).map((file) => join(DECLARATIONS, file));
   const generated = list(fresh);
   const drifted = [];
+
+  // Written by `icp build`, not by bindgen, so it is compared on its own.
+  if (readFileSync(MOST, "utf-8") !== readFileSync(COMMITTED_MOST, "utf-8")) {
+    drifted.push(`${COMMITTED_MOST} (the stable signature moved — say in the PR whether an upgrade still carries the data)`);
+  }
 
   if (committed.join() !== generated.join()) {
     drifted.push(`file list differs: ${committed.join(", ")} vs ${generated.join(", ")}`);
@@ -50,8 +69,8 @@ try {
   }
 
   if (drifted.length === 0) {
-    console.log(`PASS  ${COMMITTED} matches the canister (${committed.length} files)`);
-    console.log("\nThe committed binding is current.");
+    console.log(`PASS  ${COMMITTED} matches the canister (${committed.length + 1} files)`);
+    console.log("\nThe committed binding and stable signature are current.");
   } else {
     console.log(`FAIL  ${COMMITTED} is stale: ${drifted.join(", ")}`);
     console.log("\nRun `npm run bindings` and commit the result.");
