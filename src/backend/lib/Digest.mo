@@ -42,4 +42,32 @@ module {
     };
     digest.sum();
   };
+
+  /// SHA-256 over a trash listing: which secrets are in it, and which version
+  /// of each.
+  ///
+  /// The sequence number is enough to stand for the value. Events are
+  /// append-only, so a given `seq` always names the same ciphertext — and the
+  /// rows that could have their value cleared belong to live secrets, which are
+  /// never in the trash. Hashing the seq rather than the ciphertext keeps this
+  /// cheap on the poll path.
+  ///
+  /// Framed and sorted for the same reasons as {@link ofKeyvals}.
+  public func ofTrash(rows : [(Blob, Nat64)]) : Blob {
+    let sorted = Array.sort<(Blob, Nat64)>(
+      rows,
+      func(a, b) {
+        let byKey = Blob.compare(a.0, b.0);
+        if (byKey != #equal) byKey else Nat64.compare(a.1, b.1);
+      },
+    );
+    let digest = Sha256.new();
+    for ((mapKey, seq) in sorted.values()) {
+      writeFramed(digest, mapKey);
+      digest.writeArray(
+        Array.tabulate<Nat8>(8, func(i) { Nat.toNat8(Nat64.toNat((seq >> Nat.toNat64(8 * (7 - i))) & 0xFF)) })
+      );
+    };
+    digest.sum();
+  };
 };

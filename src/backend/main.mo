@@ -10,7 +10,7 @@ import Char "mo:core/Char";
 import List "mo:core/List";
 import Array "mo:core/Array";
 import Digest "lib/Digest";
-import Trash "lib/Trash";
+import History "lib/History";
 import Time "mo:core/Time";
 import Nat64 "mo:core/Nat64";
 
@@ -134,8 +134,22 @@ actor PasswordManager {
   ) : async Result<?ByteBuf, Text> {
     switch (encryptedMaps.insertEncryptedValue(msg.caller, (map_owner, map_name.inner), map_key.inner, value.inner)) {
       case (#err(e)) { #Err(e) };
+      // Nothing was superseded, so there is no version to keep. A first write
+      // is not an event in the history — the value it created is the live one.
       case (#ok(null)) { #Ok(null) };
-      case (#ok(?blob)) { #Ok(?{ inner = blob }) };
+      case (#ok(?blob)) {
+        // The value this write replaced. Recording it here is the whole of
+        // version history: without it an edit destroys the previous secret,
+        // which trash never covered because trash only sees deletions.
+        record(
+          msg.caller,
+          map_owner,
+          map_name.inner,
+          [(map_key.inner, ?blob, #Edited)],
+          liveness(msg.caller, map_owner, map_name.inner),
+        );
+        #Ok(?{ inner = blob });
+      };
     };
   };
 
@@ -151,7 +165,13 @@ actor PasswordManager {
       case (#err(e)) { #Err(e) };
       case (#ok(null)) { #Ok(null) };
       case (#ok(?blob)) {
-        recycle(msg.caller, map_owner, map_name.inner, [(map_key.inner, blob)]);
+        record(
+          msg.caller,
+          map_owner,
+          map_name.inner,
+          [(map_key.inner, ?blob, #Deleted)],
+          liveness(msg.caller, map_owner, map_name.inner),
+        );
         #Ok(?{ inner = blob });
       };
     };
@@ -171,7 +191,18 @@ actor PasswordManager {
     switch (encryptedMaps.removeMapValues(msg.caller, (map_owner, map_name.inner))) {
       case (#err(e)) { #Err(e) };
       case (#ok(keys)) {
-        recycle(msg.caller, map_owner, map_name.inner, before);
+        record(
+          msg.caller,
+          map_owner,
+          map_name.inner,
+          Array.map<(Blob, Blob), (Blob, ?Blob, History.Kind)>(
+            before,
+            func((mapKey, value)) { (mapKey, ?value, #Deleted) },
+          ),
+          // The map is empty now, so nothing is live. Reading it back through
+          // the library would say the same, at the cost of a second pass.
+          func(_ : Blob) : Bool { false },
+        );
         #Ok(Array.map<Blob, ByteBuf>(keys, func(b : Blob) : ByteBuf { { inner = b } }));
       };
     };
@@ -227,40 +258,59 @@ actor PasswordManager {
   // unreachable whether or not anything has purged it.
   // ---------------------------------------------------------------------------
 
-  var trash : Trash.Store = Trash.empty();
+  var history : History.Store = History.empty();
+
+  /// Orders events. Canister-wide rather than per secret, so the audit log can
+  /// be read across vaults in the order things actually happened.
+  var nextSeq : Nat64 = 0;
 
   func now() : Nat64 = Nat64.fromIntWrap(Time.now());
 
-  /// Move values into the trash, and reclaim anything of this vault's that has
-  /// expired while we are here.
+  /// Which map keys currently hold a value, as a predicate.
   ///
-  /// Lazy reclamation rather than a timer: `mo:core/Timer` does not persist
-  /// timers across upgrades, so one would stop silently after a deploy.
-  ///
-  /// Worth stating precisely, because two claims are easy to conflate and only
-  /// one is guaranteed:
-  ///
-  /// - **Unreachable** after 90 days, always and per entry, because `visible`
-  ///   and `take` filter by age. Nothing has to have run.
-  /// - **Purged** — the bytes actually dropped — when any deletion next happens
-  ///   in *any* vault. `Trash.purge` sweeps the whole store, not just the vault
-  ///   being touched, so one active user reclaims everyone's expired entries.
-  ///
-  /// So the residual case is narrow: if nobody ever deletes anything again,
-  /// expired ciphertext stays on disk. Unreachable, but stored — which is not
-  /// the same as "deleted after 90 days", and this is the only place that
-  /// distinction is written down.
-  ///
-  /// The sweep is O(all trash entries) per deletion. At this scale that is
-  /// nothing, and it is what makes reclamation self-healing rather than
-  /// dependent on which vault happens to be active.
-  func recycle(deletedBy : Principal, owner : Principal, mapName : Blob, values : [(Blob, Blob)]) {
-    let at = now();
-    var next = Trash.purge(trash, at);
-    for ((mapKey, value) in values.values()) {
-      next := Trash.put(next, (owner, mapName, mapKey), { value; deletedAt = at; deletedBy });
+  /// Liveness is the mixin's state and the library's key comparator is private,
+  /// so this goes through the public read API. Every caller here has already
+  /// passed an access check; a refusal yields "nothing is live", which only ever
+  /// makes the trash view larger, never a disclosure.
+  func liveness(caller : Principal, owner : Principal, mapName : Blob) : Blob -> Bool {
+    let live = switch (encryptedMaps.getEncryptedValuesForMap(caller, (owner, mapName))) {
+      case (#err(_)) { [] };
+      case (#ok(pairs)) { Array.map<(Blob, Blob), Blob>(pairs, func((key, _)) { key }) };
     };
-    trash := next;
+    func(mapKey : Blob) : Bool {
+      for (k in live.values()) { if (Blob.compare(k, mapKey) == #equal) return true };
+      false;
+    };
+  };
+
+  /// The same predicate from a list of keys already in hand, for the poll path
+  /// where the listing has just produced them.
+  func livenessOf(keys : [Blob]) : Blob -> Bool {
+    func(mapKey : Blob) : Bool {
+      for (k in keys.values()) { if (Blob.compare(k, mapKey) == #equal) return true };
+      false;
+    };
+  };
+
+  /// Append events, then reclaim this vault's expired groups.
+  ///
+  /// Reclamation is a side errand, not the guarantee: the read paths filter by
+  /// age, so an expired group is unreachable whether or not this has run. What
+  /// it costs to skip is bytes on disk for a vault nobody writes to.
+  func record(
+    by : Principal,
+    owner : Principal,
+    mapName : Blob,
+    events : [(Blob, ?Blob, History.Kind)],
+    isLive : Blob -> Bool,
+  ) {
+    let at = now();
+    var next = history;
+    for ((mapKey, value, kind) in events.values()) {
+      next := History.append(next, (owner, mapName, mapKey, nextSeq), { value; at; by; kind });
+      nextSeq += 1;
+    };
+    history := History.purge(next, owner, mapName, isLive, at);
   };
 
   /// Whether the caller may read this vault, which is the whole of the trash
@@ -280,15 +330,13 @@ actor PasswordManager {
     false;
   };
 
-  /// How many trashed items in this vault the caller may see — the same rule as
-  /// `get_trash`, so the count on the poll never disagrees with the listing the
-  /// dialog shows.
-  func visibleTrashCount(who : Principal, owner : Principal, mapName : Blob, at : Nat64) : Nat {
-    if (not canRead(who, owner, mapName)) return 0;
-    Trash.visible(trash, owner, mapName, at).size();
-  };
-
   public type TrashedItem = {
+    /// Which event this row is, and what `restore_trashed_value` takes.
+    ///
+    /// The map key is not an identity here: a secret can be deleted, restored
+    /// and deleted again, so several events share it. Addressing a restore by
+    /// map key would be ambiguous the moment that happens.
+    seq : Nat64;
     map_key : ByteBuf;
     /// The ciphertext, so the client can show what an item actually was.
     ///
@@ -336,65 +384,162 @@ actor PasswordManager {
   public query (msg) func get_trash(map_owner : Principal, map_name : ByteBuf) : async Result<[TrashedItem], Text> {
     if (not canRead(msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
     #Ok(
-      Array.map<(Blob, Trash.Entry), TrashedItem>(
-        Trash.visible(trash, map_owner, map_name.inner, now()),
-        func((mapKey, entry)) {
-          {
-            map_key = { inner = mapKey };
-            value = { inner = entry.value };
-            deleted_at = entry.deletedAt;
-            deleted_by = entry.deletedBy;
+      Array.filterMap<(Blob, Nat64, History.Entry), TrashedItem>(
+        History.trash(history, map_owner, map_name.inner, liveness(msg.caller, map_owner, map_name.inner), now()),
+        func((mapKey, seq, entry)) {
+          // `History.trash` only yields value-carrying rows, so this cannot be
+          // null. Matched rather than asserted: a trap here would take down a
+          // query the whole sidebar depends on.
+          switch (entry.value) {
+            case (null) { null };
+            case (?value) {
+              ?{
+                seq;
+                map_key = { inner = mapKey };
+                value = { inner = value };
+                deleted_at = entry.at;
+                deleted_by = entry.by;
+              };
+            };
           };
         },
       )
     );
   };
 
-  /// Put one item back. Authorization is the library's: this is an insert, so a
-  /// caller without write rights is refused there and the entry stays put.
-  public shared (msg) func restore_trashed_value(
+  public type VersionKind = { #Edited; #Deleted; #Restored };
+
+  public type Version = {
+    seq : Nat64;
+    /// The value this event superseded. Absent for a restore, which superseded
+    /// nothing, and for a version whose ciphertext the owner has dropped —
+    /// the event is still here, which is the point of dropping rather than
+    /// deleting.
+    value : ?ByteBuf;
+    at : Nat64;
+    by : Principal;
+    kind : VersionKind;
+  };
+
+  /// Every recorded version of one secret, oldest first.
+  ///
+  /// Visible to everyone who can read the vault, on the same reasoning as
+  /// `get_trash`: a reader can already read the current value, so earlier
+  /// values of the same secret are not a wider class of information. It does
+  /// mean a member added later sees versions written before they arrived —
+  /// deliberate, and `drop_history` is the owner's remedy.
+  ///
+  /// Not on the poll. Values ride this because it is user-initiated and scoped
+  /// to one secret; #14's rule is that nothing automatic carries ciphertext.
+  public query (msg) func get_history(
     map_owner : Principal,
     map_name : ByteBuf,
     map_key : ByteBuf,
+  ) : async Result<[Version], Text> {
+    if (not canRead(msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
+    let isLive = liveness(msg.caller, map_owner, map_name.inner);
+    let rows = History.forKey(history, map_owner, map_name.inner, map_key.inner);
+    // A deleted secret's history expires with it, all at once — so an expired
+    // group answers empty rather than leaking what it used to hold.
+    if (History.groupExpired(rows, isLive(map_key.inner), now())) return #Ok([]);
+    #Ok(
+      Array.map<(Nat64, History.Entry), Version>(
+        Array.sort<(Nat64, History.Entry)>(rows, func(a, b) { Nat64.compare(a.0, b.0) }),
+        func((seq, entry)) {
+          {
+            seq;
+            value = switch (entry.value) { case (null) { null }; case (?v) { ?{ inner = v } } };
+            at = entry.at;
+            by = entry.by;
+            kind = entry.kind;
+          };
+        },
+      )
+    );
+  };
+
+  /// Put one version back, addressed by its event.
+  ///
+  /// Authorization is the library's: this is an insert, so a caller without
+  /// write rights is refused there and nothing is recorded.
+  ///
+  /// Removes nothing. The row stays, and the secret leaves the trash because it
+  /// has a live value again — which is what keeps a writer unable to destroy
+  /// anything, and what lets a recovered secret keep its history.
+  public shared (msg) func restore_trashed_value(
+    map_owner : Principal,
+    map_name : ByteBuf,
+    seq : Nat64,
   ) : async Result<(), Text> {
-    let id = (map_owner, map_name.inner, map_key.inner);
-    switch (trash.get(Trash.compareKeys, id)) {
-      case (null) { #Err("not in trash") };
-      case (?entry) {
-        if (Trash.isExpired(entry, now())) return #Err("not in trash");
-        switch (encryptedMaps.insertEncryptedValue(msg.caller, (map_owner, map_name.inner), map_key.inner, entry.value)) {
-          case (#err(e)) { #Err(e) };
-          case (#ok(_)) {
-            let (next, _) = Trash.take(trash, id, now());
-            trash := next;
-            #Ok();
+    let at = now();
+    // The map key is part of the event key, so the row has to be found by
+    // scanning this vault's events rather than by direct lookup. One vault's
+    // log, on a user-initiated call.
+    let isLive = liveness(msg.caller, map_owner, map_name.inner);
+    var found : ?(Blob, History.Entry) = null;
+    for (mapKey in History.keysIn(history, map_owner, map_name.inner).values()) {
+      for ((rowSeq, entry) in History.forKey(history, map_owner, map_name.inner, mapKey).values()) {
+        if (rowSeq == seq) { found := ?(mapKey, entry) };
+      };
+    };
+    switch (found) {
+      case (null) { #Err("no such version") };
+      case (?(mapKey, entry)) {
+        let rows = History.forKey(history, map_owner, map_name.inner, mapKey);
+        if (History.groupExpired(rows, isLive(mapKey), at)) return #Err("no such version");
+        switch (entry.value) {
+          case (null) { #Err("this version's value was dropped") };
+          case (?value) {
+            switch (encryptedMaps.insertEncryptedValue(msg.caller, (map_owner, map_name.inner), mapKey, value)) {
+              case (#err(e)) { #Err(e) };
+              case (#ok(superseded)) {
+                // Restoring over a live value supersedes it, so that is an
+                // edit and the replaced version is kept. Restoring into an
+                // empty key supersedes nothing, and the event carries no value.
+                let kind = switch (superseded) { case (null) { #Restored }; case (?_) { #Edited } };
+                record(msg.caller, map_owner, map_name.inner, [(mapKey, superseded, kind)], isLive);
+                #Ok();
+              };
+            };
           };
         };
       };
     };
   };
 
-  /// Put a whole vault back, for undoing a wipe without one call per item.
+  /// Put a whole vault's trash back, for undoing a wipe without one call per
+  /// item.
   ///
   /// Authorization is the library's, per insert, so write access is what this
   /// needs and a reader is refused on the first entry. It restores every
-  /// visible entry in the vault rather than only the caller's own, which is why
+  /// entry the trash lists rather than only the caller's own, which is why
   /// `get_trash` lists the same set — see its comment.
+  ///
+  /// Restores the **newest** version of each deleted secret. A vault can hold
+  /// several events for one map key, and replaying them all would mean each
+  /// insert overwriting the last — silent loss inside a recovery operation.
+  /// `History.trash` already yields one row per key, which is that row.
   public shared (msg) func restore_trashed_values(map_owner : Principal, map_name : ByteBuf) : async Result<Nat, Text> {
     let at = now();
+    let isLive = liveness(msg.caller, map_owner, map_name.inner);
     var restored = 0;
-    var next = trash;
-    for ((mapKey, entry) in Trash.visible(trash, map_owner, map_name.inner, at).values()) {
-      switch (encryptedMaps.insertEncryptedValue(msg.caller, (map_owner, map_name.inner), mapKey, entry.value)) {
-        case (#err(e)) { return #Err(e) };
-        case (#ok(_)) {
-          let (after, _) = Trash.take(next, (map_owner, map_name.inner, mapKey), at);
-          next := after;
-          restored += 1;
+    var events : [(Blob, ?Blob, History.Kind)] = [];
+    for ((mapKey, _, entry) in History.trash(history, map_owner, map_name.inner, isLive, at).values()) {
+      switch (entry.value) {
+        case (null) {};
+        case (?value) {
+          switch (encryptedMaps.insertEncryptedValue(msg.caller, (map_owner, map_name.inner), mapKey, value)) {
+            case (#err(e)) { return #Err(e) };
+            case (#ok(superseded)) {
+              let kind = switch (superseded) { case (null) { #Restored }; case (?_) { #Edited } };
+              events := Array.concat(events, [(mapKey, superseded, kind)]);
+              restored += 1;
+            };
+          };
         };
       };
     };
-    trash := next;
+    record(msg.caller, map_owner, map_name.inner, events, isLive);
     #Ok(restored);
   };
 
@@ -406,20 +551,44 @@ actor PasswordManager {
   /// reach *before* granting access. Without this the exposure would have no
   /// remedy but time.
   ///
-  /// Write access, matching who can put items in the trash in the first place
-  /// and who can restore them. It does not narrow to the owner: `ReadWrite`
-  /// already destroys a vault's contents via `remove_map_values`, so an owner-
-  /// only rule here would guard the second step of a path whose first step is
-  /// open.
+  /// **Owner only.** The earlier rule was write access, on the reasoning that
+  /// `ReadWrite` already destroys a vault's contents through
+  /// `remove_map_values`. Trash made that false: a writer can empty a vault but
+  /// no longer destroy it, so this is the only true destruction and gating it on
+  /// write hands back the power trash removed. Measured — a collaborator could
+  /// wipe a vault they did not own, discard its trash, and the vault then
+  /// dropped out of the owner's listing.
+  ///
+  /// Scoped to secrets with no live value, so it empties the trash without
+  /// touching the version history of secrets that are still there.
   public shared (msg) func discard_trash(map_owner : Principal, map_name : ByteBuf) : async Result<Nat, Text> {
-    switch (rightsOf(msg.caller, map_owner, map_name.inner)) {
-      case (?#ReadWrite or ?#ReadWriteManage) {
-        let (next, dropped) = Trash.discard(trash, map_owner, map_name.inner);
-        trash := next;
-        #Ok(dropped);
-      };
-      case (_) { #Err("unauthorized") };
-    };
+    if (Principal.compare(msg.caller, map_owner) != #equal) return #Err("unauthorized");
+    let (next, dropped) = History.discardTrash(
+      history,
+      map_owner,
+      map_name.inner,
+      liveness(msg.caller, map_owner, map_name.inner),
+    );
+    history := next;
+    #Ok(dropped);
+  };
+
+  /// Drop the stored versions of one live secret, keeping the secret itself.
+  ///
+  /// The owner's way to reclaim space, or to stop keeping a secret's earlier
+  /// values, without a retention policy guessing on their behalf (#38).
+  ///
+  /// Clears the ciphertext and **keeps the events**, so "edited by X at T"
+  /// survives. Otherwise pruning would be a way to launder the audit trail.
+  public shared (msg) func drop_history(
+    map_owner : Principal,
+    map_name : ByteBuf,
+    map_key : ByteBuf,
+  ) : async Result<Nat, Text> {
+    if (Principal.compare(msg.caller, map_owner) != #equal) return #Err("unauthorized");
+    let (next, cleared) = History.dropHistory(history, map_owner, map_name.inner, map_key.inner);
+    history := next;
+    #Ok(cleared);
   };
 
   // ---------------------------------------------------------------------------
@@ -598,6 +767,14 @@ actor PasswordManager {
     /// answer this, so a grantee otherwise has to discover their permissions by
     /// being refused.
     my_rights : ?Types.AccessRights;
+    /// Fingerprint of what the trash listing would return.
+    ///
+    /// `trashed` alone cannot drive an open dialog: restoring one item and
+    /// deleting another leaves the count unchanged while the contents differ,
+    /// so a second viewer would keep a stale list. #14's rule is that the poll
+    /// carries no ciphertext, and this is how it stays true — the digest says
+    /// whether to re-read, and only then does anything fetch values.
+    trash_digest : ByteBuf;
   };
 
   /// Owned vaults that hold nothing but recoverable deletions.
@@ -618,28 +795,48 @@ actor PasswordManager {
       false;
     };
     let added = List.empty<Blob>();
-    for (((owner, mapName, _), _) in Map.entries(trash)) {
+    for (((owner, mapName, _, _), _) in Map.entries(history)) {
       if (Principal.compare(owner, caller) == #equal and not seen(mapName)) {
         var already = false;
         for (name in List.values(added)) { if (Blob.compare(name, mapName) == #equal) { already := true } };
-        if (not already and visibleTrashCount(caller, owner, mapName, at) > 0) {
-          List.add(added, mapName);
-          List.add(
-            extra,
-            {
-              owner = caller;
-              map_name = { inner = mapName };
-              access_control = [];
-              item_keys = [];
-              digest = { inner = Digest.ofKeyvals([]) };
-              trashed = visibleTrashCount(caller, owner, mapName, at);
-              my_rights = rightsOf(caller, caller, mapName);
-            },
-          );
+        if (not already) {
+          // Absent from the listing means the map holds no values, so nothing
+          // in it is live.
+          let isLive = func(_ : Blob) : Bool { false };
+          let rows = History.trash(history, owner, mapName, isLive, at);
+          if (rows.size() > 0) {
+            List.add(added, mapName);
+            List.add(
+              extra,
+              {
+                owner = caller;
+                map_name = { inner = mapName };
+                // Read rather than left empty. The caller owns this vault, so
+                // the library will disclose its members — and this is the state
+                // where the owner most needs them: an emptied vault whose
+                // collaborator they may want to revoke. Reporting no members
+                // made the share dialog say "Only you." for a shared vault.
+                access_control = switch (encryptedMaps.getSharedUserAccessForMap(caller, (caller, mapName))) {
+                  case (#err(_)) { [] };
+                  case (#ok(entries)) { entries };
+                };
+                item_keys = [];
+                digest = { inner = Digest.ofKeyvals([]) };
+                trashed = rows.size();
+                my_rights = rightsOf(caller, caller, mapName);
+                trash_digest = { inner = trashDigest(rows) };
+              },
+            );
+          };
         };
       };
     };
     List.toArray(extra);
+  };
+
+  /// Fingerprint of a trash listing, for the poll.
+  func trashDigest(rows : [(Blob, Nat64, History.Entry)]) : Blob {
+    Digest.ofTrash(Array.map<(Blob, Nat64, History.Entry), (Blob, Nat64)>(rows, func((mapKey, seq, _)) { (mapKey, seq) }));
   };
 
   public query (msg) func get_vault_summaries() : async [VaultSummary] {
@@ -651,14 +848,21 @@ actor PasswordManager {
         // order. `Digest.ofKeyvals` sorts independently, so it stays a pure
         // function of the pairs and is testable without a canister.
         let sorted = Array.sort<(Blob, Blob)>(map.keyvals, func(a, b) { Blob.compare(a.0, b.0) });
+        // Liveness from the keys already in hand, so the poll costs no extra
+        // read to work out what is in the trash.
+        let isLive = livenessOf(Array.map<(Blob, Blob), Blob>(map.keyvals, func((key, _)) { key }));
+        let inTrash = if (canRead(msg.caller, map.map_owner, map.map_name)) {
+          History.trash(history, map.map_owner, map.map_name, isLive, at);
+        } else { [] };
         {
           owner = map.map_owner;
           map_name = { inner = map.map_name };
           access_control = map.access_control;
           item_keys = Array.map<(Blob, Blob), ByteBuf>(sorted, func((key, _)) { { inner = key } });
           digest = { inner = Digest.ofKeyvals(map.keyvals) };
-          trashed = visibleTrashCount(msg.caller, map.map_owner, map.map_name, at);
+          trashed = inTrash.size();
           my_rights = rightsOf(msg.caller, map.map_owner, map.map_name);
+          trash_digest = { inner = trashDigest(inTrash) };
         };
       },
     );

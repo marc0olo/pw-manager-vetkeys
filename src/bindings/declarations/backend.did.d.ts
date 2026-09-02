@@ -34,11 +34,14 @@ export type Result_5 = { 'Ok' : Array<TrashedItem> } |
   { 'Err' : string };
 export type Result_6 = { 'Ok' : Array<[Principal, AccessRights]> } |
   { 'Err' : string };
-export type Result_7 = { 'Ok' : ByteBuf } |
+export type Result_7 = { 'Ok' : Array<Version> } |
   { 'Err' : string };
-export type Result_8 = { 'Ok' : Array<[ByteBuf, ByteBuf]> } |
+export type Result_8 = { 'Ok' : ByteBuf } |
+  { 'Err' : string };
+export type Result_9 = { 'Ok' : Array<[ByteBuf, ByteBuf]> } |
   { 'Err' : string };
 export interface TrashedItem {
+  'seq' : bigint,
   'value' : ByteBuf,
   'map_key' : ByteBuf,
   'deleted_at' : bigint,
@@ -50,6 +53,7 @@ export interface VaultName {
   'map_name' : ByteBuf,
 }
 export interface VaultSummary {
+  'trash_digest' : ByteBuf,
   'owner' : Principal,
   'item_keys' : Array<ByteBuf>,
   'access_control' : Array<[Principal, AccessRights]>,
@@ -58,6 +62,16 @@ export interface VaultSummary {
   'digest' : ByteBuf,
   'map_name' : ByteBuf,
 }
+export interface Version {
+  'at' : bigint,
+  'by' : Principal,
+  'seq' : bigint,
+  'value' : [] | [ByteBuf],
+  'kind' : VersionKind,
+}
+export type VersionKind = { 'Edited' : null } |
+  { 'Restored' : null } |
+  { 'Deleted' : null };
 export interface _SERVICE {
   /**
    * / Make a vault's deletions unrecoverable now, rather than waiting out their
@@ -68,13 +82,28 @@ export interface _SERVICE {
    * / reach *before* granting access. Without this the exposure would have no
    * / remedy but time.
    * /
-   * / Write access, matching who can put items in the trash in the first place
-   * / and who can restore them. It does not narrow to the owner: `ReadWrite`
-   * / already destroys a vault's contents via `remove_map_values`, so an owner-
-   * / only rule here would guard the second step of a path whose first step is
-   * / open.
+   * / **Owner only.** The earlier rule was write access, on the reasoning that
+   * / `ReadWrite` already destroys a vault's contents through
+   * / `remove_map_values`. Trash made that false: a writer can empty a vault but
+   * / no longer destroy it, so this is the only true destruction and gating it on
+   * / write hands back the power trash removed. Measured — a collaborator could
+   * / wipe a vault they did not own, discard its trash, and the vault then
+   * / dropped out of the owner's listing.
+   * /
+   * / Scoped to secrets with no live value, so it empties the trash without
+   * / touching the version history of secrets that are still there.
    */
   'discard_trash' : ActorMethod<[Principal, ByteBuf], Result_2>,
+  /**
+   * / Drop the stored versions of one live secret, keeping the secret itself.
+   * /
+   * / The owner's way to reclaim space, or to stop keeping a secret's earlier
+   * / values, without a retention policy guessing on their behalf (#38).
+   * /
+   * / Clears the ciphertext and **keeps the events**, so "edited by X at T"
+   * / survives. Otherwise pruning would be a way to launder the audit trail.
+   */
+  'drop_history' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_2>,
   'get_accessible_shared_map_names' : ActorMethod<
     [],
     Array<[Principal, ByteBuf]>
@@ -88,8 +117,21 @@ export interface _SERVICE {
     Array<[[Principal, ByteBuf], Array<[ByteBuf, ByteBuf]>]>
   >,
   'get_encrypted_value' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_4>,
-  'get_encrypted_values_for_map' : ActorMethod<[Principal, ByteBuf], Result_8>,
-  'get_encrypted_vetkey' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_7>,
+  'get_encrypted_values_for_map' : ActorMethod<[Principal, ByteBuf], Result_9>,
+  'get_encrypted_vetkey' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_8>,
+  /**
+   * / Every recorded version of one secret, oldest first.
+   * /
+   * / Visible to everyone who can read the vault, on the same reasoning as
+   * / `get_trash`: a reader can already read the current value, so earlier
+   * / values of the same secret are not a wider class of information. It does
+   * / mean a member added later sees versions written before they arrived —
+   * / deliberate, and `drop_history` is the owner's remedy.
+   * /
+   * / Not on the poll. Values ride this because it is user-initiated and scoped
+   * / to one secret; #14's rule is that nothing automatic carries ciphertext.
+   */
+  'get_history' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_7>,
   'get_owned_non_empty_map_names' : ActorMethod<[], Array<ByteBuf>>,
   'get_shared_user_access_for_map' : ActorMethod<
     [Principal, ByteBuf],
@@ -147,17 +189,29 @@ export interface _SERVICE {
   'remove_map_values' : ActorMethod<[Principal, ByteBuf], Result_3>,
   'remove_user' : ActorMethod<[Principal, ByteBuf, Principal], Result_1>,
   /**
-   * / Put one item back. Authorization is the library's: this is an insert, so a
-   * / caller without write rights is refused there and the entry stays put.
+   * / Put one version back, addressed by its event.
+   * /
+   * / Authorization is the library's: this is an insert, so a caller without
+   * / write rights is refused there and nothing is recorded.
+   * /
+   * / Removes nothing. The row stays, and the secret leaves the trash because it
+   * / has a live value again — which is what keeps a writer unable to destroy
+   * / anything, and what lets a recovered secret keep its history.
    */
-  'restore_trashed_value' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result>,
+  'restore_trashed_value' : ActorMethod<[Principal, ByteBuf, bigint], Result>,
   /**
-   * / Put a whole vault back, for undoing a wipe without one call per item.
+   * / Put a whole vault's trash back, for undoing a wipe without one call per
+   * / item.
    * /
    * / Authorization is the library's, per insert, so write access is what this
    * / needs and a reader is refused on the first entry. It restores every
-   * / visible entry in the vault rather than only the caller's own, which is why
+   * / entry the trash lists rather than only the caller's own, which is why
    * / `get_trash` lists the same set — see its comment.
+   * /
+   * / Restores the **newest** version of each deleted secret. A vault can hold
+   * / several events for one map key, and replaying them all would mean each
+   * / insert overwriting the last — silent loss inside a recovery operation.
+   * / `History.trash` already yields one row per key, which is that row.
    */
   'restore_trashed_values' : ActorMethod<[Principal, ByteBuf], Result_2>,
   'set_user_rights' : ActorMethod<

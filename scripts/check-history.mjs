@@ -1,5 +1,5 @@
 /**
- * Trash: what it recovers, and who may see it.
+ * The event log: what it recovers, who may see it, and what it refuses.
  *
  * `mops test` covers retention and visibility as pure functions of a store.
  * These are the parts that need a replica — that a deleted value really leaves
@@ -56,7 +56,8 @@ check("a deleted item leaves the vault", live.length === 1, `${live.length} left
 check("and appears in the owner's trash", (await trashOf(A, me, NAME)).length === 1);
 
 // ---- restore returns something that still decrypts --------------------------
-const restored = await B.api.restore_trashed_value(me, buf(NAME), buf("k1"));
+const trashRows = await trashOf(A, me, NAME);
+const restored = await B.api.restore_trashed_value(me, buf(NAME), trashRows[0].seq);
 check("a collaborator with write access can restore it", "Ok" in restored, JSON.stringify(restored));
 const after = await A.maps.getValuesForMap(me, N);
 const back = after.find(([k]) => dec.decode(k) === "k1");
@@ -78,7 +79,7 @@ check("which still decrypts to the original",
   dec.decode(await A.maps.decryptFor(me, N, enc.encode("k2"), Uint8Array.from(rows[0].value.inner))) === "secret two");
 check("and says who deleted it and when",
   rows[0].deleted_by.compareTo(me) === "eq" && rows[0].deleted_at > 0n);
-await A.api.restore_trashed_value(me, buf(NAME), buf("k2"));
+await A.api.restore_trashed_value(me, buf(NAME), rows[0].seq);
 
 // ---- a wipe trashes everything, and restores as one -------------------------
 await B.maps.removeMapValues(me, N);
@@ -160,7 +161,7 @@ await A.maps.setUserRights(me, N, danaId.getPrincipal(), { Read: null });
 check("a read-only member sees what was deleted", (await trashOf(D, me, NAME)).length === 1);
 check(
   "but cannot restore it",
-  "Err" in (await D.api.restore_trashed_value(me, buf(NAME), buf("k1"))),
+  "Err" in (await D.api.restore_trashed_value(me, buf(NAME), (await trashOf(D, me, NAME))[0].seq)),
 );
 check(
   "nor in bulk",
@@ -228,9 +229,157 @@ check("someone with no access to the vault is refused outright", denied.err === 
   check("emptying one vault's trash leaves another's alone", (await trashOf(A, me, OTHER)).length === 1);
 }
 
+// ---- the overwrite hole, which is why the store is keyed by event ----------
+//
+// Before this, a trash row was keyed `(owner, mapName, mapKey)` and `put`
+// replaced. So a writer could destroy a trashed secret without any trash
+// endpoint at all: insert at the key, delete it again, and the row was theirs —
+// carrying their principal and their timestamp. Both halves are asserted, since
+// forging the record is as bad as destroying the value.
+{
+  const OW = "Overwrite", O = enc.encode(OW);
+  await A.maps.setValue(me, O, enc.encode("k1"), enc.encode("the real secret"));
+  await A.maps.setUserRights(me, O, bobId.getPrincipal(), { ReadWrite: null });
+  await A.maps.removeEncryptedValue(me, O, enc.encode("k1"));
+
+  // Bob writes his own value at the same key and deletes it again.
+  await B.maps.setValue(me, O, enc.encode("k1"), enc.encode("overwritten by bob"));
+  await B.maps.removeEncryptedValue(me, O, enc.encode("k1"));
+
+  const rows = await trashOf(A, me, OW);
+  check("a second deletion of the same key adds a row rather than replacing one",
+    (await A.api.get_history(me, buf(OW), buf("k1"))).Ok.length >= 2,
+    `${(await A.api.get_history(me, buf(OW), buf("k1"))).Ok.length} events`);
+
+  const originalSurvives = (
+    await Promise.all(
+      (await A.api.get_history(me, buf(OW), buf("k1"))).Ok
+        .filter((v) => v.value.length > 0)
+        .map(async (v) =>
+          dec.decode(await A.maps.decryptFor(me, O, enc.encode("k1"), Uint8Array.from(v.value[0].inner)))),
+    )
+  );
+  check("and the original secret is still readable", originalSurvives.includes("the real secret"),
+    originalSurvives.map((t) => JSON.stringify(t)).join(", "));
+  check("the trash offers the newest version", rows.length === 1 &&
+    dec.decode(await A.maps.decryptFor(me, O, enc.encode("k1"), Uint8Array.from(rows[0].value.inner))) === "overwritten by bob");
+}
+
+// ---- an edit keeps what it replaced ----------------------------------------
+//
+// The everyday version of the same problem: trash only ever saw deletions, so
+// a writer editing a secret in place destroyed the previous value silently.
+{
+  const EV = "Edits", E = enc.encode(EV);
+  await A.maps.setValue(me, E, enc.encode("k1"), enc.encode("v1"));
+  await A.maps.setValue(me, E, enc.encode("k1"), enc.encode("v2"));
+  await A.maps.setValue(me, E, enc.encode("k1"), enc.encode("v3"));
+
+  const versions = (await A.api.get_history(me, buf(EV), buf("k1"))).Ok;
+  const texts = await Promise.all(
+    versions.filter((v) => v.value.length > 0).map(async (v) =>
+      dec.decode(await A.maps.decryptFor(me, E, enc.encode("k1"), Uint8Array.from(v.value[0].inner)))),
+  );
+  check("every superseded value is kept", texts.includes("v1") && texts.includes("v2"), texts.join(", "));
+  check("and the live value is not in the history", !texts.includes("v3"), texts.join(", "));
+  check("a live secret's versions are not offered as trash", (await trashOf(A, me, EV)).length === 0);
+}
+
+// ---- restoring removes nothing ---------------------------------------------
+{
+  const RV = "Restores", R = enc.encode(RV);
+  await A.maps.setValue(me, R, enc.encode("k1"), enc.encode("v1"));
+  await A.maps.removeEncryptedValue(me, R, enc.encode("k1"));
+  const before = (await A.api.get_history(me, buf(RV), buf("k1"))).Ok.length;
+  const row = (await trashOf(A, me, RV))[0];
+
+  check("restoring succeeds", "Ok" in (await A.api.restore_trashed_value(me, buf(RV), row.seq)));
+  check("the secret leaves the trash", (await trashOf(A, me, RV)).length === 0);
+  const after = (await A.api.get_history(me, buf(RV), buf("k1"))).Ok.length;
+  // It leaves because the key is live again, not because a row was deleted —
+  // which is what leaves a writer unable to destroy anything.
+  check("and its history is not shortened", after >= before, `${before} -> ${after}`);
+}
+
+// ---- only the owner can make a deletion unrecoverable ----------------------
+{
+  const OD = "OwnerOnly", D2 = enc.encode(OD);
+  await A.maps.setValue(me, D2, enc.encode("k1"), enc.encode("v1"));
+  await A.maps.setUserRights(me, D2, bobId.getPrincipal(), { ReadWrite: null });
+  await B.maps.removeMapValues(me, D2);
+
+  const refused = await B.api.discard_trash(me, buf(OD));
+  check("a ReadWrite collaborator cannot empty the trash", "Err" in refused, JSON.stringify(refused));
+  // The reason it matters: the vault would otherwise drop out of the owner's
+  // listing, taking recovery with it.
+  const listedForOwner = (await A.api.get_vault_summaries()).some(
+    (v) => dec.decode(Uint8Array.from(v.map_name.inner)) === OD);
+  check("so a wiped vault stays visible to its owner", listedForOwner);
+  check("the owner can empty it", "Ok" in (await A.api.discard_trash(me, buf(OD))));
+}
+
+// ---- discarding the trash leaves live secrets' history alone ---------------
+{
+  const MX = "Mixed", M = enc.encode(MX);
+  await A.maps.setValue(me, M, enc.encode("live"), enc.encode("v1"));
+  await A.maps.setValue(me, M, enc.encode("live"), enc.encode("v2")); // one version kept
+  await A.maps.setValue(me, M, enc.encode("gone"), enc.encode("x"));
+  await A.maps.removeEncryptedValue(me, M, enc.encode("gone"));
+
+  check("there is trash to empty", (await trashOf(A, me, MX)).length === 1);
+  await A.api.discard_trash(me, buf(MX));
+  check("emptying the trash clears it", (await trashOf(A, me, MX)).length === 0);
+  check(
+    "but keeps the version history of a secret that is still there",
+    (await A.api.get_history(me, buf(MX), buf("live"))).Ok.length >= 1,
+    "otherwise emptying the trash before sharing would destroy live data",
+  );
+}
+
+// ---- pruning a history keeps the record ------------------------------------
+{
+  const PR = "Pruned", P = enc.encode(PR);
+  await A.maps.setValue(me, P, enc.encode("k1"), enc.encode("v1"));
+  await A.maps.setValue(me, P, enc.encode("k1"), enc.encode("v2"));
+  await A.maps.setUserRights(me, P, bobId.getPrincipal(), { ReadWrite: null });
+
+  const refused = await B.api.drop_history(me, buf(PR), buf("k1"));
+  check("only the owner can prune a history", "Err" in refused, JSON.stringify(refused));
+
+  const dropped = await A.api.drop_history(me, buf(PR), buf("k1"));
+  check("the owner can", "Ok" in dropped, JSON.stringify(dropped, (_, v) => (typeof v === "bigint" ? String(v) : v)));
+  const after = (await A.api.get_history(me, buf(PR), buf("k1"))).Ok;
+  check("the events survive, so the audit trail cannot be laundered", after.length >= 1, `${after.length} events`);
+  check("but their ciphertext is gone", after.every((v) => v.value.length === 0));
+  check("and the live secret is untouched",
+    dec.decode((await A.maps.getValuesForMap(me, P)).find(([k]) => dec.decode(k) === "k1")[1]) === "v2");
+}
+
+// ---- the poll can tell the trash changed without carrying it ---------------
+{
+  const FP = "Fingerprint", F = enc.encode(FP);
+  const digestOf = async () => {
+    const v = (await A.api.get_vault_summaries()).find((x) => dec.decode(Uint8Array.from(x.map_name.inner)) === FP);
+    return v ? Buffer.from(Uint8Array.from(v.trash_digest.inner)).toString("hex") : null;
+  };
+  await A.maps.setValue(me, F, enc.encode("a"), enc.encode("1"));
+  await A.maps.setValue(me, F, enc.encode("b"), enc.encode("2"));
+  await A.maps.removeEncryptedValue(me, F, enc.encode("a"));
+  const one = await digestOf();
+
+  // Restore one and delete another: the count is unchanged, the contents are
+  // not. A count could not drive a second viewer's open dialog; this can.
+  await A.api.restore_trashed_value(me, buf(FP), (await trashOf(A, me, FP))[0].seq);
+  await A.maps.removeEncryptedValue(me, F, enc.encode("b"));
+  const two = await digestOf();
+  const count = (await trashOf(A, me, FP)).length;
+  check("the trash count is the same after swapping which item is deleted", count === 1, `${count}`);
+  check("but the digest is not", one !== two, `${one?.slice(0, 12)} vs ${two?.slice(0, 12)}`);
+}
+
 console.log(
   failures.length === 0
-    ? "\nDeletions are recoverable, restored values still decrypt, and the listing and the restore path agree."
+    ? "\nEvents are append-only: a writer can add versions but destroy none, and only the owner can make one unrecoverable."
     : `\n${failures.length} failure(s)`,
 );
 process.exit(failures.length === 0 ? 0 : 1);

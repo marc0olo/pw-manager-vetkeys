@@ -45,20 +45,23 @@ password — the vault key is derived for your Internet Identity principal.
   involved. The dialog shows real titles — the ciphertext comes back with the
   listing and is decrypted in the browser under the key already cached from
   opening the vault, so a deleted item is recognisable rather than a timestamp.
-  - **Who sees it.** The trash belongs to the vault: everyone who can read the
-    vault sees it, and write access is what puts things back. For a member who
-    can write that discloses nothing new — restoring is gated on write access
-    alone and restores the whole vault, so they could already recover an entry
-    a stricter listing withheld. For a read-only member it genuinely is new:
-    they hold the vault key, so one added after a deletion can read a secret
-    destroyed before they had access. A deliberate trade, and the reason for
-    the next two points.
-  - **Empty trash**, in the trash view, makes a vault's deletions unrecoverable
-    immediately — the way to put a secret out of reach before sharing the vault
-    with someone new. Write access, matching who can fill and restore it.
-  - **The share dialog** says how many entries a grantee would inherit, so the
-    trade above is stated where the decision is made. A sentence, not a second
-    copy of the button.
+  - **Every version is kept.** Editing a secret records the value it replaced,
+    so an edit is recoverable and not only a deletion. Trash, version history
+    and the audit trail are one append-only log: a deletion is a version with
+    nothing after it. Nothing is ever moved, so a trashed secret keeps its
+    history and a recovered one keeps it too.
+  - **Who sees it.** The log belongs to the vault: everyone who can read the
+    vault reads it, and write access is what puts a version back. A member
+    added later sees earlier versions — deliberate, since they can read the
+    current value anyway.
+  - **A writer cannot destroy anything.** Editing and deleting only *append*.
+    Removing is the owner's: **Empty trash** makes a vault's deletions
+    unrecoverable, and dropping a secret's history clears the stored
+    ciphertext while keeping the events, so pruning cannot launder the record
+    of who changed what. Time is the only other remover — 90 days after a
+    deletion, the secret and its history go together.
+  - **The share dialog** says how much a grantee would inherit, so the trade is
+    stated where the decision is made.
 - **Rename a vault** you own. A vault *is* `(owner, name)` and its vetKey
   derives from that pair, so the map never moves: the backend stores a display
   name beside it and a rename is one write — nothing re-encrypted, nobody
@@ -75,9 +78,9 @@ password — the vault key is derived for your Internet Identity principal.
 ```
 src/backend/main.mo        The whole backend: the mixin, vault names, poll summaries
 src/backend/lib/Digest.mo  The vault content digest — pure, and unit-tested
-src/backend/lib/Trash.mo   Retention, visibility and discard — pure, and unit-tested
+src/backend/lib/History.mo Every version of every secret — pure, and unit-tested
 test/Digest.test.mo        Motoko tests: `mops test`, no replica needed
-test/Trash.test.mo         Retention, expiry-on-read, per-vault isolation, discard
+test/History.test.mo       Append-only, per-secret expiry, liveness, pruning
 src/frontend/lib/vault.ts  Encrypt/decrypt and access control over EncryptedMaps
 src/frontend/lib/items.ts  The item model and its JSON encoding
 src/frontend/lib/reconcile.ts  What the UI does when the canister changes underneath
@@ -201,6 +204,11 @@ icp deploy                    # builds the canister and the frontend, then syncs
 
 `icp deploy` prints the frontend URL: `http://frontend.local.localhost:8100/`.
 
+> If it stops with **`Candid compatibility check failed`**, the interface changed
+> in a way an upgrade cannot carry. `icp deploy --mode reinstall -y` reinstalls
+> and **drops every stored secret** — fine while developing locally, never on a
+> canister holding data anyone wants.
+
 ```bash
 npm test                      # unit tests and component transitions (no replica needed)
 npm run test:motoko           # backend unit tests (no replica needed)
@@ -212,7 +220,7 @@ npm run smoke-test            # crypto + access control end to end
 npm run check-capabilities    # the access-level table the share dialog states
 npm run check-poll-cost       # a poll derives no keys and carries no ciphertext
 npm run check-vault-names     # renaming moves no map and derives no key
-npm run check-trash           # the listing and the restore path agree on what exists
+npm run check-history         # a writer can add versions but destroy none
 ```
 
 The first four run in CI on every pull request; the replica ones do not, so
@@ -324,18 +332,19 @@ voids the whole document — so run `npm run check-ii-metadata` after editing it
 
 ## Known limitations
 
-- **One owned vault.** The canister lists only *non-empty* owned vaults, so an
-  empty vault cannot be persisted without extra backend metadata
-  ([dfinity/vetkeys#439]). You get one vault named `Personal`, plus every vault
-  shared with you. Multiple owned vaults would need that fixed upstream, or the
-  `EncryptedMapsControlPlaneCanister` variant and app-owned value endpoints.
+- **One owned vault.** The library lists only *non-empty* owned vaults, so an
+  empty one does not survive a reload ([dfinity/vetkeys#439]). You get one vault
+  named `Personal`, plus every vault shared with you. The value endpoints are
+  already ours, so this no longer waits on upstream — it needs a registry of
+  owned map names, tracked in #11.
 - No browser extension, autofill, TOTP, or attachments.
-- Trash is not purged on a schedule — there is no timer, because Motoko timers
-  do not survive an upgrade. An entry is *unreachable* after 90 days, always,
-  since the read path filters by age. The bytes are reclaimed on the next
-  deletion in **any** vault, which sweeps the whole store — so the only residual
-  case is a canister where nobody ever deletes anything again, which keeps
-  expired ciphertext on disk. Unreachable, but stored.
+- Expired versions are not purged on a schedule — there is no timer, because
+  Motoko timers do not survive an upgrade. A deleted secret and its history are
+  *unreachable* 90 days on, always, since the read paths filter by age. The
+  bytes are reclaimed on the next write to **that vault**, because deciding
+  what has expired needs to know which secrets are still live and that is the
+  encrypted-maps state. So a vault nobody writes to again keeps expired
+  ciphertext on disk. Unreachable, but stored.
 - Sharing is by principal — you paste the other person's principal (the **My
   principal** button copies yours).
 

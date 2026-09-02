@@ -61,6 +61,15 @@ export interface VaultSummary {
   fingerprint: string;
   /** Recoverable deletions this caller may see. See `listTrash`. */
   trashed: number;
+  /**
+   * Fingerprint of what the trash listing would return.
+   *
+   * `trashed` alone cannot drive an open dialog: restore one item and delete
+   * another and the count is unchanged while the contents differ. The poll
+   * compares this instead, and only re-reads the listing when it moves — which
+   * is how the dialog stays live without ciphertext riding the poll (#14).
+   */
+  trashFingerprint: string;
 }
 
 /**
@@ -72,6 +81,15 @@ export interface VaultSummary {
  * only offer "restore something deleted at 14:22", which is not recovery.
  */
 export interface TrashedItem {
+  /**
+   * Which deletion event this is, and what `restoreItem` takes.
+   *
+   * Not the item id: a secret can be deleted, restored and deleted again, so
+   * several events share one. Addressing a restore by item id would be
+   * ambiguous the moment that happens, and it is what two rows would collide
+   * on as React keys.
+   */
+  seq: bigint;
   item: VaultItem;
   /** Milliseconds, converted from the canister's nanoseconds. */
   deletedAt: number;
@@ -294,6 +312,7 @@ export class VaultClient {
         itemIds: map.item_keys.map((key) => decoder.decode(Uint8Array.from(key.inner))),
         fingerprint: hex(Uint8Array.from(map.digest.inner)),
         trashed: Number(map.trashed),
+        trashFingerprint: hex(Uint8Array.from(map.trash_digest.inner)),
       };
     });
 
@@ -327,6 +346,7 @@ export class VaultClient {
         itemIds: [],
         fingerprint: EMPTY_FINGERPRINT,
         trashed: 0,
+        trashFingerprint: EMPTY_FINGERPRINT,
       });
     }
     return vaults;
@@ -380,14 +400,6 @@ export class VaultClient {
   }
 
   /**
-   * Removes every item in the vault.
-   *
-   * Guarded by `ensureUserCanWrite`, so any `ReadWrite` collaborator can do
-   * this — there is no separate delete right. The map itself and its access
-   * list survive, so the vault stays listed and shared; only its contents go.
-   * That is why the UI calls this "empty", not "delete".
-   */
-  /**
    * What is recoverable in this vault, decrypted.
    *
    * One query and no key derivation in practice: the vault is open, so its key
@@ -407,6 +419,7 @@ export class VaultClient {
           Uint8Array.from(row.value.inner),
         );
         return {
+          seq: row.seq,
           item: decodeItem(id, plaintext),
           deletedAt: Number(row.deleted_at / 1_000_000n),
           deletedBy: row.deleted_by,
@@ -415,10 +428,9 @@ export class VaultClient {
     );
   }
 
-  async restoreItem(vault: VaultSummary, itemId: string): Promise<void> {
-    const result = await this.backend.restore_trashed_value(vault.owner, { inner: nameBytes(vault.name) }, {
-      inner: encoder.encode(itemId),
-    });
+  /** Put one version back, addressed by its event rather than by item id. */
+  async restoreItem(vault: VaultSummary, seq: bigint): Promise<void> {
+    const result = await this.backend.restore_trashed_value(vault.owner, { inner: nameBytes(vault.name) }, seq);
     if ("Err" in result) throw new Error(result.Err);
   }
 
@@ -442,6 +454,14 @@ export class VaultClient {
     return Number(result.Ok);
   }
 
+  /**
+   * Removes every item in the vault.
+   *
+   * Guarded by `ensureUserCanWrite`, so any `ReadWrite` collaborator can do
+   * this — there is no separate delete right. The map itself and its access
+   * list survive, so the vault stays listed and shared; only its contents go.
+   * That is why the UI calls this "empty", not "delete".
+   */
   async wipe(vault: VaultSummary): Promise<void> {
     await this.encryptedMaps.removeMapValues(vault.owner, nameBytes(vault.name));
   }

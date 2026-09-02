@@ -149,6 +149,19 @@ export function App() {
           setError(null);
         }
         if (outcome.notice) notify(outcome.notice);
+        if (outcome.refreshTrash) {
+          // Someone else changed this vault's trash while the dialog is open.
+          // A second read, guarded by the same load token: the dialog must not
+          // be repopulated after a lock, and a value that arrives late is not
+          // ours to write.
+          const vault = vaultStateRef.current.vaults?.find(
+            (candidate) => vaultId(candidate) === vaultStateRef.current.selectedVaultId,
+          );
+          if (vault) {
+            const rows = await client.listTrash(vault);
+            if (current()) patch({ trash: rows });
+          }
+        }
       } catch (caught) {
         // A failed poll is not worth a banner; the next one will retry.
         if (!quiet) setError(message(caught));
@@ -572,10 +585,10 @@ export function App() {
           busy={busy}
           canRestore={writable}
           onClose={() => patch({ trash: null })}
-          onRestore={(itemId) =>
+          onRestore={(seq) =>
             void run(
               async () => {
-                await client!.restoreItem(vault, itemId);
+                await client!.restoreItem(vault, seq);
                 patch({ trash: await client!.listTrash(vault), openItems: null });
               },
               "Item restored",

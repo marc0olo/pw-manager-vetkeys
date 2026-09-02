@@ -25,6 +25,7 @@ export const vault = (o: Partial<VaultSummary> = {}): VaultSummary => ({
   itemIds: [],
   fingerprint: "f0",
   trashed: 0,
+  trashFingerprint: "t0",
   ...o,
 });
 
@@ -66,7 +67,7 @@ export class FakeClient {
     if (this.refuse === "open") throw new Error("unauthorized");
     return this.trash;
   });
-  restoreItem = vi.fn(async () => this.guard("write"));
+  restoreItem = vi.fn(async (_vault: VaultSummary, _seq: bigint) => this.guard("write"));
   restoreAll = vi.fn(async () => {
     this.guard("write");
     return this.trash.length;
@@ -87,7 +88,9 @@ export class FakeClient {
   lock = vi.fn(async () => {});
 }
 
+let nextSeq = 0n;
 export const trashed = (o: Partial<TrashedItem> & { item: VaultItem }): TrashedItem => ({
+  seq: nextSeq++,
   deletedAt: Date.UTC(2026, 0, 2, 9, 30),
   deletedBy: ALICE,
   ...o,

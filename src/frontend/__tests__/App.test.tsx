@@ -352,8 +352,8 @@ describe("trash in a shared vault", () => {
         ),
         {
           trash: [
-            trashed({ item: item({ id: "gone", title: "Old root password" }) }),
-            trashed({ item: item({ id: "gone2", title: "Retired API key" }), deletedBy: BOB }),
+            trashed({ seq: 41n, item: item({ id: "gone", title: "Old root password" }) }),
+            trashed({ seq: 42n, item: item({ id: "gone2", title: "Retired API key" }), deletedBy: BOB }),
           ],
         },
       ),
@@ -394,7 +394,10 @@ describe("trash in a shared vault", () => {
     fireEvent.click(await screen.findByRole("button", { name: /2 deleted/i }));
 
     fireEvent.click((await screen.findAllByRole("button", { name: /^restore$/i }))[0]);
-    await waitFor(() => expect(client.restoreItem).toHaveBeenCalled());
+
+    // The event, not the item id — a secret deleted, restored and deleted again
+    // has several rows, so restoring by item id would pick an arbitrary one.
+    await waitFor(() => expect(client.restoreItem).toHaveBeenCalledWith(expect.anything(), 41n));
   });
 });
 
@@ -558,4 +561,79 @@ describe("deleting one item", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: /^delete$/i }));
     await waitFor(() => expect(client.deleteItem).toHaveBeenCalledTimes(1));
   });
+});
+
+describe("someone else changes the trash while the dialog is open", () => {
+  // The count alone cannot drive this: restore one item and delete another and
+  // it is unchanged while the contents differ. The summary carries a
+  // fingerprint so the poll can tell, without ciphertext riding the poll (#14).
+  const clientWith = (fingerprint: string, title: string) =>
+    Object.assign(
+      new FakeClient(ALICE, [vault({ itemIds: ["a"], trashed: 1, trashFingerprint: fingerprint })], {
+        Personal: [item({ id: "a", title: "GitHub" })],
+      }),
+      { trash: [trashed({ item: item({ id: "d0", title }) })] },
+    );
+
+  // Fake timers before render: the interval is scheduled during the effect, and
+  // one created with the real timer is not advanced by a fake clock swapped in
+  // afterwards.
+  const onFakeTimers = async (body: () => Promise<void>) => {
+    vi.useFakeTimers();
+    try {
+      await body();
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+  const settle = () => act(() => vi.advanceTimersByTimeAsync(0));
+  const poll = () => act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+
+  it("re-reads the list when the fingerprint moves", async () =>
+    onFakeTimers(async () => {
+      const client = clientWith("t-before", "Old password");
+      signedInAs(ALICE, client);
+      render(<App />);
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: /1 deleted/i }));
+      await settle();
+      expect(screen.getByText("Old password")).toBeInTheDocument();
+
+      // A different person deleted something else. Same count, new contents.
+      client.vaults = [vault({ itemIds: ["a"], trashed: 1, trashFingerprint: "t-after" })];
+      client.trash = [trashed({ item: item({ id: "d1", title: "Someone else's deletion" }) })];
+      await poll();
+
+      expect(screen.getByText("Someone else's deletion")).toBeInTheDocument();
+      expect(screen.queryByText("Old password")).not.toBeInTheDocument();
+    }));
+
+  it("does not re-read when nothing changed", async () =>
+    onFakeTimers(async () => {
+      const client = clientWith("t-same", "Old password");
+      signedInAs(ALICE, client);
+      render(<App />);
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: /1 deleted/i }));
+      await settle();
+      const before = client.listTrash.mock.calls.length;
+
+      await poll();
+
+      // Ciphertext must not be fetched on a timer just because a dialog is open.
+      expect(client.listTrash.mock.calls.length).toBe(before);
+    }));
+
+  it("does not fetch the trash at all while the dialog is closed", async () =>
+    onFakeTimers(async () => {
+      const client = clientWith("t-before", "Old password");
+      signedInAs(ALICE, client);
+      render(<App />);
+      await settle();
+
+      client.vaults = [vault({ itemIds: ["a"], trashed: 1, trashFingerprint: "t-after" })];
+      await poll();
+
+      expect(client.listTrash).not.toHaveBeenCalled();
+    }));
 });
