@@ -62,8 +62,14 @@ module {
   /// the test suite checks the number against that product.
   public let RETENTION_NS : Nat64 = 7_776_000_000_000_000;
 
-  /// Why a version stopped being current.
+  /// Why a version stopped being current, or that a secret began.
   public type Kind = {
+    /// A first write, superseding nothing. Carries no value — the value it
+    /// created is the live one. Recorded so that every secret has an
+    /// authoritative creation time and an author: without it a never-edited
+    /// secret has no canister-side record at all, and the only timestamp is
+    /// the one the writer put inside the plaintext.
+    #Created;
     /// Superseded by a write. Carries the value it replaced.
     #Edited;
     /// Removed from the map. Carries the value it removed.

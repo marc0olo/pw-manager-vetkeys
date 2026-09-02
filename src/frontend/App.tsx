@@ -54,7 +54,7 @@ export function App() {
   const [client, setClient] = useState<VaultClient | null>(null);
   // One object, cleared as a unit on lock — see lib/vault-session for why.
   const [vaultSession, setVaultSession] = useState<VaultSessionState>(NO_VAULT_SESSION);
-  const { vaults, openItems, selectedVaultId, selectedItemId, syncedAt, pane, query, sharing, wiping, renaming, trash, deleting, denials } =
+  const { vaults, openItems, selectedVaultId, selectedItemId, syncedAt, pane, query, sharing, wiping, renaming, trash, itemFacts, history, deleting, denials } =
     vaultSession;
   // Updated synchronously by `patch` below. The poll reads state across an
   // await, and React state is not visible until the next commit — reading the
@@ -341,9 +341,14 @@ export function App() {
     if (!client || !summary || openItems !== null) return;
     let cancelled = false;
     client
+      // Read together: the facts are what the detail pane needs to show an
+      // authoritative "updated" and a version count, and asking for them
+      // separately would render a pane with one and not the other. No key
+      // derivation and no ciphertext, so the pair costs what the open cost.
       .openVault(summary)
-      .then((items) => {
-        if (!cancelled) patch({ openItems: items });
+      .then(async (items) => {
+        const facts = await client.itemSummaries(summary);
+        if (!cancelled) patch({ openItems: items, itemFacts: facts });
       })
       .catch((caught) => {
         if (cancelled) return;
@@ -448,6 +453,11 @@ export function App() {
             selectedVaultId: id,
             selectedItemId: null,
             openItems: null,
+            // Both belong to the vault being left. `itemFacts` must go or the
+            // detail pane would show the previous vault's version counts
+            // against this vault's items.
+            itemFacts: null,
+            history: null,
             pane: { mode: "view" },
             query: "",
           });
@@ -477,7 +487,10 @@ export function App() {
         onQueryChange={(next) => patch({ query: next })}
         selectedId={selectedItem?.id ?? null}
         onSelect={(id) => {
-          patch({ selectedItemId: id, pane: { mode: "view" } });
+          // Drop the version list read for the item being left. The render is
+          // keyed to `itemId` so a stale one is never shown; this just stops it
+          // being held for longer than it is useful.
+          patch({ selectedItemId: id, pane: { mode: "view" }, history: null });
         }}
         onNew={() => patch({ pane: { mode: "edit", item: emptyItem(), isNew: true } })}
         canWrite={writable}
@@ -571,6 +584,41 @@ export function App() {
           <ItemDetail
             item={selectedItem}
             canWrite={writable}
+            isOwner={vault.isOwned}
+            facts={itemFacts?.[selectedItem.id] ?? null}
+            versions={history?.itemId === selectedItem.id ? history.rows : null}
+            busy={busy}
+            onToggleHistory={() =>
+              history?.itemId === selectedItem.id
+                ? patch({ history: null })
+                : void run(async () => {
+                    patch({ history: { itemId: selectedItem.id, rows: await client!.versions(vault, selectedItem.id) } });
+                  })
+            }
+            onRestoreVersion={(seq) =>
+              void run(
+                async () => {
+                  await client!.restoreVersion(vault, seq);
+                  // The restore replaced the live value, so the open items and
+                  // the per-item facts are both stale.
+                  patch({ openItems: null, history: null });
+                },
+                "Version restored",
+                { vault: vaultId(vault), capability: "write" },
+              )
+            }
+            onDropHistory={() =>
+              void run(
+                async () => {
+                  await client!.dropHistory(vault, selectedItem.id);
+                  patch({ history: null });
+                },
+                "Stored versions deleted",
+                // Owner-only, like emptying the trash — not a capability to be
+                // discovered, so a refusal must not be filed against write.
+                { vault: vaultId(vault), capability: "own" },
+              )
+            }
             onCopy={copyField}
             onEdit={() => patch({ pane: { mode: "edit", item: selectedItem, isNew: false } })}
             onDelete={() => patch({ deleting: true })}
@@ -596,7 +644,7 @@ export function App() {
           onRestore={(seq) =>
             void run(
               async () => {
-                await client!.restoreItem(vault, seq);
+                await client!.restoreVersion(vault, seq);
                 patch({ trash: await client!.listTrash(vault), openItems: null });
               },
               "Item restored",

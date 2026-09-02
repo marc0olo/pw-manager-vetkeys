@@ -1,11 +1,28 @@
 import { useEffect, useState } from "react";
 import { CopyIcon, EyeIcon, EyeOffIcon, ExternalIcon, TrashIcon } from "./Icons";
 import { displayHost, type VaultItem } from "../lib/items";
+import type { ItemVersion } from "../lib/vault";
 import { passwordStrength } from "../lib/password";
 
 interface Props {
   item: VaultItem;
   canWrite: boolean;
+  /** Whether pruning is offered — the owner's alone, like emptying the trash. */
+  isOwner: boolean;
+  /**
+   * When the canister recorded the write that produced this value, and how many
+   * earlier versions it has. Null while the vault is still being read.
+   *
+   * Deliberately not `item.updatedAt`: that lives inside the plaintext and is
+   * written by whoever last saved the item, so it is the writer's to choose.
+   */
+  facts: { versions: number; updatedAt: number } | null;
+  /** The expanded version list, or null when collapsed. */
+  versions: ItemVersion[] | null;
+  busy: boolean;
+  onToggleHistory: () => void;
+  onRestoreVersion: (seq: bigint) => void;
+  onDropHistory: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onCopy: (field: "username" | "password" | "url", value: string) => void;
@@ -14,8 +31,44 @@ interface Props {
 /** Auto-hide a revealed password so it does not sit on screen indefinitely. */
 const REVEAL_TIMEOUT_MS = 30_000;
 
-export function ItemDetail({ item, canWrite, onEdit, onDelete, onCopy }: Props) {
+/** Never let the dots hint at the real length beyond a point. */
+const mask = (password: string) => "•".repeat(Math.min(password.length, 24));
+
+export function ItemDetail({
+  item,
+  canWrite,
+  isOwner,
+  facts,
+  versions,
+  busy,
+  onToggleHistory,
+  onRestoreVersion,
+  onDropHistory,
+  onEdit,
+  onDelete,
+  onCopy,
+}: Props) {
   const [revealed, setRevealed] = useState(false);
+  const [confirmingDrop, setConfirmingDrop] = useState(false);
+  /**
+   * Which earlier version is showing its password, if any. One at a time, so
+   * revealing another hides the first — an old password is still a password,
+   * and a list of them on screen is worse than the one in the pane above.
+   */
+  const [revealedVersion, setRevealedVersion] = useState<bigint | null>(null);
+
+  useEffect(() => setConfirmingDrop(false), [item.id]);
+  useEffect(() => setRevealedVersion(null), [item.id]);
+  // Collapsing the list is also a request to stop showing it.
+  useEffect(() => {
+    if (versions === null) setRevealedVersion(null);
+  }, [versions]);
+
+  useEffect(() => {
+    if (revealedVersion === null) return;
+    const timer = setTimeout(() => setRevealedVersion(null), REVEAL_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [revealedVersion]);
 
   useEffect(() => setRevealed(false), [item.id]);
 
@@ -37,8 +90,8 @@ export function ItemDetail({ item, canWrite, onEdit, onDelete, onCopy }: Props) 
         </span>
         <div>
           <h2>{item.title || host || "Untitled"}</h2>
-          {item.updatedAt > 0 && (
-            <p className="detail__stamp">Updated {new Date(item.updatedAt).toLocaleString()}</p>
+          {facts && facts.updatedAt > 0 && (
+            <p className="detail__stamp">Updated {new Date(facts.updatedAt).toLocaleString()}</p>
           )}
         </div>
       </header>
@@ -56,7 +109,7 @@ export function ItemDetail({ item, canWrite, onEdit, onDelete, onCopy }: Props) 
           <dt>Password</dt>
           <dd>
             <span className={`field__value ${revealed ? "field__value--mono" : "field__value--dots"}`}>
-              {item.password ? (revealed ? item.password : "•".repeat(Math.min(item.password.length, 24))) : "—"}
+              {item.password ? (revealed ? item.password : mask(item.password)) : "—"}
             </span>
             {item.password && (
               <>
@@ -102,6 +155,111 @@ export function ItemDetail({ item, canWrite, onEdit, onDelete, onCopy }: Props) 
           </div>
         )}
       </dl>
+
+      {facts && facts.versions > 0 && (
+        <section className="history">
+          <button className="history__toggle" onClick={onToggleHistory} aria-expanded={versions !== null}>
+            {facts.versions} earlier {facts.versions === 1 ? "version" : "versions"}
+          </button>
+
+          {versions !== null && (
+            <>
+              <ul className="history__list">
+                {versions.map((entry) => (
+                  // Keyed on the event: two versions can hold the same content,
+                  // and the canister cannot tell that they do — AES-GCM uses a
+                  // random IV, so identical plaintext encrypts differently.
+                  <li key={String(entry.seq)}>
+                    <div className="history__entry">
+                      <div className="history__title">{entry.item.title || "Untitled"}</div>
+                      {/*
+                        The password as it was, which is the point of keeping
+                        versions — a title and a timestamp cannot tell you
+                        whether this is the one you want back.
+                      */}
+                      <div className="history__secret">
+                        <span
+                          className={`field__value ${
+                            revealedVersion === entry.seq ? "field__value--mono" : "field__value--dots"
+                          }`}
+                        >
+                          {entry.item.password
+                            ? revealedVersion === entry.seq
+                              ? entry.item.password
+                              : mask(entry.item.password)
+                            : "no password"}
+                        </span>
+                        {entry.item.password && (
+                          <>
+                            <IconButton
+                              label={
+                                revealedVersion === entry.seq
+                                  ? "Hide this version's password"
+                                  : "Reveal this version's password"
+                              }
+                              onClick={() =>
+                                setRevealedVersion((current) => (current === entry.seq ? null : entry.seq))
+                              }
+                            >
+                              {revealedVersion === entry.seq ? <EyeOffIcon /> : <EyeIcon />}
+                            </IconButton>
+                            <IconButton
+                              label="Copy this version's password"
+                              onClick={() => onCopy("password", entry.item.password)}
+                            >
+                              <CopyIcon />
+                            </IconButton>
+                          </>
+                        )}
+                      </div>
+                      <code title={`Recorded by ${entry.by.toText()}`}>
+                        {entry.item.username ? `${entry.item.username} · ` : ""}
+                        {entry.kind === "Deleted" ? "deleted" : "replaced"}{" "}
+                        {new Date(entry.at).toLocaleString()} by {entry.by.toText().slice(0, 8)}…
+                      </code>
+                    </div>
+                    {canWrite && (
+                      <button
+                        className="btn btn--ghost btn--sm"
+                        onClick={() => onRestoreVersion(entry.seq)}
+                        disabled={busy}
+                      >
+                        Restore
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+
+              {isOwner &&
+                (confirmingDrop ? (
+                  <p className="history__confirm">
+                    Delete {facts.versions} stored {facts.versions === 1 ? "version" : "versions"} for
+                    good? The record of who changed this and when is kept.{" "}
+                    <button className="btn btn--danger btn--sm" onClick={onDropHistory} disabled={busy}>
+                      {busy ? "Working…" : "Delete versions"}
+                    </button>
+                    <button
+                      className="btn btn--ghost btn--sm"
+                      onClick={() => setConfirmingDrop(false)}
+                      disabled={busy}
+                    >
+                      Keep them
+                    </button>
+                  </p>
+                ) : (
+                  <button
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => setConfirmingDrop(true)}
+                    disabled={busy}
+                  >
+                    Delete stored versions
+                  </button>
+                ))}
+            </>
+          )}
+        </section>
+      )}
 
       {canWrite && (
         <footer className="detail__actions">

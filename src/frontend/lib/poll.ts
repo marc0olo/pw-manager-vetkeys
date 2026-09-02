@@ -68,7 +68,9 @@ export function pollUpdate(
       selectedItemId: outcome.selection.itemId,
       // Whatever was on screen is gone; do not leave an editor open on it.
       ...(itemChanged ? { pane: { mode: "view" as const } } : {}),
-      ...(outcome.refreshItems ? { openItems: null } : {}),
+      // Facts belong to the items being re-read, and `history` is decrypted
+      // versions of an item that may no longer be there.
+      ...(outcome.refreshItems ? { openItems: null, itemFacts: null, history: null } : {}),
     },
     notice: outcome.notice,
     movedVault: outcome.selection.vaultId !== wasOn,

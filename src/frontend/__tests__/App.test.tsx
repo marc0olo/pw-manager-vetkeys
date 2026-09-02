@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { ALICE, BOB, FakeClient, identityFor, item, trashed, vault } from "./harness";
+import { ALICE, BOB, FakeClient, fakeClipboard, identityFor, item, trashed, vault, version } from "./harness";
 import { toAccessRights, type AccessLevel } from "../lib/vault";
 
 /**
@@ -384,7 +384,7 @@ describe("trash in a shared vault", () => {
     // And says why, rather than showing a list with no explanation for the
     // missing buttons.
     expect(screen.getByText(/read-only access/i)).toBeInTheDocument();
-    expect(client.restoreItem).not.toHaveBeenCalled();
+    expect(client.restoreVersion).not.toHaveBeenCalled();
   });
 
   it("offers recovery to a member who can write", async () => {
@@ -397,7 +397,7 @@ describe("trash in a shared vault", () => {
 
     // The event, not the item id — a secret deleted, restored and deleted again
     // has several rows, so restoring by item id would pick an arbitrary one.
-    await waitFor(() => expect(client.restoreItem).toHaveBeenCalledWith(expect.anything(), 41n));
+    await waitFor(() => expect(client.restoreVersion).toHaveBeenCalledWith(expect.anything(), 41n));
   });
 });
 
@@ -704,5 +704,230 @@ describe("emptying the trash is the owner's, not a writer's", () => {
     expect(screen.getByRole("button", { name: /new item/i })).not.toBeDisabled();
     // And the dialog stays usable: restoring was never what was refused.
     expect(screen.getByRole("button", { name: /^restore$/i })).toBeInTheDocument();
+  });
+});
+
+describe("a secret's version history", () => {
+  const withVersions = (versions: ReturnType<typeof version>[], owned = true) =>
+    Object.assign(
+      new FakeClient(
+        ALICE,
+        [
+          owned
+            ? vault({ itemIds: ["a"] })
+            : vault({ owner: BOB, name: "Team infra", isOwned: false, rights: toAccessRights("ReadWrite"), itemIds: ["a"], fingerprint: "s" }),
+        ],
+        { [owned ? "Personal" : "Team infra"]: [item({ id: "a", title: "GitHub", password: "current" })] },
+      ),
+      { itemVersions: { a: versions } },
+    );
+
+  const openItem = async (client: FakeClient) => {
+    signedInAs(ALICE, client);
+    render(<App />);
+    fireEvent.click(await screen.findByText("GitHub"));
+    return screen.findByRole("button", { name: /^edit$/i });
+  };
+
+  it("says how many versions there are without fetching them", async () => {
+    const client = withVersions([
+      version({ item: item({ id: "a", title: "GitHub", password: "older" }) }),
+      version({ item: item({ id: "a", title: "GitHub", password: "oldest" }) }),
+    ]);
+    await openItem(client);
+
+    expect(await screen.findByRole("button", { name: /2 earlier versions/i })).toBeInTheDocument();
+    // The count comes with the vault; the ciphertext does not.
+    expect(client.versions).not.toHaveBeenCalled();
+  });
+
+  it("fetches and shows them when expanded", async () => {
+    const client = withVersions([version({ item: item({ id: "a", title: "Old GitHub name" }) })]);
+    await openItem(client);
+
+    fireEvent.click(screen.getByRole("button", { name: /1 earlier version/i }));
+
+    expect(await screen.findByText("Old GitHub name")).toBeInTheDocument();
+    expect(client.versions).toHaveBeenCalledTimes(1);
+  });
+
+  it("says nothing at all when a secret has never been changed", async () => {
+    const client = withVersions([]);
+    await openItem(client);
+
+    expect(screen.queryByRole("button", { name: /earlier version/i })).not.toBeInTheDocument();
+  });
+
+  it("restores a version by its event", async () => {
+    const client = withVersions([version({ seq: 77n, item: item({ id: "a", title: "Old GitHub name" }) })]);
+    await openItem(client);
+    fireEvent.click(screen.getByRole("button", { name: /1 earlier version/i }));
+    await screen.findByText("Old GitHub name");
+
+    fireEvent.click(screen.getByRole("button", { name: /^restore$/i }));
+
+    await waitFor(() => expect(client.restoreVersion).toHaveBeenCalledWith(expect.anything(), 77n));
+  });
+
+  it("shows the canister's timestamp, not the one inside the item", async () => {
+    // `updatedAt` lives in the plaintext and is written by whoever last saved
+    // the item, so it is the writer's to choose — the same shape of problem as
+    // `deleted_by` before the event log.
+    const client = withVersions([version({ item: item({ id: "a", title: "GitHub" }) })]);
+    client.items.set("Personal", [
+      item({ id: "a", title: "GitHub", updatedAt: Date.UTC(2001, 0, 1, 12, 0) }),
+    ]);
+    await openItem(client);
+
+    const stamp = screen.getByText(/^Updated /);
+    expect(stamp).toHaveTextContent("2026");
+    expect(stamp).not.toHaveTextContent("2001");
+  });
+
+  it("offers pruning to the owner only, and asks first", async () => {
+    const client = withVersions([version({ item: item({ id: "a", title: "Old" }) })]);
+    await openItem(client);
+    fireEvent.click(screen.getByRole("button", { name: /1 earlier version/i }));
+    await screen.findByText("Old");
+
+    fireEvent.click(screen.getByRole("button", { name: /delete stored versions/i }));
+    expect(client.dropHistory).not.toHaveBeenCalled();
+    // The record survives pruning, and saying so is the point of the copy.
+    expect(screen.getByText(/record of who changed this and when is kept/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /delete versions/i }));
+    await waitFor(() => expect(client.dropHistory).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not offer pruning to a writer who does not own the vault", async () => {
+    const client = withVersions([version({ item: item({ id: "a", title: "Old" }) })], false);
+    signedInAs(ALICE, client);
+    render(<App />);
+    fireEvent.click(await screen.findByText("GitHub"));
+    fireEvent.click(await screen.findByRole("button", { name: /1 earlier version/i }));
+    await screen.findByText("Old");
+
+    // Restoring is a writer's; making versions unrecoverable is the owner's.
+    expect(screen.getByRole("button", { name: /^restore$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /delete stored versions/i })).not.toBeInTheDocument();
+  });
+
+  it("does not show one item's versions under another", async () => {
+    const client = withVersions([version({ item: item({ id: "a", title: "Secret old name" }) })]);
+    client.items.set("Personal", [
+      item({ id: "a", title: "GitHub" }),
+      item({ id: "b", title: "Bank" }),
+    ]);
+    client.vaults = [vault({ itemIds: ["a", "b"] })];
+    signedInAs(ALICE, client);
+    render(<App />);
+    fireEvent.click(await screen.findByText("GitHub"));
+    fireEvent.click(await screen.findByRole("button", { name: /1 earlier version/i }));
+    expect(await screen.findByText("Secret old name")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Bank"));
+
+    // The list is keyed to the item it was read for, so switching cannot show
+    // it under a different secret. `history` is also cleared, but that is
+    // hygiene rather than a guarantee: `openItems` already holds every item in
+    // the vault decrypted, so nothing here is the last line of defence — the
+    // lock clearing the whole session is.
+    expect(screen.queryByText("Secret old name")).not.toBeInTheDocument();
+  });
+});
+
+describe("a version's password", () => {
+  const openHistory = async (versions: ReturnType<typeof version>[]) => {
+    const client = Object.assign(
+      new FakeClient(ALICE, [vault({ itemIds: ["a"] })], {
+        Personal: [item({ id: "a", title: "GitHub", password: "current-pw" })],
+      }),
+      { itemVersions: { a: versions } },
+    );
+    signedInAs(ALICE, client);
+    render(<App />);
+    fireEvent.click(await screen.findByText("GitHub"));
+    fireEvent.click(await screen.findByRole("button", { name: /earlier version/i }));
+    await screen.findAllByRole("button", { name: /reveal this version's password/i });
+    return client;
+  };
+
+  it("is masked until asked for", async () => {
+    await openHistory([version({ item: item({ id: "a", title: "GitHub", password: "old-secret" }) })]);
+
+    expect(screen.queryByText("old-secret")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /reveal this version's password/i }));
+
+    expect(screen.getByText("old-secret")).toBeInTheDocument();
+  });
+
+  it("hides again on its own, so it does not sit on screen", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = Object.assign(
+        new FakeClient(ALICE, [vault({ itemIds: ["a"] })], {
+          Personal: [item({ id: "a", title: "GitHub", password: "current-pw" })],
+        }),
+        { itemVersions: { a: [version({ item: item({ id: "a", title: "GitHub", password: "old-secret" }) })] } },
+      );
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      fireEvent.click(screen.getByText("GitHub"));
+      fireEvent.click(screen.getByRole("button", { name: /earlier version/i }));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      fireEvent.click(screen.getByRole("button", { name: /reveal this version's password/i }));
+      expect(screen.getByText("old-secret")).toBeInTheDocument();
+
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+
+      expect(screen.queryByText("old-secret")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows one at a time, so a list of passwords never accumulates", async () => {
+    await openHistory([
+      version({ seq: 90n, item: item({ id: "a", title: "GitHub", password: "newer-old" }) }),
+      version({ seq: 91n, item: item({ id: "a", title: "GitHub", password: "older-old" }) }),
+    ]);
+    const [first, second] = screen.getAllByRole("button", { name: /reveal this version's password/i });
+
+    fireEvent.click(first);
+    expect(screen.getByText("newer-old")).toBeInTheDocument();
+
+    fireEvent.click(second);
+
+    expect(screen.getByText("older-old")).toBeInTheDocument();
+    expect(screen.queryByText("newer-old")).not.toBeInTheDocument();
+  });
+
+  it("stops showing when the list is collapsed", async () => {
+    await openHistory([version({ item: item({ id: "a", title: "GitHub", password: "old-secret" }) })]);
+    fireEvent.click(screen.getByRole("button", { name: /reveal this version's password/i }));
+    expect(screen.getByText("old-secret")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /earlier version/i }));
+    fireEvent.click(screen.getByRole("button", { name: /earlier version/i }));
+
+    // Wait for the list to come back before asserting: expanding re-reads it,
+    // so asserting straight away would find nothing on screen either way and
+    // pass without proving the reveal was reset.
+    await screen.findByRole("button", { name: /reveal this version's password/i });
+    expect(screen.queryByText("old-secret")).not.toBeInTheDocument();
+  });
+
+  it("copies through the same path as the live one, so the clipboard still clears", async () => {
+    const board = fakeClipboard();
+    await openHistory([version({ item: item({ id: "a", title: "GitHub", password: "old-secret" }) })]);
+
+    fireEvent.click(screen.getByRole("button", { name: /copy this version's password/i }));
+
+    // The message is the tell that it went through `copySecret` rather than
+    // `copyPlain`: only the secret path schedules the clipboard to be cleared.
+    expect(await screen.findByText(/clipboard clears in/i)).toBeInTheDocument();
+    expect(board.text).toBe("old-secret");
   });
 });

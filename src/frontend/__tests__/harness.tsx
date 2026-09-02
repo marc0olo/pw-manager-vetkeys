@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 import { Principal } from "@icp-sdk/core/principal";
 import type { VaultItem } from "../lib/items";
-import type { TrashedItem, VaultSummary } from "../lib/vault";
+import type { ItemVersion, TrashedItem, VaultSummary } from "../lib/vault";
 
 export const ALICE = Principal.fromText("2ibo7-dia");
 export const BOB = Principal.fromText("aaaaa-aa");
@@ -73,7 +73,28 @@ export class FakeClient {
     if (this.refuse === "open") throw new Error("unauthorized");
     return this.trash;
   });
-  restoreItem = vi.fn(async (_vault: VaultSummary, _seq: bigint) => this.guard("write"));
+  restoreVersion = vi.fn(async (_vault: VaultSummary, _seq: bigint) => this.guard("write"));
+
+  /** Versions per item id, for the history section. */
+  itemVersions: Record<string, ItemVersion[]> = {};
+
+  itemSummaries = vi.fn(async () =>
+    Object.fromEntries(
+      Object.entries(this.itemVersions).map(([id, rows]) => [
+        id,
+        { versions: rows.length, updatedAt: rows[0]?.at ?? Date.UTC(2026, 0, 3, 11, 15) },
+      ]),
+    ),
+  );
+  versions = vi.fn(async (_vault: VaultSummary, itemId: string) => this.itemVersions[itemId] ?? []);
+  dropHistory = vi.fn(async (_vault: VaultSummary, itemId: string) => {
+    if (this.refuseDrop) throw new Error("unauthorized");
+    const dropped = (this.itemVersions[itemId] ?? []).length;
+    this.itemVersions[itemId] = [];
+    return dropped;
+  });
+  /** Owner-only on the canister, so it refuses independently of write access. */
+  refuseDrop = false;
   restoreAll = vi.fn(async () => {
     this.guard("write");
     return this.trash.length;
@@ -95,6 +116,14 @@ export class FakeClient {
   lock = vi.fn(async () => {});
 }
 
+export const version = (o: Partial<ItemVersion> & { item: VaultItem }): ItemVersion => ({
+  seq: nextSeq++,
+  at: Date.UTC(2026, 0, 3, 11, 15),
+  by: ALICE,
+  kind: "Edited",
+  ...o,
+});
+
 let nextSeq = 0n;
 export const trashed = (o: Partial<TrashedItem> & { item: VaultItem }): TrashedItem => ({
   seq: nextSeq++,
@@ -102,6 +131,27 @@ export const trashed = (o: Partial<TrashedItem> & { item: VaultItem }): TrashedI
   deletedBy: ALICE,
   ...o,
 });
+
+/**
+ * A clipboard, which jsdom does not provide.
+ *
+ * Returned so a test can assert what was written — copying a *version's*
+ * password must go through the same path as the live one, or the auto-clear in
+ * lib/clipboard.ts silently stops applying to it.
+ */
+export function fakeClipboard() {
+  const board = { text: "" };
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: vi.fn(async (text: string) => {
+        board.text = text;
+      }),
+      readText: vi.fn(async () => board.text),
+    },
+  });
+  return board;
+}
 
 /** A minimal Identity: `App` only ever asks for the principal. */
 export const identityFor = (principal: Principal) =>

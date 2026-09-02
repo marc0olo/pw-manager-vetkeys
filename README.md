@@ -45,11 +45,20 @@ password — the vault key is derived for your Internet Identity principal.
   involved. The dialog shows real titles — the ciphertext comes back with the
   listing and is decrypted in the browser under the key already cached from
   opening the vault, so a deleted item is recognisable rather than a timestamp.
-  - **Every version is kept.** Editing a secret records the value it replaced,
-    so an edit is recoverable and not only a deletion. Trash, version history
-    and the audit trail are one append-only log: a deletion is a version with
-    nothing after it. Nothing is ever moved, so a trashed secret keeps its
-    history and a recovered one keeps it too.
+  - **Every version is kept**, and shown. An item's detail pane says how many
+    earlier versions it has and expands to list them, newest first, with the
+    password as it was — masked until asked for, auto-hidden after 30 s, and
+    one at a time — plus who recorded each version and when. Any can be
+    restored, and copying an old password clears the clipboard on the same
+    timer as the live one. Restoring one keeps the value
+    it replaces, so nothing is lost by picking the wrong version. Trash,
+    version history and the audit trail are one append-only log: a deletion is
+    a version with nothing after it. Nothing is ever moved, so a trashed secret
+    keeps its history and a recovered one keeps it too.
+  - **"Updated" is the canister's timestamp**, not the item's own `updatedAt` —
+    that field lives inside the encrypted payload and is written by whoever
+    last saved the item, so it is the writer's to choose. A first write is
+    recorded too, so a secret nobody has edited still has an author and a time.
   - **Who sees it.** The log belongs to the vault: everyone who can read the
     vault reads it, and write access is what puts a version back. A member
     added later sees earlier versions — deliberate, since they can read the
@@ -58,7 +67,8 @@ password — the vault key is derived for your Internet Identity principal.
     Removing is the owner's: **Empty trash** makes a vault's deletions
     unrecoverable, and dropping a secret's history clears the stored
     ciphertext while keeping the events, so pruning cannot launder the record
-    of who changed what. Time is the only other remover — 90 days after a
+    of who changed what. Both are offered in the UI — Empty trash in the trash
+    view, Delete stored versions on the item. Time is the only other remover — 90 days after a
     deletion, the secret and its history go together.
   - **The share dialog** says how much a grantee would inherit, so the trade is
     stated where the decision is made.
@@ -204,10 +214,26 @@ icp deploy                    # builds the canister and the frontend, then syncs
 
 `icp deploy` prints the frontend URL: `http://frontend.local.localhost:8100/`.
 
-> If it stops with **`Candid compatibility check failed`**, the interface changed
-> in a way an upgrade cannot carry. `icp deploy --mode reinstall -y` reinstalls
-> and **drops every stored secret** — fine while developing locally, never on a
-> canister holding data anyone wants.
+> **`Candid compatibility check failed`** is not a reason to reinstall. Two
+> different things can block a deploy and only one of them loses data:
+>
+> - **The Candid interface is no longer a subtype** — a method was removed or
+>   renamed, or a signature changed. That breaks *clients*, not stored state.
+>   `icp deploy --mode upgrade -y` accepts the break and keeps every secret.
+> - **The stable signature is incompatible** — the type of a stable variable
+>   changed in a way an upgrade cannot carry. Only this needs a migration, or
+>   `icp deploy --mode reinstall -y`, which **drops every stored secret**.
+>
+> They look the same from the error, so check rather than guess. `mops check`
+> writes the stable signature to `.mops/.build/backend.most`; compare the
+> deployed version's against the new one:
+>
+> ```bash
+> moc --stable-compatible old.most new.most   # exit 0 means an upgrade is safe
+> ```
+>
+> Reading a Candid failure as a state incompatibility has cost this project a
+> wrong instruction twice, in both directions.
 
 ```bash
 npm test                      # unit tests and component transitions (no replica needed)
