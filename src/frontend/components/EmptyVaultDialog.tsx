@@ -11,11 +11,11 @@ interface Props {
 /**
  * Typed confirmation for emptying a vault.
  *
- * A plain `confirm()` is not enough here. This removes every item in one call,
- * there is no trash to recover from yet (#8), and because `remove_map_values`
- * is guarded by `ensureUserCanWrite`, any `ReadWrite` collaborator can do it to
- * a vault they do not own. Typing the name is the cheapest way to make it
- * deliberate rather than a mis-click.
+ * A plain `confirm()` is not enough even now that it is recoverable: this
+ * removes every item in one call, and because `remove_map_values` is guarded by
+ * `ensureUserCanWrite`, any `ReadWrite` collaborator can do it to a vault they
+ * do not own. Typing the name makes it deliberate rather than a mis-click; the
+ * trash is what makes it survivable.
  */
 export function EmptyVaultDialog({ vault, busy, onConfirm, onClose }: Props) {
   const [typed, setTyped] = useState("");
@@ -37,7 +37,8 @@ export function EmptyVaultDialog({ vault, busy, onConfirm, onClose }: Props) {
           <strong>
             all {count} item{count === 1 ? "" : "s"}
           </strong>{" "}
-          in this vault. There is no undo and no trash — the secrets are gone.
+          in this vault. They move to the trash and can be restored for 90 days,
+          after which they are gone for good.
         </p>
 
         <p className="modal__lede">

@@ -24,16 +24,26 @@ export type Result = { 'Ok' : null } |
   { 'Err' : string };
 export type Result_1 = { 'Ok' : [] | [AccessRights] } |
   { 'Err' : string };
-export type Result_2 = { 'Ok' : Array<ByteBuf> } |
+export type Result_2 = { 'Ok' : bigint } |
   { 'Err' : string };
-export type Result_3 = { 'Ok' : [] | [ByteBuf] } |
+export type Result_3 = { 'Ok' : Array<ByteBuf> } |
   { 'Err' : string };
-export type Result_4 = { 'Ok' : Array<[Principal, AccessRights]> } |
+export type Result_4 = { 'Ok' : [] | [ByteBuf] } |
   { 'Err' : string };
-export type Result_5 = { 'Ok' : ByteBuf } |
+export type Result_5 = { 'Ok' : Array<TrashedItem> } |
   { 'Err' : string };
-export type Result_6 = { 'Ok' : Array<[ByteBuf, ByteBuf]> } |
+export type Result_6 = { 'Ok' : Array<[Principal, AccessRights]> } |
   { 'Err' : string };
+export type Result_7 = { 'Ok' : ByteBuf } |
+  { 'Err' : string };
+export type Result_8 = { 'Ok' : Array<[ByteBuf, ByteBuf]> } |
+  { 'Err' : string };
+export interface TrashedItem {
+  'value' : ByteBuf,
+  'map_key' : ByteBuf,
+  'deleted_at' : bigint,
+  'deleted_by' : Principal,
+}
 export interface VaultName {
   'owner' : Principal,
   'display_name' : string,
@@ -43,6 +53,7 @@ export interface VaultSummary {
   'owner' : Principal,
   'item_keys' : Array<ByteBuf>,
   'access_control' : Array<[Principal, AccessRights]>,
+  'trashed' : bigint,
   'digest' : ByteBuf,
   'map_name' : ByteBuf,
 }
@@ -59,14 +70,25 @@ export interface _SERVICE {
     [],
     Array<[[Principal, ByteBuf], Array<[ByteBuf, ByteBuf]>]>
   >,
-  'get_encrypted_value' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_3>,
-  'get_encrypted_values_for_map' : ActorMethod<[Principal, ByteBuf], Result_6>,
-  'get_encrypted_vetkey' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_5>,
+  'get_encrypted_value' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_4>,
+  'get_encrypted_values_for_map' : ActorMethod<[Principal, ByteBuf], Result_8>,
+  'get_encrypted_vetkey' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_7>,
   'get_owned_non_empty_map_names' : ActorMethod<[], Array<ByteBuf>>,
   'get_shared_user_access_for_map' : ActorMethod<
     [Principal, ByteBuf],
-    Result_4
+    Result_6
   >,
+  /**
+   * / What is recoverable in one vault, with each item's ciphertext so a client
+   * / can show what it was rather than only when it went. See `TrashedItem` for
+   * / why returning values here is not the thing #14 removed from the poll.
+   * /
+   * / Visible to the vault's owner, and to whoever deleted the entry. Not to
+   * / every reader: a collaborator added *after* a deletion would otherwise be
+   * / shown a secret that was destroyed before they had any access to it, which
+   * / permanent deletion never allowed.
+   */
+  'get_trash' : ActorMethod<[Principal, ByteBuf], Result_5>,
   'get_user_rights' : ActorMethod<[Principal, ByteBuf, Principal], Result_1>,
   /**
    * / Display names for every vault the caller can see, owned and shared.
@@ -81,14 +103,23 @@ export interface _SERVICE {
   'get_vetkey_verification_key' : ActorMethod<[], ByteBuf>,
   'insert_encrypted_value' : ActorMethod<
     [Principal, ByteBuf, ByteBuf, ByteBuf],
-    Result_3
+    Result_4
   >,
   'remove_encrypted_value' : ActorMethod<
     [Principal, ByteBuf, ByteBuf],
-    Result_3
+    Result_4
   >,
-  'remove_map_values' : ActorMethod<[Principal, ByteBuf], Result_2>,
+  'remove_map_values' : ActorMethod<[Principal, ByteBuf], Result_3>,
   'remove_user' : ActorMethod<[Principal, ByteBuf, Principal], Result_1>,
+  /**
+   * / Put one item back. Authorization is the library's: this is an insert, so a
+   * / caller without write rights is refused there and the entry stays put.
+   */
+  'restore_trashed_value' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result>,
+  /**
+   * / Put a whole vault back, for undoing a wipe without one call per item.
+   */
+  'restore_trashed_values' : ActorMethod<[Principal, ByteBuf], Result_2>,
   'set_user_rights' : ActorMethod<
     [Principal, ByteBuf, Principal, AccessRights],
     Result_1

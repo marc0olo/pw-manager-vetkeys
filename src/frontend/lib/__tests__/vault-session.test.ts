@@ -43,6 +43,7 @@ describe("NO_VAULT_SESSION", () => {
     expect(NO_VAULT_SESSION.sharing).toBe(false);
     expect(NO_VAULT_SESSION.wiping).toBe(false);
     expect(NO_VAULT_SESSION.renaming).toBe(false);
+    expect(NO_VAULT_SESSION.trash).toBeNull();
   });
 
   /**
@@ -75,6 +76,7 @@ describe("NO_VAULT_SESSION", () => {
       "selectedVaultId",
       "sharing",
       "syncedAt",
+      "trash",
       "vaults",
       "wiping",
     ]);

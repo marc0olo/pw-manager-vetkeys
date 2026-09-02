@@ -12,6 +12,7 @@ const summary = (o: Partial<VaultSummary> = {}): VaultSummary => ({
   sharedWith: [],
   itemIds: [],
   fingerprint: "f0",
+  trashed: 0,
   ...o,
 });
 
