@@ -21,11 +21,12 @@ import {
   type Vault,
 } from "./lib/vault";
 import {
+  type Attempted,
+  isCapability,
   offers,
   refusalMessage,
   verdictFor,
   withDenial,
-  type Capability,
 } from "./lib/capabilities";
 import { pollUpdate } from "./lib/poll";
 import { createLoadGuard, NO_VAULT_SESSION, type VaultSessionState } from "./lib/vault-session";
@@ -149,6 +150,19 @@ export function App() {
           setError(null);
         }
         if (outcome.notice) notify(outcome.notice);
+        if (outcome.refreshTrash) {
+          // Someone else changed this vault's trash while the dialog is open.
+          // A second read, guarded by the same load token: the dialog must not
+          // be repopulated after a lock, and a value that arrives late is not
+          // ours to write.
+          const vault = vaultStateRef.current.vaults?.find(
+            (candidate) => vaultId(candidate) === vaultStateRef.current.selectedVaultId,
+          );
+          if (vault) {
+            const rows = await client.listTrash(vault);
+            if (current()) patch({ trash: rows });
+          }
+        }
       } catch (caught) {
         // A failed poll is not worth a banner; the next one will retry.
         if (!quiet) setError(message(caught));
@@ -165,7 +179,7 @@ export function App() {
       success?: string,
       // What was attempted, so a refusal can be learned from rather than shown
       // as a raw error. Omitted for actions that cannot be refused on rights.
-      attempt?: { vault: string; capability: Capability },
+      attempt?: { vault: string; capability: Attempted },
     ) => {
       setBusy(true);
       setError(null);
@@ -185,13 +199,19 @@ export function App() {
         const refusal = attempt ? refusalMessage(caught, attempt.capability) : null;
         if (attempt && refusal) {
           patch({
-            denials: withDenial(vaultStateRef.current.denials, attempt.vault, attempt.capability),
+            // Only a capability is worth remembering. Filing anything else
+            // against the vault would withdraw a control the user has — an
+            // ownership refusal recorded as a write denial is what disabled
+            // adding items after a non-owner tried to empty the trash.
+            ...(isCapability(attempt.capability)
+              ? { denials: withDenial(vaultStateRef.current.denials, attempt.vault, attempt.capability) }
+              : {}),
             // Close whatever was open to do the thing that was just refused: an
             // editor that can no longer save, or a dialog whose buttons are now
-            // all dead ends, is worse than no dialog at all.
-            ...(attempt.capability === "write"
-              ? { pane: { mode: "view" as const }, wiping: false }
-              : { sharing: false }),
+            // all dead ends, is worse than no dialog at all. An owner-only
+            // refusal closes nothing — the rest of that dialog still works.
+            ...(attempt.capability === "write" ? { pane: { mode: "view" as const }, wiping: false } : {}),
+            ...(attempt.capability === "manage" ? { sharing: false } : {}),
           });
           notify(refusal);
           return;
@@ -571,11 +591,12 @@ export function App() {
           items={trash}
           busy={busy}
           canRestore={writable}
+          canEmpty={vault.isOwned}
           onClose={() => patch({ trash: null })}
-          onRestore={(itemId) =>
+          onRestore={(seq) =>
             void run(
               async () => {
-                await client!.restoreItem(vault, itemId);
+                await client!.restoreItem(vault, seq);
                 patch({ trash: await client!.listTrash(vault), openItems: null });
               },
               "Item restored",
@@ -589,7 +610,10 @@ export function App() {
                 patch({ trash: null });
               },
               "Trash emptied",
-              { vault: vaultId(vault), capability: "write" },
+              // Owner-only, and ownership is known locally — so this is a
+              // label for a refusal that should never arrive, not a capability
+              // to be discovered.
+              { vault: vaultId(vault), capability: "own" },
             )
           }
           onRestoreAll={() =>

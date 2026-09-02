@@ -23,16 +23,30 @@ export const idlFactory = ({ IDL }) => {
     'map_owner' : IDL.Principal,
   });
   const Result_4 = IDL.Variant({ 'Ok' : IDL.Opt(ByteBuf), 'Err' : IDL.Text });
-  const Result_8 = IDL.Variant({
+  const Result_9 = IDL.Variant({
     'Ok' : IDL.Vec(IDL.Tuple(ByteBuf, ByteBuf)),
     'Err' : IDL.Text,
   });
-  const Result_7 = IDL.Variant({ 'Ok' : ByteBuf, 'Err' : IDL.Text });
+  const Result_8 = IDL.Variant({ 'Ok' : ByteBuf, 'Err' : IDL.Text });
+  const VersionKind = IDL.Variant({
+    'Edited' : IDL.Null,
+    'Restored' : IDL.Null,
+    'Deleted' : IDL.Null,
+  });
+  const Version = IDL.Record({
+    'at' : IDL.Nat64,
+    'by' : IDL.Principal,
+    'seq' : IDL.Nat64,
+    'value' : IDL.Opt(ByteBuf),
+    'kind' : VersionKind,
+  });
+  const Result_7 = IDL.Variant({ 'Ok' : IDL.Vec(Version), 'Err' : IDL.Text });
   const Result_6 = IDL.Variant({
     'Ok' : IDL.Vec(IDL.Tuple(IDL.Principal, AccessRights)),
     'Err' : IDL.Text,
   });
   const TrashedItem = IDL.Record({
+    'seq' : IDL.Nat64,
     'value' : ByteBuf,
     'map_key' : ByteBuf,
     'deleted_at' : IDL.Nat64,
@@ -52,6 +66,7 @@ export const idlFactory = ({ IDL }) => {
     'map_name' : ByteBuf,
   });
   const VaultSummary = IDL.Record({
+    'trash_digest' : ByteBuf,
     'owner' : IDL.Principal,
     'item_keys' : IDL.Vec(ByteBuf),
     'access_control' : IDL.Vec(IDL.Tuple(IDL.Principal, AccessRights)),
@@ -65,6 +80,11 @@ export const idlFactory = ({ IDL }) => {
   
   return IDL.Service({
     'discard_trash' : IDL.Func([IDL.Principal, ByteBuf], [Result_2], []),
+    'drop_history' : IDL.Func(
+        [IDL.Principal, ByteBuf, ByteBuf],
+        [Result_2],
+        [],
+      ),
     'get_accessible_shared_map_names' : IDL.Func(
         [],
         [IDL.Vec(IDL.Tuple(IDL.Principal, ByteBuf))],
@@ -94,13 +114,18 @@ export const idlFactory = ({ IDL }) => {
       ),
     'get_encrypted_values_for_map' : IDL.Func(
         [IDL.Principal, ByteBuf],
-        [Result_8],
+        [Result_9],
         ['query'],
       ),
     'get_encrypted_vetkey' : IDL.Func(
         [IDL.Principal, ByteBuf, ByteBuf],
-        [Result_7],
+        [Result_8],
         [],
+      ),
+    'get_history' : IDL.Func(
+        [IDL.Principal, ByteBuf, ByteBuf],
+        [Result_7],
+        ['query'],
       ),
     'get_owned_non_empty_map_names' : IDL.Func(
         [],
@@ -138,7 +163,7 @@ export const idlFactory = ({ IDL }) => {
         [],
       ),
     'restore_trashed_value' : IDL.Func(
-        [IDL.Principal, ByteBuf, ByteBuf],
+        [IDL.Principal, ByteBuf, IDL.Nat64],
         [Result],
         [],
       ),

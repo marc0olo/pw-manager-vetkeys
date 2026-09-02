@@ -25,6 +25,7 @@ export const vault = (o: Partial<VaultSummary> = {}): VaultSummary => ({
   itemIds: [],
   fingerprint: "f0",
   trashed: 0,
+  trashFingerprint: "t0",
   ...o,
 });
 
@@ -41,6 +42,12 @@ export class FakeClient {
   items: Map<string, VaultItem[]>;
   /** Set to make the next mutation refuse, as a revoked grantee would see. */
   refuse: "none" | "write" | "manage" | "open" = "none";
+  /**
+   * Whether `discardTrash` refuses. Separate from {@link refuse} on purpose:
+   * the canister gates it on ownership, which is not one of the capabilities
+   * the UI discovers by attempting.
+   */
+  refuseDiscard = false;
 
   constructor(me: Principal, vaults: VaultSummary[], items: Record<string, VaultItem[]> = {}) {
     this.me = me;
@@ -66,12 +73,13 @@ export class FakeClient {
     if (this.refuse === "open") throw new Error("unauthorized");
     return this.trash;
   });
-  restoreItem = vi.fn(async () => this.guard("write"));
+  restoreItem = vi.fn(async (_vault: VaultSummary, _seq: bigint) => this.guard("write"));
   restoreAll = vi.fn(async () => {
     this.guard("write");
     return this.trash.length;
   });
   discardTrash = vi.fn(async () => {
+    if (this.refuseDiscard) throw new Error("unauthorized");
     this.guard("write");
     const dropped = this.trash.length;
     this.trash = [];
@@ -87,7 +95,9 @@ export class FakeClient {
   lock = vi.fn(async () => {});
 }
 
+let nextSeq = 0n;
 export const trashed = (o: Partial<TrashedItem> & { item: VaultItem }): TrashedItem => ({
+  seq: nextSeq++,
   deletedAt: Date.UTC(2026, 0, 2, 9, 30),
   deletedBy: ALICE,
   ...o,

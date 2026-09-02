@@ -12,7 +12,13 @@ interface Props {
    * buttons rather than buttons that would be refused.
    */
   canRestore: boolean;
-  onRestore: (itemId: string) => void;
+  /**
+   * Whether to offer emptying it. The owner's alone — a writer can put versions
+   * back but not make them unrecoverable, so this is not the same permission as
+   * restoring and must not be gated on it.
+   */
+  canEmpty: boolean;
+  onRestore: (seq: bigint) => void;
   onRestoreAll: () => void;
   onDiscardAll: () => void;
   onClose: () => void;
@@ -21,7 +27,7 @@ interface Props {
 const when = (at: number) =>
   new Date(at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-/** 90 days from deletion, matching `RETENTION_NS` in lib/Trash.mo. */
+/** 90 days from deletion, matching `RETENTION_NS` in lib/History.mo. */
 const recoverableUntil = (at: number) => when(at + 90 * 24 * 60 * 60 * 1000);
 
 export function TrashDialog({
@@ -29,6 +35,7 @@ export function TrashDialog({
   items,
   busy,
   canRestore,
+  canEmpty,
   onRestore,
   onRestoreAll,
   onDiscardAll,
@@ -61,8 +68,10 @@ export function TrashDialog({
               deleting again.
             */}
             <ul className="shareList">
-              {items.map(({ item, deletedAt, deletedBy }) => (
-                <li key={item.id}>
+              {items.map(({ seq, item, deletedAt, deletedBy }) => (
+                // Keyed on the event, not the item: one secret deleted, restored
+                // and deleted again appears twice.
+                <li key={String(seq)}>
                   <div>
                     <div>{item.title || "Untitled"}</div>
                     <code title={`Recoverable until ${recoverableUntil(deletedAt)}`}>
@@ -71,7 +80,7 @@ export function TrashDialog({
                     </code>
                   </div>
                   {canRestore && (
-                    <button className="btn btn--ghost btn--sm" onClick={() => onRestore(item.id)} disabled={busy}>
+                    <button className="btn btn--ghost btn--sm" onClick={() => onRestore(seq)} disabled={busy}>
                       Restore
                     </button>
                   )}
@@ -88,7 +97,7 @@ export function TrashDialog({
         )}
 
         <footer className="modal__actions">
-          {canRestore && items.length > 0 && !confirming && (
+          {canEmpty && items.length > 0 && !confirming && (
             <button className="btn btn--danger btn--sm" onClick={() => setConfirming(true)} disabled={busy}>
               Empty trash
             </button>

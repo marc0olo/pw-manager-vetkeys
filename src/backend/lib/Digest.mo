@@ -42,4 +42,37 @@ module {
     };
     digest.sum();
   };
+
+  /// SHA-256 over a trash listing: which secrets are in it, and which version
+  /// of each.
+  ///
+  /// The sequence number is enough to stand for the value: **no listed row's
+  /// `seq` can ever come to name different ciphertext.** Events are append-only,
+  /// so a `seq` is never rewritten, and the one operation that clears a value —
+  /// the owner dropping a secret's history — takes the row out of the listing
+  /// rather than changing it, because `History.trash` only yields a group whose
+  /// newest event still carries a value. Either way the row set moves, so the
+  /// digest moves.
+  ///
+  /// Hashing the seq rather than the ciphertext is what keeps this cheap enough
+  /// to run on the poll path.
+  ///
+  /// Framed and sorted for the same reasons as {@link ofKeyvals}.
+  public func ofTrash(rows : [(Blob, Nat64)]) : Blob {
+    let sorted = Array.sort<(Blob, Nat64)>(
+      rows,
+      func(a, b) {
+        let byKey = Blob.compare(a.0, b.0);
+        if (byKey != #equal) byKey else Nat64.compare(a.1, b.1);
+      },
+    );
+    let digest = Sha256.new();
+    for ((mapKey, seq) in sorted.values()) {
+      writeFramed(digest, mapKey);
+      digest.writeArray(
+        Array.tabulate<Nat8>(8, func(i) { Nat.toNat8(Nat64.toNat((seq >> Nat.toNat64(8 * (7 - i))) & 0xFF)) })
+      );
+    };
+    digest.sum();
+  };
 };

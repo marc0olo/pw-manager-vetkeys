@@ -24,6 +24,7 @@ function vault(overrides: Partial<VaultSummary> = {}): VaultSummary {
     itemIds: [],
     fingerprint: "f0",
     trashed: 0,
+  trashFingerprint: "t0",
     ...overrides,
   };
 }

@@ -352,8 +352,8 @@ describe("trash in a shared vault", () => {
         ),
         {
           trash: [
-            trashed({ item: item({ id: "gone", title: "Old root password" }) }),
-            trashed({ item: item({ id: "gone2", title: "Retired API key" }), deletedBy: BOB }),
+            trashed({ seq: 41n, item: item({ id: "gone", title: "Old root password" }) }),
+            trashed({ seq: 42n, item: item({ id: "gone2", title: "Retired API key" }), deletedBy: BOB }),
           ],
         },
       ),
@@ -394,7 +394,10 @@ describe("trash in a shared vault", () => {
     fireEvent.click(await screen.findByRole("button", { name: /2 deleted/i }));
 
     fireEvent.click((await screen.findAllByRole("button", { name: /^restore$/i }))[0]);
-    await waitFor(() => expect(client.restoreItem).toHaveBeenCalled());
+
+    // The event, not the item id — a secret deleted, restored and deleted again
+    // has several rows, so restoring by item id would pick an arbitrary one.
+    await waitFor(() => expect(client.restoreItem).toHaveBeenCalledWith(expect.anything(), 41n));
   });
 });
 
@@ -557,5 +560,149 @@ describe("deleting one item", () => {
     const dialog = await screen.findByRole("dialog", { name: /delete github/i });
     fireEvent.click(within(dialog).getByRole("button", { name: /^delete$/i }));
     await waitFor(() => expect(client.deleteItem).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("someone else changes the trash while the dialog is open", () => {
+  // The count alone cannot drive this: restore one item and delete another and
+  // it is unchanged while the contents differ. The summary carries a
+  // fingerprint so the poll can tell, without ciphertext riding the poll (#14).
+  const clientWith = (fingerprint: string, title: string) =>
+    Object.assign(
+      new FakeClient(ALICE, [vault({ itemIds: ["a"], trashed: 1, trashFingerprint: fingerprint })], {
+        Personal: [item({ id: "a", title: "GitHub" })],
+      }),
+      { trash: [trashed({ item: item({ id: "d0", title }) })] },
+    );
+
+  // Fake timers before render: the interval is scheduled during the effect, and
+  // one created with the real timer is not advanced by a fake clock swapped in
+  // afterwards.
+  const onFakeTimers = async (body: () => Promise<void>) => {
+    vi.useFakeTimers();
+    try {
+      await body();
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+  const settle = () => act(() => vi.advanceTimersByTimeAsync(0));
+  const poll = () => act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+
+  it("re-reads the list when the fingerprint moves", async () =>
+    onFakeTimers(async () => {
+      const client = clientWith("t-before", "Old password");
+      signedInAs(ALICE, client);
+      render(<App />);
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: /1 deleted/i }));
+      await settle();
+      expect(screen.getByText("Old password")).toBeInTheDocument();
+
+      // A different person deleted something else. Same count, new contents.
+      client.vaults = [vault({ itemIds: ["a"], trashed: 1, trashFingerprint: "t-after" })];
+      client.trash = [trashed({ item: item({ id: "d1", title: "Someone else's deletion" }) })];
+      await poll();
+
+      expect(screen.getByText("Someone else's deletion")).toBeInTheDocument();
+      expect(screen.queryByText("Old password")).not.toBeInTheDocument();
+    }));
+
+  it("does not re-read when nothing changed", async () =>
+    onFakeTimers(async () => {
+      const client = clientWith("t-same", "Old password");
+      signedInAs(ALICE, client);
+      render(<App />);
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: /1 deleted/i }));
+      await settle();
+      const before = client.listTrash.mock.calls.length;
+
+      await poll();
+
+      // Ciphertext must not be fetched on a timer just because a dialog is open.
+      expect(client.listTrash.mock.calls.length).toBe(before);
+    }));
+
+  it("does not fetch the trash at all while the dialog is closed", async () =>
+    onFakeTimers(async () => {
+      const client = clientWith("t-before", "Old password");
+      signedInAs(ALICE, client);
+      render(<App />);
+      await settle();
+
+      client.vaults = [vault({ itemIds: ["a"], trashed: 1, trashFingerprint: "t-after" })];
+      await poll();
+
+      expect(client.listTrash).not.toHaveBeenCalled();
+    }));
+});
+
+describe("emptying the trash is the owner's, not a writer's", () => {
+  // Reported from manual testing as a `ReadWrite` grantee: Empty trash was
+  // offered, the canister refused it, and the "+" button then went dead — the
+  // ownership refusal had been filed as a *write* denial. A reload cleared it,
+  // because denials are session-scoped.
+  const sharedWithWrite = (trash: ReturnType<typeof trashed>[]) =>
+    Object.assign(
+      new FakeClient(
+        ALICE,
+        [
+          vault({
+            owner: BOB,
+            name: "Team infra",
+            isOwned: false,
+            rights: toAccessRights("ReadWrite"),
+            itemIds: ["x"],
+            trashed: trash.length,
+            fingerprint: "s",
+          }),
+        ],
+        { "Team infra": [item({ id: "x", title: "Grafana" })] },
+      ),
+      { trash },
+    );
+
+  const openTrash = async (client: FakeClient) => {
+    signedInAs(ALICE, client);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /1 deleted/i }));
+    return screen.findByText("Owner's deletion");
+  };
+
+  it("is not offered to a writer who does not own the vault", async () => {
+    const client = sharedWithWrite([trashed({ item: item({ id: "d0", title: "Owner's deletion" }), deletedBy: BOB })]);
+    await openTrash(client);
+
+    // Restoring is a writer's; making it unrecoverable is not.
+    expect(screen.getByRole("button", { name: /^restore$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^empty trash$/i })).not.toBeInTheDocument();
+  });
+
+  it("does not disable writing when the canister refuses it", async () => {
+    // Driven through the owner, because after the gate above a non-owner can no
+    // longer reach the button — and the point of this test is the *refusal*
+    // path, not the gate. A refusal can still arrive: ownership is read from a
+    // poll that may be a few seconds old.
+    const client = Object.assign(
+      new FakeClient(ALICE, [vault({ itemIds: ["a"], trashed: 1 })], {
+        Personal: [item({ id: "a", title: "GitHub" })],
+      }),
+      { trash: [trashed({ item: item({ id: "d0", title: "Owner's deletion" }) })], refuseDiscard: true },
+    );
+    signedInAs(ALICE, client);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /1 deleted/i }));
+    await screen.findByText("Owner's deletion");
+
+    fireEvent.click(screen.getByRole("button", { name: /^empty trash$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /delete permanently/i }));
+
+    expect(await screen.findByText(/only the vault's owner/i)).toBeInTheDocument();
+    // The cascade. Ownership is not a capability, so refusing it must not be
+    // remembered against write — that is what killed the "+" button.
+    expect(screen.getByRole("button", { name: /new item/i })).not.toBeDisabled();
+    // And the dialog stays usable: restoring was never what was refused.
+    expect(screen.getByRole("button", { name: /^restore$/i })).toBeInTheDocument();
   });
 });

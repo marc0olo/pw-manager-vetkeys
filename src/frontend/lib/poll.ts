@@ -1,5 +1,5 @@
 import { reconcile } from "./reconcile";
-import { defaultVaultId, type VaultSummary } from "./vault";
+import { defaultVaultId, vaultId, type VaultSummary } from "./vault";
 import type { VaultSessionState } from "./vault-session";
 
 export interface PollOutcome {
@@ -9,6 +9,15 @@ export interface PollOutcome {
   notice: string | null;
   /** The poll moved the user off the vault they were on. */
   movedVault: boolean;
+  /**
+   * The open trash dialog is showing a stale list and must be re-read.
+   *
+   * Separate from the patch because the list is ciphertext the poll does not
+   * carry: the summary's fingerprint says whether it changed, and only then
+   * does anything fetch it (#14). Without this, a second person deleting an
+   * item leaves the first person's open dialog wrong until they close it.
+   */
+  refreshTrash: boolean;
 }
 
 /**
@@ -42,6 +51,15 @@ export function pollUpdate(
   // as one would clear an error banner that still applies.
   const wasOn = before.selectedVaultId ?? defaultVaultId(before.vaults ?? []);
   const itemChanged = outcome.selection.itemId !== before.selectedItemId;
+
+  // Compared on the vault that stays selected, and only while the dialog is
+  // open — `trash` is null when it is closed, and re-reading then would fetch
+  // ciphertext nobody is looking at.
+  const staying = outcome.selection.vaultId;
+  const fingerprintOf = (vaults: VaultSummary[]) =>
+    vaults.find((vault) => vaultId(vault) === staying)?.trashFingerprint;
+  const refreshTrash =
+    before.trash !== null && fingerprintOf(next) !== fingerprintOf(before.vaults ?? []);
   return {
     patch: {
       vaults: next,
@@ -54,5 +72,6 @@ export function pollUpdate(
     },
     notice: outcome.notice,
     movedVault: outcome.selection.vaultId !== wasOn,
+    refreshTrash,
   };
 }
