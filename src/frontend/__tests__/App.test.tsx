@@ -637,3 +637,72 @@ describe("someone else changes the trash while the dialog is open", () => {
       expect(client.listTrash).not.toHaveBeenCalled();
     }));
 });
+
+describe("emptying the trash is the owner's, not a writer's", () => {
+  // Reported from manual testing as a `ReadWrite` grantee: Empty trash was
+  // offered, the canister refused it, and the "+" button then went dead — the
+  // ownership refusal had been filed as a *write* denial. A reload cleared it,
+  // because denials are session-scoped.
+  const sharedWithWrite = (trash: ReturnType<typeof trashed>[]) =>
+    Object.assign(
+      new FakeClient(
+        ALICE,
+        [
+          vault({
+            owner: BOB,
+            name: "Team infra",
+            isOwned: false,
+            rights: toAccessRights("ReadWrite"),
+            itemIds: ["x"],
+            trashed: trash.length,
+            fingerprint: "s",
+          }),
+        ],
+        { "Team infra": [item({ id: "x", title: "Grafana" })] },
+      ),
+      { trash },
+    );
+
+  const openTrash = async (client: FakeClient) => {
+    signedInAs(ALICE, client);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /1 deleted/i }));
+    return screen.findByText("Owner's deletion");
+  };
+
+  it("is not offered to a writer who does not own the vault", async () => {
+    const client = sharedWithWrite([trashed({ item: item({ id: "d0", title: "Owner's deletion" }), deletedBy: BOB })]);
+    await openTrash(client);
+
+    // Restoring is a writer's; making it unrecoverable is not.
+    expect(screen.getByRole("button", { name: /^restore$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^empty trash$/i })).not.toBeInTheDocument();
+  });
+
+  it("does not disable writing when the canister refuses it", async () => {
+    // Driven through the owner, because after the gate above a non-owner can no
+    // longer reach the button — and the point of this test is the *refusal*
+    // path, not the gate. A refusal can still arrive: ownership is read from a
+    // poll that may be a few seconds old.
+    const client = Object.assign(
+      new FakeClient(ALICE, [vault({ itemIds: ["a"], trashed: 1 })], {
+        Personal: [item({ id: "a", title: "GitHub" })],
+      }),
+      { trash: [trashed({ item: item({ id: "d0", title: "Owner's deletion" }) })], refuseDiscard: true },
+    );
+    signedInAs(ALICE, client);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /1 deleted/i }));
+    await screen.findByText("Owner's deletion");
+
+    fireEvent.click(screen.getByRole("button", { name: /^empty trash$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /delete permanently/i }));
+
+    expect(await screen.findByText(/only the vault's owner/i)).toBeInTheDocument();
+    // The cascade. Ownership is not a capability, so refusing it must not be
+    // remembered against write — that is what killed the "+" button.
+    expect(screen.getByRole("button", { name: /new item/i })).not.toBeDisabled();
+    // And the dialog stays usable: restoring was never what was refused.
+    expect(screen.getByRole("button", { name: /^restore$/i })).toBeInTheDocument();
+  });
+});

@@ -12,6 +12,12 @@ interface Props {
    * buttons rather than buttons that would be refused.
    */
   canRestore: boolean;
+  /**
+   * Whether to offer emptying it. The owner's alone — a writer can put versions
+   * back but not make them unrecoverable, so this is not the same permission as
+   * restoring and must not be gated on it.
+   */
+  canEmpty: boolean;
   onRestore: (seq: bigint) => void;
   onRestoreAll: () => void;
   onDiscardAll: () => void;
@@ -29,6 +35,7 @@ export function TrashDialog({
   items,
   busy,
   canRestore,
+  canEmpty,
   onRestore,
   onRestoreAll,
   onDiscardAll,
@@ -90,7 +97,7 @@ export function TrashDialog({
         )}
 
         <footer className="modal__actions">
-          {canRestore && items.length > 0 && !confirming && (
+          {canEmpty && items.length > 0 && !confirming && (
             <button className="btn btn--danger btn--sm" onClick={() => setConfirming(true)} disabled={busy}>
               Empty trash
             </button>

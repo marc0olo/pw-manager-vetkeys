@@ -42,6 +42,12 @@ export class FakeClient {
   items: Map<string, VaultItem[]>;
   /** Set to make the next mutation refuse, as a revoked grantee would see. */
   refuse: "none" | "write" | "manage" | "open" = "none";
+  /**
+   * Whether `discardTrash` refuses. Separate from {@link refuse} on purpose:
+   * the canister gates it on ownership, which is not one of the capabilities
+   * the UI discovers by attempting.
+   */
+  refuseDiscard = false;
 
   constructor(me: Principal, vaults: VaultSummary[], items: Record<string, VaultItem[]> = {}) {
     this.me = me;
@@ -73,6 +79,7 @@ export class FakeClient {
     return this.trash.length;
   });
   discardTrash = vi.fn(async () => {
+    if (this.refuseDiscard) throw new Error("unauthorized");
     this.guard("write");
     const dropped = this.trash.length;
     this.trash = [];

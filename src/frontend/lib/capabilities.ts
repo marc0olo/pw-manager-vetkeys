@@ -86,8 +86,26 @@ export function isUnauthorized(error: unknown): boolean {
   return text === "unauthorized" || text.endsWith(": unauthorized");
 }
 
-/** What was being attempted when a refusal came back. */
-export type Attempted = Capability | "open";
+/**
+ * What was being attempted when a refusal came back.
+ *
+ * Wider than {@link Capability}, because not everything the canister can refuse
+ * is a capability to be learned by attempting. Reading can be refused after a
+ * revocation, and some endpoints are the owner's alone — neither is something a
+ * grantee could be granted, so neither belongs in {@link Denials}.
+ */
+export type Attempted = Capability | "open" | "own";
+
+/**
+ * Whether a refusal of this teaches us something worth remembering.
+ *
+ * Only capabilities: recording anything else against a vault would withdraw a
+ * control the user does have. An ownership refusal filed as a write denial is
+ * what disabled adding items after a non-owner tried to empty the trash.
+ */
+export function isCapability(attempted: Attempted): attempted is Capability {
+  return attempted === "write" || attempted === "manage";
+}
 
 /**
  * How a refusal reads to the user.
@@ -111,5 +129,10 @@ export function refusalMessage(error: unknown, attempted: Attempted): string | n
     case "open":
       // Read access was revoked while the decrypt was in flight.
       return "You no longer have access to this vault.";
+    case "own":
+      // Not a capability that can be granted, so nothing is recorded — the
+      // control should not have been offered, and ownership is knowable
+      // locally rather than by asking.
+      return "Only the vault's owner can do this.";
   }
 }
