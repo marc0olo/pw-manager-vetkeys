@@ -35,6 +35,7 @@ import { ItemList } from "./components/ItemList";
 import { LockScreen } from "./components/LockScreen";
 import { EmptyVaultDialog } from "./components/EmptyVaultDialog";
 import { RenameVaultDialog } from "./components/RenameVaultDialog";
+import { DeleteItemDialog } from "./components/DeleteItemDialog";
 import { TrashButton, TrashDialog } from "./components/TrashDialog";
 import { ShareDialog } from "./components/ShareDialog";
 import { Sidebar } from "./components/Sidebar";
@@ -52,7 +53,7 @@ export function App() {
   const [client, setClient] = useState<VaultClient | null>(null);
   // One object, cleared as a unit on lock — see lib/vault-session for why.
   const [vaultSession, setVaultSession] = useState<VaultSessionState>(NO_VAULT_SESSION);
-  const { vaults, openItems, selectedVaultId, selectedItemId, syncedAt, pane, query, sharing, wiping, renaming, trash, denials } =
+  const { vaults, openItems, selectedVaultId, selectedItemId, syncedAt, pane, query, sharing, wiping, renaming, trash, deleting, denials } =
     vaultSession;
   // Updated synchronously by `patch` below. The poll reads state across an
   // await, and React state is not visible until the next commit — reading the
@@ -552,24 +553,7 @@ export function App() {
             canWrite={writable}
             onCopy={copyField}
             onEdit={() => patch({ pane: { mode: "edit", item: selectedItem, isNew: false } })}
-            onDelete={() => {
-              // Not "permanently" any more: it goes to the trash and can be
-              // restored for 90 days. A confirm still earns its place — the
-              // item leaves the list either way — but it must not claim the
-              // deletion is irreversible when it is not.
-              const label = selectedItem.title || "this item";
-              if (!window.confirm(`Delete “${label}”?\n\nIt moves to the trash and can be restored for 90 days.`)) {
-                return;
-              }
-              void run(
-                async () => {
-                  await client!.deleteItem(vault, selectedItem.id);
-                  patch({ selectedItemId: null });
-                },
-                "Item deleted",
-                { vault: vaultId(vault), capability: "write" },
-              );
-            }}
+            onDelete={() => patch({ deleting: true })}
           />
         ) : (
           <div className="pane__empty">
@@ -595,6 +579,16 @@ export function App() {
                 patch({ trash: await client!.listTrash(vault), openItems: null });
               },
               "Item restored",
+              { vault: vaultId(vault), capability: "write" },
+            )
+          }
+          onDiscardAll={() =>
+            void run(
+              async () => {
+                await client!.discardTrash(vault);
+                patch({ trash: null });
+              },
+              "Trash emptied",
               { vault: vaultId(vault), capability: "write" },
             )
           }
@@ -624,6 +618,24 @@ export function App() {
                 patch({ renaming: false });
               },
               displayName === "" ? "Name reset" : "Vault renamed",
+            )
+          }
+        />
+      )}
+
+      {deleting && selectedItem && (
+        <DeleteItemDialog
+          item={selectedItem}
+          busy={busy}
+          onClose={() => patch({ deleting: false })}
+          onConfirm={() =>
+            void run(
+              async () => {
+                await client!.deleteItem(vault, selectedItem.id);
+                patch({ deleting: false, selectedItemId: null });
+              },
+              "Item deleted",
+              { vault: vaultId(vault), capability: "write" },
             )
           }
         />
@@ -663,15 +675,6 @@ export function App() {
               vault: vaultId(vault),
               capability: "manage",
             })
-          }
-          onDiscardTrash={() =>
-            void run(
-              async () => {
-                await client!.discardTrash(vault);
-              },
-              "Trash emptied",
-              { vault: vaultId(vault), capability: "write" },
-            )
           }
         />
       )}

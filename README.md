@@ -48,10 +48,10 @@ password — the vault key is derived for your Internet Identity principal.
   The trash belongs to the vault, so everyone who can read the vault sees it —
   which is the same set that could already recover from it, since restoring is
   gated on write access alone. Read access sees the list; write access puts
-  things back. **Emptying the trash** makes those deletions unrecoverable
-  immediately, which is how a secret is taken out of reach before sharing the
-  vault with someone new — the share dialog says what is in there and offers
-  it.
+  things back. **Empty trash**, in the trash view, makes those deletions
+  unrecoverable immediately — which is how a secret is taken out of reach
+  before sharing the vault with someone new. The share dialog says how many
+  entries a grantee would inherit, without duplicating the action.
 - **Rename a vault** you own. A vault *is* `(owner, name)` and its vetKey
   derives from that pair, so the map never moves: the backend stores a display
   name beside it and a rename is one write — nothing re-encrypted, nobody

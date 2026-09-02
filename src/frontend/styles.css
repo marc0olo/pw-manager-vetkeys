@@ -868,17 +868,17 @@ code,
   border-left: 3px solid var(--danger);
   border-radius: 8px;
   background: var(--surface-2);
-}
-
-.modal__notice p {
-  margin: 0 0 10px;
   font-size: 13px;
   line-height: 1.5;
 }
 
-.modal__noticeActions {
-  display: flex;
-  gap: 8px;
+/* Sits in the dialog footer beside the buttons it qualifies, so the question
+   and its answers read as one row. `margin-right: auto` keeps the Done button
+   pinned right while the confirmation grows. */
+.modal__confirm {
+  margin-right: auto;
+  font-size: 13px;
+  color: var(--danger);
 }
 
 .modal__subhead {

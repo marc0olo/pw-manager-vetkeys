@@ -8,7 +8,6 @@ interface Props {
   busy: boolean;
   onShare: (user: Principal, level: AccessLevel) => void;
   onRevoke: (user: Principal) => void;
-  onDiscardTrash: () => void;
   onClose: () => void;
 }
 
@@ -32,13 +31,10 @@ const LEVEL_DETAIL: Record<AccessLevel, string> = {
   ReadWriteManage: "All of the above, plus granting and revoking access for other people.",
 };
 
-export function ShareDialog({ vault, busy, onShare, onRevoke, onDiscardTrash, onClose }: Props) {
+export function ShareDialog({ vault, busy, onShare, onRevoke, onClose }: Props) {
   const [principalText, setPrincipalText] = useState("");
   const [level, setLevel] = useState<AccessLevel>("Read");
   const [error, setError] = useState<string | null>(null);
-  // Two-step, because this dialog was opened to share rather than to destroy
-  // anything, and emptying the trash cannot be undone.
-  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const one = vault.trashed === 1;
 
   const submit = (event: React.FormEvent) => {
@@ -62,56 +58,17 @@ export function ShareDialog({ vault, busy, onShare, onRevoke, onDiscardTrash, on
         </p>
 
         {/*
-          Granting access hands over the trash as well, so the one place that
-          can be said before it happens is here. Stated as what the grantee
-          will see rather than as a warning about the feature: the reader is
-          about to make the decision, not to learn a policy.
+          Granting access hands over the trash as well, and this is the only
+          screen where that can be said before it happens. A statement, not a
+          control: emptying the trash lives in the trash view, where someone
+          looking for it will actually go, and duplicating a destructive action
+          across two screens is how the two drift apart.
         */}
         {vault.trashed > 0 && (
-          <div className="modal__notice" role="note">
-            {confirmingDiscard ? (
-              <>
-                <p>
-                  Permanently delete {vault.trashed} {one ? "item" : "items"} from the trash?{" "}
-                  {one ? "It" : "They"} cannot be recovered afterwards, by anyone.
-                </p>
-                <div className="modal__noticeActions">
-                  <button
-                    className="btn btn--danger btn--sm"
-                    onClick={() => {
-                      setConfirmingDiscard(false);
-                      onDiscardTrash();
-                    }}
-                    disabled={busy}
-                  >
-                    {busy ? "Working…" : "Delete permanently"}
-                  </button>
-                  <button
-                    className="btn btn--ghost btn--sm"
-                    onClick={() => setConfirmingDiscard(false)}
-                    disabled={busy}
-                  >
-                    Keep {one ? "it" : "them"}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <p>
-                  This vault’s trash holds {vault.trashed} deleted {one ? "item" : "items"}. Anyone
-                  you grant access to can see {one ? "it" : "them"}, and recover {one ? "it" : "them"}{" "}
-                  with edit access.
-                </p>
-                <button
-                  className="btn btn--danger btn--sm"
-                  onClick={() => setConfirmingDiscard(true)}
-                  disabled={busy}
-                >
-                  Empty trash first
-                </button>
-              </>
-            )}
-          </div>
+          <p className="modal__notice" role="note">
+            This vault’s trash holds {vault.trashed} deleted {one ? "item" : "items"}, which anyone
+            you grant access to can also see. Empty it from the trash view first if that matters.
+          </p>
         )}
 
         <form className="modal__form" onSubmit={submit}>

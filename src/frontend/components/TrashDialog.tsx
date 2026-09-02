@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { TrashIcon } from "./Icons";
 import { vaultLabel, type TrashedItem, type Vault } from "../lib/vault";
 
@@ -13,6 +14,7 @@ interface Props {
   canRestore: boolean;
   onRestore: (itemId: string) => void;
   onRestoreAll: () => void;
+  onDiscardAll: () => void;
   onClose: () => void;
 }
 
@@ -22,7 +24,22 @@ const when = (at: number) =>
 /** 90 days from deletion, matching `RETENTION_NS` in lib/Trash.mo. */
 const recoverableUntil = (at: number) => when(at + 90 * 24 * 60 * 60 * 1000);
 
-export function TrashDialog({ vault, items, busy, canRestore, onRestore, onRestoreAll, onClose }: Props) {
+export function TrashDialog({
+  vault,
+  items,
+  busy,
+  canRestore,
+  onRestore,
+  onRestoreAll,
+  onDiscardAll,
+  onClose,
+}: Props) {
+  // Two-step in place rather than a second dialog on top of this one. The
+  // confirmation belongs beside the list it is about, and stacking modals
+  // would hide the very thing being confirmed.
+  const [confirming, setConfirming] = useState(false);
+  const one = items.length === 1;
+
   return (
     <div className="modal" role="dialog" aria-modal="true" aria-label={`Deleted items in ${vaultLabel(vault)}`}>
       <div className="modal__panel">
@@ -71,6 +88,31 @@ export function TrashDialog({ vault, items, busy, canRestore, onRestore, onResto
         )}
 
         <footer className="modal__actions">
+          {canRestore && items.length > 0 && !confirming && (
+            <button className="btn btn--danger btn--sm" onClick={() => setConfirming(true)} disabled={busy}>
+              Empty trash
+            </button>
+          )}
+          {confirming && (
+            <>
+              <span className="modal__confirm">
+                Delete {items.length} {one ? "item" : "items"} for good?
+              </span>
+              <button
+                className="btn btn--danger btn--sm"
+                onClick={() => {
+                  setConfirming(false);
+                  onDiscardAll();
+                }}
+                disabled={busy}
+              >
+                {busy ? "Deleting…" : "Delete permanently"}
+              </button>
+              <button className="btn btn--ghost btn--sm" onClick={() => setConfirming(false)} disabled={busy}>
+                Keep {one ? "it" : "them"}
+              </button>
+            </>
+          )}
           <button className="btn btn--ghost" onClick={onClose} disabled={busy}>
             Done
           </button>

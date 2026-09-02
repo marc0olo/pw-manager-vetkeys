@@ -424,33 +424,138 @@ describe("sharing a vault that has trash", () => {
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
   });
 
-  it("does not empty the trash on the first click", async () => {
-    const client = owned(3);
-    signedInAs(ALICE, client);
+  it("does not offer to empty the trash from here — that lives in the trash view", async () => {
+    // Duplicating a destructive action across two screens is how the two drift
+    // apart, so this dialog states the consequence and nothing more.
+    signedInAs(ALICE, owned(3));
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /share/i }));
+    await screen.findByRole("note");
 
-    fireEvent.click(await screen.findByRole("button", { name: /empty trash first/i }));
+    expect(screen.queryByRole("button", { name: /empty trash/i })).not.toBeInTheDocument();
+  });
+});
 
-    // Irreversible, and this dialog was opened to share rather than to destroy
-    // anything — so the first click only asks.
+describe("emptying the trash", () => {
+  const owning = (count: number) =>
+    Object.assign(
+      new FakeClient(ALICE, [vault({ itemIds: ["a"], trashed: count })], {
+        Personal: [item({ id: "a", title: "GitHub" })],
+      }),
+      {
+        trash: Array.from({ length: count }, (_, i) =>
+          trashed({ item: item({ id: `d${i}`, title: `Deleted ${i}` }) }),
+        ),
+      },
+    );
+
+  const openTrash = async () => {
+    fireEvent.click(await screen.findByRole("button", { name: /3 deleted/i }));
+    return screen.findByText("Deleted 0");
+  };
+
+  it("asks before destroying anything", async () => {
+    const client = owning(3);
+    signedInAs(ALICE, client);
+    render(<App />);
+    await openTrash();
+
+    fireEvent.click(screen.getByRole("button", { name: /^empty trash$/i }));
+
     expect(client.discardTrash).not.toHaveBeenCalled();
-    expect(await screen.findByText(/cannot be recovered afterwards/i)).toBeInTheDocument();
+    expect(screen.getByText(/for good\?/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /delete permanently/i }));
     await waitFor(() => expect(client.discardTrash).toHaveBeenCalledTimes(1));
   });
 
-  it("keeps the trash when the confirmation is declined", async () => {
-    const client = owned(3);
+  it("keeps everything when the confirmation is declined", async () => {
+    const client = owning(3);
     signedInAs(ALICE, client);
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /share/i }));
-    fireEvent.click(await screen.findByRole("button", { name: /empty trash first/i }));
+    await openTrash();
+    fireEvent.click(screen.getByRole("button", { name: /^empty trash$/i }));
 
-    fireEvent.click(await screen.findByRole("button", { name: /keep them/i }));
+    fireEvent.click(screen.getByRole("button", { name: /keep them/i }));
 
     expect(client.discardTrash).not.toHaveBeenCalled();
-    expect(await screen.findByRole("button", { name: /empty trash first/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^empty trash$/i })).toBeInTheDocument();
+  });
+
+  it("is not offered to a member who cannot restore", async () => {
+    // Emptying is destructive where restoring is not, so read access must not
+    // reach it. The canister refuses it too — this only stops the UI offering
+    // a button that would come back "unauthorized".
+    signedInAs(
+      ALICE,
+      Object.assign(
+        new FakeClient(
+          ALICE,
+          [
+            vault({
+              owner: BOB,
+              name: "Team infra",
+              isOwned: false,
+              rights: toAccessRights("Read"),
+              itemIds: ["x"],
+              trashed: 3,
+              fingerprint: "s",
+            }),
+          ],
+          { "Team infra": [item({ id: "x", title: "Grafana" })] },
+        ),
+        { trash: [trashed({ item: item({ id: "d0", title: "Deleted 0" }) })] },
+      ),
+    );
+    render(<App />);
+    // The only vault, so it is already selected.
+    await openTrash();
+
+    expect(screen.queryByRole("button", { name: /^empty trash$/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("deleting one item", () => {
+  it("confirms in the app's own dialog rather than the browser's", async () => {
+    const client = signedInAs(ALICE);
+    // A native confirm() blocks the event loop, which in this app also defers
+    // the interval that locks the vault — so the prompt can hold plaintext on
+    // screen past the idle deadline. It is also unstylable and unassertable.
+    const native = vi.spyOn(window, "confirm");
+    render(<App />);
+    fireEvent.click(await screen.findByText("GitHub"));
+
+    fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+
+    expect(native).not.toHaveBeenCalled();
+    // Named for the item, which is the thing a native prompt cannot style.
+    expect(await screen.findByRole("dialog", { name: /delete github/i })).toBeInTheDocument();
+    expect(client.deleteItem).not.toHaveBeenCalled();
+    native.mockRestore();
+  });
+
+  it("says the deletion is recoverable, because it is", async () => {
+    signedInAs(ALICE);
+    render(<App />);
+    fireEvent.click(await screen.findByText("GitHub"));
+    fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+
+    expect(await screen.findByText(/restored for 90 days/i)).toBeInTheDocument();
+    expect(screen.queryByText(/permanent/i)).not.toBeInTheDocument();
+  });
+
+  it("deletes on confirmation, and not on cancel", async () => {
+    const client = signedInAs(ALICE);
+    render(<App />);
+    fireEvent.click(await screen.findByText("GitHub"));
+
+    fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /cancel/i }));
+    expect(client.deleteItem).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    const dialog = await screen.findByRole("dialog", { name: /delete github/i });
+    fireEvent.click(within(dialog).getByRole("button", { name: /^delete$/i }));
+    await waitFor(() => expect(client.deleteItem).toHaveBeenCalledTimes(1));
   });
 });
