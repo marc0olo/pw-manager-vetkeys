@@ -95,13 +95,20 @@ export interface _SERVICE {
    */
   'discard_trash' : ActorMethod<[Principal, ByteBuf], Result_2>,
   /**
-   * / Drop the stored versions of one live secret, keeping the secret itself.
+   * / Drop the stored versions of one secret, keeping the secret itself.
    * /
    * / The owner's way to reclaim space, or to stop keeping a secret's earlier
    * / values, without a retention policy guessing on their behalf (#38).
    * /
    * / Clears the ciphertext and **keeps the events**, so "edited by X at T"
    * / survives. Otherwise pruning would be a way to launder the audit trail.
+   * /
+   * / Not restricted to live secrets. Applied to a deleted one it clears the
+   * / version the trash was offering, and `get_trash` then skips the group —
+   * / a group whose newest event carries no value has nothing to put back. So
+   * / this doubles as "delete this one trashed secret for good", which is the
+   * / per-secret counterpart to `discard_trash`. Owner-only for that reason:
+   * / it is a destruction, not housekeeping.
    */
   'drop_history' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_2>,
   'get_accessible_shared_map_names' : ActorMethod<

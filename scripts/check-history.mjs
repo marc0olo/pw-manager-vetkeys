@@ -355,6 +355,25 @@ check("someone with no access to the vault is refused outright", denied.err === 
     dec.decode((await A.maps.getValuesForMap(me, P)).find(([k]) => dec.decode(k) === "k1")[1]) === "v2");
 }
 
+// ---- pruning a trashed secret takes it out of the listing -----------------
+//
+// `drop_history` has no liveness check, so an owner can clear the version the
+// trash was offering. The row must then leave the listing rather than stay
+// there with no value — which is also what lets the poll's digest stand in for
+// the ciphertext.
+{
+  const PT = "PrunedTrash", Q = enc.encode(PT);
+  await A.maps.setValue(me, Q, enc.encode("k1"), enc.encode("v1"));
+  await A.maps.removeEncryptedValue(me, Q, enc.encode("k1"));
+  check("it is in the trash", (await trashOf(A, me, PT)).length === 1);
+
+  await A.api.drop_history(me, buf(PT), buf("k1"));
+  check("pruning a trashed secret removes it from the trash", (await trashOf(A, me, PT)).length === 0);
+  const events = (await A.api.get_history(me, buf(PT), buf("k1"))).Ok;
+  check("the event survives, so the deletion is still on the record", events.length >= 1);
+  check("with no ciphertext", events.every((v) => v.value.length === 0));
+}
+
 // ---- the poll can tell the trash changed without carrying it ---------------
 {
   const FP = "Fingerprint", F = enc.encode(FP);

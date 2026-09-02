@@ -227,3 +227,24 @@ do {
   };
   assert History.keysIn(store, alice, vault).size() == 3;
 };
+
+do {
+  // Pruning is not restricted to live secrets, and applied to a deleted one it
+  // takes the group out of the trash rather than leaving a listed row whose
+  // value has gone. That is what lets the poll's digest stand in for the
+  // ciphertext: a cleared value changes the row *set*, never a listed row's
+  // meaning.
+  var store = History.empty();
+  store := add(store, vault, "k1", ?"deleted secret", T0, alice, #Deleted);
+  assert History.trash(store, alice, vault, nothingLive, T0 + 1).size() == 1;
+
+  let (after, cleared) = History.dropHistory(store, alice, vault, key "k1");
+  assert cleared == 1;
+  // Gone from the trash, so nothing offers a Restore that could only fail.
+  assert History.trash(after, alice, vault, nothingLive, T0 + 1).size() == 0;
+  // But the event survives: who deleted it, and when, is still on the record.
+  let rows = History.forKey(after, alice, vault, key "k1");
+  assert rows.size() == 1;
+  assert rows[0].1.value == null;
+  assert rows[0].1.kind == #Deleted;
+};

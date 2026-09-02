@@ -46,11 +46,16 @@ module {
   /// SHA-256 over a trash listing: which secrets are in it, and which version
   /// of each.
   ///
-  /// The sequence number is enough to stand for the value. Events are
-  /// append-only, so a given `seq` always names the same ciphertext — and the
-  /// rows that could have their value cleared belong to live secrets, which are
-  /// never in the trash. Hashing the seq rather than the ciphertext keeps this
-  /// cheap on the poll path.
+  /// The sequence number is enough to stand for the value: **no listed row's
+  /// `seq` can ever come to name different ciphertext.** Events are append-only,
+  /// so a `seq` is never rewritten, and the one operation that clears a value —
+  /// the owner dropping a secret's history — takes the row out of the listing
+  /// rather than changing it, because `History.trash` only yields a group whose
+  /// newest event still carries a value. Either way the row set moves, so the
+  /// digest moves.
+  ///
+  /// Hashing the seq rather than the ciphertext is what keeps this cheap enough
+  /// to run on the poll path.
   ///
   /// Framed and sorted for the same reasons as {@link ofKeyvals}.
   public func ofTrash(rows : [(Blob, Nat64)]) : Blob {
