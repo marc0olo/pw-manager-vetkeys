@@ -111,6 +111,7 @@ scripts/check-poll-cost.mjs  Asserts a poll derives no keys and carries no ciphe
 scripts/check-capabilities.mjs  Verifies the access-level table the share dialog states
 scripts/check-vault-names.mjs  Verifies renaming moves no map and derives no key
 scripts/check-history.mjs  Verifies a writer can add versions but destroy none
+scripts/check-owned-vaults.mjs  Verifies a vault can exist holding nothing, and stays visible
 scripts/check-bindings.mjs  Fails if the committed binding or stable signature is stale
 scripts/check-ii-metadata.mjs  Validates the II app-metadata document
 ```
@@ -270,6 +271,7 @@ npm run check-capabilities    # the access-level table the share dialog states
 npm run check-poll-cost       # a poll derives no keys and carries no ciphertext
 npm run check-vault-names     # renaming moves no map and derives no key
 npm run check-history         # a writer can add versions but destroy none
+npm run check-owned-vaults    # a vault exists once claimed, and survives being emptied
 ```
 
 The first four run in CI on every pull request; the replica ones do not, so
@@ -381,11 +383,14 @@ voids the whole document — so run `npm run check-ii-metadata` after editing it
 
 ## Known limitations
 
-- **One owned vault.** The library lists only *non-empty* owned vaults, so an
-  empty one does not survive a reload ([dfinity/vetkeys#439]). You get one vault
-  named `Personal`, plus every vault shared with you. The value endpoints are
-  already ours, so this no longer waits on upstream — it needs a registry of
-  owned map names, tracked in #11.
+- **One owned vault, still — but no longer for a backend reason.** The library
+  lists only *non-empty* owned vaults ([dfinity/vetkeys#439]), so the canister
+  now keeps its own registry of owned vaults and unions it with the library's
+  enumeration: `create_vault` claims one that holds nothing, and an emptied
+  vault stays listed. What is missing is the UI — creating, deleting, and the
+  zero-vault state have to land together (#11, #13, #21), because the client
+  still synthesises a `Personal` vault when it sees none and removing that
+  needs somewhere else for a new user to start.
 - No browser extension, autofill, TOTP, or attachments.
 - Expired versions are not purged on a schedule — there is no timer, because
   Motoko timers do not survive an upgrade. A deleted secret and its history are

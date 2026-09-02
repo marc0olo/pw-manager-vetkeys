@@ -1,0 +1,180 @@
+/**
+ * The owned-vault registry: a vault that exists while holding nothing.
+ *
+ * The library drops an owned map from its enumeration as soon as the map's last
+ * value goes, so these are the claims that need a replica: that a vault
+ * survives being emptied, that one can exist before anything is in it, and that
+ * the registry is *unioned* with the library's listing rather than replacing it
+ * — a map with no registry entry must still be visible to its owner.
+ */
+import { execSync } from "node:child_process";
+import { Actor, HttpAgent } from "@icp-sdk/core/agent";
+import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
+import { DefaultEncryptedMapsClient, EncryptedMaps } from "@icp-sdk/vetkeys/encrypted_maps";
+import { idlFactory } from "../src/bindings/declarations/backend.did.js";
+
+const status = JSON.parse(execSync("icp network status --json", { encoding: "utf-8" }));
+const backendId = execSync("icp canister status backend --id-only", { encoding: "utf-8" }).trim();
+const rootKey = Uint8Array.from(Buffer.from(status.root_key, "hex"));
+const enc = new TextEncoder(), dec = new TextDecoder();
+
+let derivations = 0;
+const connect = async (identity) => {
+  const agent = await HttpAgent.create({ identity, host: status.api_url, rootKey });
+  const raw = new DefaultEncryptedMapsClient(agent, backendId);
+  const real = raw.get_encrypted_vetkey.bind(raw);
+  raw.get_encrypted_vetkey = (...args) => {
+    derivations++;
+    return real(...args);
+  };
+  return {
+    me: identity.getPrincipal(),
+    maps: new EncryptedMaps(raw),
+    api: Actor.createActor(idlFactory, { agent, canisterId: backendId }),
+  };
+};
+
+const failures = [];
+const check = (label, pass, detail = "") => {
+  if (!pass) failures.push(label);
+  console.log(`${pass ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`);
+};
+const buf = (t) => ({ inner: enc.encode(t) });
+const owned = async (who) => (await who.api.get_owned_vaults()).map((b) => dec.decode(Uint8Array.from(b.inner)));
+const listed = async (who) =>
+  (await who.api.get_vault_summaries()).map((v) => `${v.owner.toText().slice(0, 5)}/${dec.decode(Uint8Array.from(v.map_name.inner))}`);
+const summaryFor = async (who, owner, name) =>
+  (await who.api.get_vault_summaries()).find(
+    (v) => v.owner.compareTo(owner) === "eq" && dec.decode(Uint8Array.from(v.map_name.inner)) === name,
+  );
+/** SHA-256 of nothing, which is what an empty vault's digest has to be. */
+const EMPTY = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+const hex = (bytes) => Buffer.from(Uint8Array.from(bytes)).toString("hex");
+
+const aliceId = Ed25519KeyIdentity.generate();
+const A = await connect(aliceId);
+const me = aliceId.getPrincipal();
+const bobId = Ed25519KeyIdentity.generate();
+const B = await connect(bobId);
+
+// ---- a vault can exist holding nothing --------------------------------------
+check("a new principal owns no vaults", (await owned(A)).length === 0);
+
+derivations = 0;
+check("creating one succeeds", "Ok" in (await A.api.create_vault(buf("Empty"))));
+check("and derives no key", derivations === 0, `${derivations} derivations`);
+check("it is now owned", (await owned(A)).includes("Empty"));
+
+const empty = await summaryFor(A, me, "Empty");
+check("and listed, though the library does not know it", empty !== undefined);
+check("with no items", empty !== undefined && empty.item_keys.length === 0);
+check("the digest of nothing", empty !== undefined && hex(empty.digest.inner) === EMPTY, hex(empty?.digest.inner ?? []));
+check("no trash, and the digest of no trash", empty !== undefined && Number(empty.trashed) === 0 && hex(empty.trash_digest.inner) === EMPTY);
+check("and full rights, since the caller owns it", empty !== undefined && "ReadWriteManage" in empty.my_rights[0]);
+
+// The other read path over per-item facts has to survive a vault with no items.
+const facts = await A.api.get_item_summaries(me, buf("Empty"));
+check("per-item facts on an empty vault are empty, not an error", "Ok" in facts && facts.Ok.length === 0, JSON.stringify(facts));
+check("its trash is empty, not an error", "Ok" in (await A.api.get_trash(me, buf("Empty"))));
+
+// ---- creating is idempotent --------------------------------------------------
+check("creating the same vault again succeeds", "Ok" in (await A.api.create_vault(buf("Empty"))));
+check("and does not duplicate it", (await owned(A)).filter((n) => n === "Empty").length === 1);
+
+// ---- the union: a map with no registry entry is still visible ---------------
+//
+// The important direction, and it needed a reachable way to produce the state.
+// Every write goes through `insert_encrypted_value`, which registers — so a map
+// with no entry cannot be made by writing normally. The cap is what makes it
+// reachable: past `MAX_VAULTS_PER_OWNER` the registry stops recording, while
+// the library still accepts the write. That is also the state every map that
+// predates the registry is in.
+//
+// With the listing as registry ∪ library the vault stays visible. With the
+// registry alone its owner would hold a vault they cannot see.
+{
+  const capped = await connect(Ed25519KeyIdentity.generate());
+  for (let i = 0; i < 100; i++) await capped.api.create_vault(buf(`c${i}`));
+  check("this principal is at the cap", (await owned(capped)).length === 100);
+
+  await capped.maps.setValue(capped.me, enc.encode("Beyond"), enc.encode("k1"), enc.encode("v1"));
+  check(
+    "a write past the cap is not registered",
+    !(await owned(capped)).includes("Beyond"),
+    "which is what makes the next assertion meaningful",
+  );
+  check(
+    "but the vault is still listed to its owner",
+    (await summaryFor(capped, capped.me, "Beyond")) !== undefined,
+    "the union with the library's enumeration is what carries it",
+  );
+  const beyond = await summaryFor(capped, capped.me, "Beyond");
+  check("with its contents", beyond !== undefined && beyond.item_keys.length === 1);
+}
+
+// ---- an emptied vault survives ----------------------------------------------
+await A.maps.setValue(me, enc.encode("Emptied"), enc.encode("k1"), enc.encode("secret"));
+await A.maps.removeEncryptedValue(me, enc.encode("Emptied"), enc.encode("k1"));
+const emptied = await summaryFor(A, me, "Emptied");
+check("an emptied vault is still listed", emptied !== undefined);
+check("with its trash reachable", emptied !== undefined && Number(emptied.trashed) === 1, String(emptied?.trashed));
+
+// ---- the emptied-and-shared vault reports its collaborators ------------------
+//
+// The bug the trash-driven version had: it reported no members, so the owner's
+// share dialog said "Only you." for a vault that was shared — exactly when they
+// might want to revoke whoever emptied it.
+await A.maps.setValue(me, enc.encode("Shared"), enc.encode("k1"), enc.encode("secret"));
+await A.maps.setUserRights(me, enc.encode("Shared"), bobId.getPrincipal(), { ReadWrite: null });
+await B.maps.removeMapValues(me, enc.encode("Shared"));
+const shared = await summaryFor(A, me, "Shared");
+check("a collaborator emptying a vault does not hide it from its owner", shared !== undefined);
+check(
+  "and the owner still sees who has access",
+  shared !== undefined && shared.access_control.length === 1,
+  `${shared?.access_control.length ?? 0} members — 0 was the bug`,
+);
+
+// ---- scoped to the caller ----------------------------------------------------
+check("a vault shared with someone is not theirs to own", !(await owned(B)).includes("Shared"));
+check("but they can see it", (await listed(B)).some((v) => v.endsWith("/Shared")));
+const stranger = await connect(Ed25519KeyIdentity.generate());
+check("someone else's vaults are not listed to a stranger", (await listed(stranger)).length === 0);
+check("nor owned by them", (await owned(stranger)).length === 0);
+
+// ---- bounded, and anonymous callers refused ----------------------------------
+{
+  const anonModule = await import("@icp-sdk/core/agent");
+  const anon = await connect(new anonModule.AnonymousIdentity());
+  check("an anonymous caller cannot create a vault", "Err" in (await anon.api.create_vault(buf("Anon"))));
+}
+check("an empty name is refused", "Err" in (await A.api.create_vault({ inner: new Uint8Array() })));
+check("a name over 32 bytes is refused", "Err" in (await A.api.create_vault(buf("x".repeat(33)))));
+check("32 bytes exactly is accepted", "Ok" in (await A.api.create_vault(buf("x".repeat(32)))));
+
+{
+  const hoarder = await connect(Ed25519KeyIdentity.generate());
+  let refusedAt = null;
+  for (let i = 0; i < 105; i++) {
+    if ("Err" in (await hoarder.api.create_vault(buf(`v${i}`)))) {
+      refusedAt = i;
+      break;
+    }
+  }
+  check("a principal cannot claim unbounded vaults", refusedAt === 100, `refused at ${refusedAt}`);
+  // Re-claiming one they already have must not be turned away by the cap.
+  check("but re-creating one they hold still succeeds", "Ok" in (await hoarder.api.create_vault(buf("v0"))));
+}
+
+// ---- reading it costs nothing ------------------------------------------------
+derivations = 0;
+await A.api.get_owned_vaults();
+await A.api.get_vault_summaries();
+check("listing owned vaults and polling derive no keys", derivations === 0, `${derivations} derivations`);
+
+console.log(
+  failures.length === 0
+    ? "\nAn owned vault exists once claimed, survives being emptied, and a map with no registry entry is still visible to its owner."
+    : `\n${failures.length} failure(s)`,
+);
+process.exit(failures.length === 0 ? 0 : 1);
