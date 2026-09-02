@@ -214,10 +214,26 @@ icp deploy                    # builds the canister and the frontend, then syncs
 
 `icp deploy` prints the frontend URL: `http://frontend.local.localhost:8100/`.
 
-> If it stops with **`Candid compatibility check failed`**, the interface changed
-> in a way an upgrade cannot carry. `icp deploy --mode reinstall -y` reinstalls
-> and **drops every stored secret** — fine while developing locally, never on a
-> canister holding data anyone wants.
+> **`Candid compatibility check failed`** is not a reason to reinstall. Two
+> different things can block a deploy and only one of them loses data:
+>
+> - **The Candid interface is no longer a subtype** — a method was removed or
+>   renamed, or a signature changed. That breaks *clients*, not stored state.
+>   `icp deploy --mode upgrade -y` accepts the break and keeps every secret.
+> - **The stable signature is incompatible** — the type of a stable variable
+>   changed in a way an upgrade cannot carry. Only this needs a migration, or
+>   `icp deploy --mode reinstall -y`, which **drops every stored secret**.
+>
+> They look the same from the error, so check rather than guess. `mops check`
+> writes the stable signature to `.mops/.build/backend.most`; compare the
+> deployed version's against the new one:
+>
+> ```bash
+> moc --stable-compatible old.most new.most   # exit 0 means an upgrade is safe
+> ```
+>
+> Reading a Candid failure as a state incompatibility has cost this project a
+> wrong instruction twice, in both directions.
 
 ```bash
 npm test                      # unit tests and component transitions (no replica needed)
