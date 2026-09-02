@@ -31,6 +31,9 @@ interface Props {
 /** Auto-hide a revealed password so it does not sit on screen indefinitely. */
 const REVEAL_TIMEOUT_MS = 30_000;
 
+/** Never let the dots hint at the real length beyond a point. */
+const mask = (password: string) => "•".repeat(Math.min(password.length, 24));
+
 export function ItemDetail({
   item,
   canWrite,
@@ -47,8 +50,25 @@ export function ItemDetail({
 }: Props) {
   const [revealed, setRevealed] = useState(false);
   const [confirmingDrop, setConfirmingDrop] = useState(false);
+  /**
+   * Which earlier version is showing its password, if any. One at a time, so
+   * revealing another hides the first — an old password is still a password,
+   * and a list of them on screen is worse than the one in the pane above.
+   */
+  const [revealedVersion, setRevealedVersion] = useState<bigint | null>(null);
 
   useEffect(() => setConfirmingDrop(false), [item.id]);
+  useEffect(() => setRevealedVersion(null), [item.id]);
+  // Collapsing the list is also a request to stop showing it.
+  useEffect(() => {
+    if (versions === null) setRevealedVersion(null);
+  }, [versions]);
+
+  useEffect(() => {
+    if (revealedVersion === null) return;
+    const timer = setTimeout(() => setRevealedVersion(null), REVEAL_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [revealedVersion]);
 
   useEffect(() => setRevealed(false), [item.id]);
 
@@ -89,7 +109,7 @@ export function ItemDetail({
           <dt>Password</dt>
           <dd>
             <span className={`field__value ${revealed ? "field__value--mono" : "field__value--dots"}`}>
-              {item.password ? (revealed ? item.password : "•".repeat(Math.min(item.password.length, 24))) : "—"}
+              {item.password ? (revealed ? item.password : mask(item.password)) : "—"}
             </span>
             {item.password && (
               <>
@@ -150,9 +170,50 @@ export function ItemDetail({
                   // and the canister cannot tell that they do — AES-GCM uses a
                   // random IV, so identical plaintext encrypts differently.
                   <li key={String(entry.seq)}>
-                    <div>
+                    <div className="history__entry">
                       <div className="history__title">{entry.item.title || "Untitled"}</div>
+                      {/*
+                        The password as it was, which is the point of keeping
+                        versions — a title and a timestamp cannot tell you
+                        whether this is the one you want back.
+                      */}
+                      <div className="history__secret">
+                        <span
+                          className={`field__value ${
+                            revealedVersion === entry.seq ? "field__value--mono" : "field__value--dots"
+                          }`}
+                        >
+                          {entry.item.password
+                            ? revealedVersion === entry.seq
+                              ? entry.item.password
+                              : mask(entry.item.password)
+                            : "no password"}
+                        </span>
+                        {entry.item.password && (
+                          <>
+                            <IconButton
+                              label={
+                                revealedVersion === entry.seq
+                                  ? "Hide this version's password"
+                                  : "Reveal this version's password"
+                              }
+                              onClick={() =>
+                                setRevealedVersion((current) => (current === entry.seq ? null : entry.seq))
+                              }
+                            >
+                              {revealedVersion === entry.seq ? <EyeOffIcon /> : <EyeIcon />}
+                            </IconButton>
+                            <IconButton
+                              label="Copy this version's password"
+                              onClick={() => onCopy("password", entry.item.password)}
+                            >
+                              <CopyIcon />
+                            </IconButton>
+                          </>
+                        )}
+                      </div>
                       <code title={`Recorded by ${entry.by.toText()}`}>
+                        {entry.item.username ? `${entry.item.username} · ` : ""}
                         {entry.kind === "Deleted" ? "deleted" : "replaced"}{" "}
                         {new Date(entry.at).toLocaleString()} by {entry.by.toText().slice(0, 8)}…
                       </code>

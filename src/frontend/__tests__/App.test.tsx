@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { ALICE, BOB, FakeClient, identityFor, item, trashed, vault, version } from "./harness";
+import { ALICE, BOB, FakeClient, fakeClipboard, identityFor, item, trashed, vault, version } from "./harness";
 import { toAccessRights, type AccessLevel } from "../lib/vault";
 
 /**
@@ -833,5 +833,101 @@ describe("a secret's version history", () => {
     // the vault decrypted, so nothing here is the last line of defence — the
     // lock clearing the whole session is.
     expect(screen.queryByText("Secret old name")).not.toBeInTheDocument();
+  });
+});
+
+describe("a version's password", () => {
+  const openHistory = async (versions: ReturnType<typeof version>[]) => {
+    const client = Object.assign(
+      new FakeClient(ALICE, [vault({ itemIds: ["a"] })], {
+        Personal: [item({ id: "a", title: "GitHub", password: "current-pw" })],
+      }),
+      { itemVersions: { a: versions } },
+    );
+    signedInAs(ALICE, client);
+    render(<App />);
+    fireEvent.click(await screen.findByText("GitHub"));
+    fireEvent.click(await screen.findByRole("button", { name: /earlier version/i }));
+    await screen.findAllByRole("button", { name: /reveal this version's password/i });
+    return client;
+  };
+
+  it("is masked until asked for", async () => {
+    await openHistory([version({ item: item({ id: "a", title: "GitHub", password: "old-secret" }) })]);
+
+    expect(screen.queryByText("old-secret")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /reveal this version's password/i }));
+
+    expect(screen.getByText("old-secret")).toBeInTheDocument();
+  });
+
+  it("hides again on its own, so it does not sit on screen", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = Object.assign(
+        new FakeClient(ALICE, [vault({ itemIds: ["a"] })], {
+          Personal: [item({ id: "a", title: "GitHub", password: "current-pw" })],
+        }),
+        { itemVersions: { a: [version({ item: item({ id: "a", title: "GitHub", password: "old-secret" }) })] } },
+      );
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      fireEvent.click(screen.getByText("GitHub"));
+      fireEvent.click(screen.getByRole("button", { name: /earlier version/i }));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      fireEvent.click(screen.getByRole("button", { name: /reveal this version's password/i }));
+      expect(screen.getByText("old-secret")).toBeInTheDocument();
+
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+
+      expect(screen.queryByText("old-secret")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows one at a time, so a list of passwords never accumulates", async () => {
+    await openHistory([
+      version({ seq: 90n, item: item({ id: "a", title: "GitHub", password: "newer-old" }) }),
+      version({ seq: 91n, item: item({ id: "a", title: "GitHub", password: "older-old" }) }),
+    ]);
+    const [first, second] = screen.getAllByRole("button", { name: /reveal this version's password/i });
+
+    fireEvent.click(first);
+    expect(screen.getByText("newer-old")).toBeInTheDocument();
+
+    fireEvent.click(second);
+
+    expect(screen.getByText("older-old")).toBeInTheDocument();
+    expect(screen.queryByText("newer-old")).not.toBeInTheDocument();
+  });
+
+  it("stops showing when the list is collapsed", async () => {
+    await openHistory([version({ item: item({ id: "a", title: "GitHub", password: "old-secret" }) })]);
+    fireEvent.click(screen.getByRole("button", { name: /reveal this version's password/i }));
+    expect(screen.getByText("old-secret")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /earlier version/i }));
+    fireEvent.click(screen.getByRole("button", { name: /earlier version/i }));
+
+    // Wait for the list to come back before asserting: expanding re-reads it,
+    // so asserting straight away would find nothing on screen either way and
+    // pass without proving the reveal was reset.
+    await screen.findByRole("button", { name: /reveal this version's password/i });
+    expect(screen.queryByText("old-secret")).not.toBeInTheDocument();
+  });
+
+  it("copies through the same path as the live one, so the clipboard still clears", async () => {
+    const board = fakeClipboard();
+    await openHistory([version({ item: item({ id: "a", title: "GitHub", password: "old-secret" }) })]);
+
+    fireEvent.click(screen.getByRole("button", { name: /copy this version's password/i }));
+
+    // The message is the tell that it went through `copySecret` rather than
+    // `copyPlain`: only the secret path schedules the clipboard to be cleared.
+    expect(await screen.findByText(/clipboard clears in/i)).toBeInTheDocument();
+    expect(board.text).toBe("old-secret");
   });
 });

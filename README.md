@@ -46,8 +46,11 @@ password — the vault key is derived for your Internet Identity principal.
   listing and is decrypted in the browser under the key already cached from
   opening the vault, so a deleted item is recognisable rather than a timestamp.
   - **Every version is kept**, and shown. An item's detail pane says how many
-    earlier versions it has and expands to list them, newest first, with who
-    recorded each and when; any can be restored. Restoring one keeps the value
+    earlier versions it has and expands to list them, newest first, with the
+    password as it was — masked until asked for, auto-hidden after 30 s, and
+    one at a time — plus who recorded each version and when. Any can be
+    restored, and copying an old password clears the clipboard on the same
+    timer as the live one. Restoring one keeps the value
     it replaces, so nothing is lost by picking the wrong version. Trash,
     version history and the audit trail are one append-only log: a deletion is
     a version with nothing after it. Nothing is ever moved, so a trashed secret

@@ -917,8 +917,28 @@ code,
   justify-content: space-between;
 }
 
+/* min-width: 0 so a long password shrinks rather than pushing Restore off the
+   row. */
+.history__entry {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
 .history__title {
   font-size: 13px;
+}
+
+.history__secret {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.history__secret .field__value {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .history__list code {

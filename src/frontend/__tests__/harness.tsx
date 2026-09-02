@@ -132,6 +132,27 @@ export const trashed = (o: Partial<TrashedItem> & { item: VaultItem }): TrashedI
   ...o,
 });
 
+/**
+ * A clipboard, which jsdom does not provide.
+ *
+ * Returned so a test can assert what was written — copying a *version's*
+ * password must go through the same path as the live one, or the auto-clear in
+ * lib/clipboard.ts silently stops applying to it.
+ */
+export function fakeClipboard() {
+  const board = { text: "" };
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: vi.fn(async (text: string) => {
+        board.text = text;
+      }),
+      readText: vi.fn(async () => board.text),
+    },
+  });
+  return board;
+}
+
 /** A minimal Identity: `App` only ever asks for the principal. */
 export const identityFor = (principal: Principal) =>
   ({ getPrincipal: () => principal }) as unknown as import("@icp-sdk/core/agent").Identity;
