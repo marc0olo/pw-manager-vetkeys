@@ -100,7 +100,8 @@ src/frontend/lib/session.ts  Idle timeout, activity mark, cross-tab lock, key pu
 src/frontend/lib/lock.ts     The lock sequence: ordering and failure safety
 src/frontend/lib/capabilities.ts  What we may do on a vault, and learning from a refusal
 src/frontend/lib/backend.ts  This app's own endpoints, over the generated binding
-src/bindings/              Generated from the canister's Candid — `npm run bindings`
+src/bindings/declarations  Generated from the canister's Candid — `npm run bindings`
+src/bindings/backend.most  The backend's stable signature, so stable-type changes show in a diff
 src/frontend/components/   Sidebar, item list, detail, editor, share dialog, session status
 src/frontend/lib/__tests__/  Unit tests: session lifetime, load-time gate, lock sequence,
                            locked state, poll reconciliation, capabilities, vault names
@@ -109,25 +110,34 @@ scripts/smoke-test.mjs     End-to-end check against a running local replica
 scripts/check-poll-cost.mjs  Asserts a poll derives no keys and carries no ciphertext
 scripts/check-capabilities.mjs  Verifies the access-level table the share dialog states
 scripts/check-vault-names.mjs  Verifies renaming moves no map and derives no key
-scripts/check-bindings.mjs  Fails if the committed Candid binding is stale
+scripts/check-history.mjs  Verifies a writer can add versions but destroy none
+scripts/check-bindings.mjs  Fails if the committed binding or stable signature is stale
 scripts/check-ii-metadata.mjs  Validates the II app-metadata document
 ```
 
-`include EncryptedMapsCanister(state)` contributes every endpoint the
-`@icp-sdk/vetkeys` client calls, so that interface matches the client by
-construction. The backend adds three of its own beside it — `set_vault_name`,
-`get_vault_names` and `get_vault_summaries` — which is additive: the stock
-client keeps working, and only these three need a binding of ours.
+`include EncryptedMapsControlPlaneCanister(state)` contributes the vetKD, access
+control and enumeration endpoints, but **not** the value endpoints — those are
+hand-written here, because owning them is the only way to record a version of a
+secret as it is replaced. The signatures `@icp-sdk/vetkeys`' client calls are
+kept exactly, so the stock client still works; everything beyond them is
+additive and needs a binding of ours.
 
 That binding is **generated** from the canister's Candid, not written by hand.
 It is also **committed**, so a clone can typecheck, test and run the replica
-checks without a Motoko toolchain — without it `tsc` reports 10 errors and 95 of
-171 tests fail to load. The trade is that committed generated code can go stale,
+checks without a Motoko toolchain — without it `tsc` fails and most of the test
+suite cannot even load. The trade is that committed generated code can go stale,
 so **run `npm run bindings` after changing `src/backend/main.mo`**;
 `npm run check-bindings` fails if you forget, and CI runs it on every pull
 request. Additive drift is the quiet kind: Candid ignores record fields it does
 not know, so a new field goes unnoticed, while a removed or retyped one fails
 loudly.
+
+Committed beside it is `backend.most`, the canister's **stable signature**.
+Nothing reads it at runtime — it is there so that changing the type of a stable
+variable appears in the diff, which is what tells a reviewer whether an upgrade
+still carries the data. Reading a Candid failure as a state incompatibility has
+produced a wrong deploy instruction twice here, in opposite directions; see the
+note under **Run it locally**, and #42.
 
 ### What the canister can and cannot see
 
@@ -224,16 +234,20 @@ icp deploy                    # builds the canister and the frontend, then syncs
 >   changed in a way an upgrade cannot carry. Only this needs a migration, or
 >   `icp deploy --mode reinstall -y`, which **drops every stored secret**.
 >
-> They look the same from the error, so check rather than guess. `mops check`
-> writes the stable signature to `.mops/.build/backend.most`; compare the
-> deployed version's against the new one:
+> They look the same from the error, so check rather than guess. The stable
+> signature is committed as `src/bindings/backend.most` and `check-bindings`
+> holds it current, so **a change to any stable type shows up in the pull
+> request diff** — which is the question a reviewer can act on. To answer
+> whether an upgrade is safe:
 >
 > ```bash
-> moc --stable-compatible old.most new.most   # exit 0 means an upgrade is safe
+> moc --stable-compatible src/bindings/backend.most .mops/.build/backend.most
+> # exit 0 means an upgrade carries the data
 > ```
 >
 > Reading a Candid failure as a state incompatibility has cost this project a
-> wrong instruction twice, in both directions.
+> wrong instruction twice, in both directions — see #42 for making the answer a
+> CI check rather than a habit.
 
 ```bash
 npm test                      # unit tests and component transitions (no replica needed)

@@ -1,0 +1,53 @@
+// Version: 1.0.0
+type AccessRights__352367787 = {#Read; #ReadWrite; #ReadWriteManage};
+type EncryptedMapValue__709694351 = Blob;
+type Entry__79086314 =
+  {at : Nat64; by : Principal; kind : Kind__404514054; value : ?Blob};
+type KeyId__597269483 = (Owner__935355819, KeyName__1030342364);
+type KeyManagerState__237477148<T> =
+  {
+    var accessControl : Map__86905547<Principal, [(KeyId__597269483, T)]>;
+    domainSeparator : Text;
+    var sharedKeys : Map__86905547<KeyId__597269483, [Principal]>;
+    vetKdKeyId : VetKdKeyid__702793859
+  };
+type KeyName__1030342364 = Blob;
+type Key__334261616 = (Principal, Blob, Blob, Nat64);
+type Kind__404514054 = {#Created; #Deleted; #Edited; #Restored};
+type MapId__490225076 = KeyId__597269483;
+type MapKey__37926915 = Blob;
+type Map__442488879<K, V> = Map__626427134<K, V>;
+type Map__626427134<K, V> =
+  {root : Tree__430834836<K, V>; size : Nat__58649523};
+type Map__86905547<K, V> = Map__442488879<K, V>;
+type Nat__58649523 = Nat__920180692;
+type Nat__920180692 = Nat;
+type Owner__935355819 = Principal;
+type Tree__430834836<K, V> =
+  {
+    #black : (Tree__430834836<K, V>, K, V, Tree__430834836<K, V>);
+    #leaf;
+    #red : (Tree__430834836<K, V>, K, V, Tree__430834836<K, V>)
+  };
+type VetKdKeyid__702793859 = {curve : {#bls12_381_g2}; name : Text};
+actor {
+  stable encryptedMapsState :
+    {
+      var keyManager : KeyManagerState__237477148<AccessRights__352367787>;
+      var mapKeyVals :
+        Map__86905547<(MapId__490225076, MapKey__37926915),
+                       EncryptedMapValue__709694351>;
+      var mapKeys : Map__86905547<MapId__490225076, [MapKey__37926915]>
+    };
+  stable var history :
+    {
+      root : Tree__430834836<Key__334261616, Entry__79086314>;
+      size : Nat__58649523
+    };
+  stable var nextSeq : Nat64;
+  stable var vaultNames :
+    {
+      root : Tree__430834836<Principal, Map__86905547<Blob, Text>>;
+      size : Nat__58649523
+    }
+};
