@@ -241,9 +241,18 @@ icp deploy                    # builds the canister and the frontend, then syncs
 > whether an upgrade is safe:
 >
 > ```bash
-> moc --stable-compatible src/bindings/backend.most .mops/.build/backend.most
+> "$(mops toolchain bin moc)" --stable-compatible \
+>   src/bindings/backend.most .mops/.build/backend.most
 > # exit 0 means an upgrade carries the data
 > ```
+>
+> Two details in that command matter. **`mops toolchain bin moc`**, because there
+> is no `moc` on `PATH` — and the mops cache holds a dozen versions, where
+> picking the "last" one lexicographically lands on 1.9.0 rather than the pinned
+> 1.14.0. And **both files must come from `icp build`** (`npm run bindings` and
+> `check-bindings` do): the generated type names depend on how the file was
+> produced, so a hand-rolled `moc --stable-types` run is not comparable, and
+> without this project's build flags it does not even typecheck the same.
 >
 > Reading a Candid failure as a state incompatibility has cost this project a
 > wrong instruction twice, in both directions — see #42 for making the answer a
