@@ -23,14 +23,15 @@ export const idlFactory = ({ IDL }) => {
     'map_owner' : IDL.Principal,
   });
   const Result_4 = IDL.Variant({ 'Ok' : IDL.Opt(ByteBuf), 'Err' : IDL.Text });
-  const Result_9 = IDL.Variant({
+  const Result_10 = IDL.Variant({
     'Ok' : IDL.Vec(IDL.Tuple(ByteBuf, ByteBuf)),
     'Err' : IDL.Text,
   });
-  const Result_8 = IDL.Variant({ 'Ok' : ByteBuf, 'Err' : IDL.Text });
+  const Result_9 = IDL.Variant({ 'Ok' : ByteBuf, 'Err' : IDL.Text });
   const VersionKind = IDL.Variant({
     'Edited' : IDL.Null,
     'Restored' : IDL.Null,
+    'Created' : IDL.Null,
     'Deleted' : IDL.Null,
   });
   const Version = IDL.Record({
@@ -40,7 +41,16 @@ export const idlFactory = ({ IDL }) => {
     'value' : IDL.Opt(ByteBuf),
     'kind' : VersionKind,
   });
-  const Result_7 = IDL.Variant({ 'Ok' : IDL.Vec(Version), 'Err' : IDL.Text });
+  const Result_8 = IDL.Variant({ 'Ok' : IDL.Vec(Version), 'Err' : IDL.Text });
+  const ItemSummary = IDL.Record({
+    'updated_at' : IDL.Nat64,
+    'map_key' : ByteBuf,
+    'versions' : IDL.Nat,
+  });
+  const Result_7 = IDL.Variant({
+    'Ok' : IDL.Vec(ItemSummary),
+    'Err' : IDL.Text,
+  });
   const Result_6 = IDL.Variant({
     'Ok' : IDL.Vec(IDL.Tuple(IDL.Principal, AccessRights)),
     'Err' : IDL.Text,
@@ -114,16 +124,21 @@ export const idlFactory = ({ IDL }) => {
       ),
     'get_encrypted_values_for_map' : IDL.Func(
         [IDL.Principal, ByteBuf],
-        [Result_9],
+        [Result_10],
         ['query'],
       ),
     'get_encrypted_vetkey' : IDL.Func(
         [IDL.Principal, ByteBuf, ByteBuf],
-        [Result_8],
+        [Result_9],
         [],
       ),
     'get_history' : IDL.Func(
         [IDL.Principal, ByteBuf, ByteBuf],
+        [Result_8],
+        ['query'],
+      ),
+    'get_item_summaries' : IDL.Func(
+        [IDL.Principal, ByteBuf],
         [Result_7],
         ['query'],
       ),
@@ -162,14 +177,14 @@ export const idlFactory = ({ IDL }) => {
         [Result_1],
         [],
       ),
-    'restore_trashed_value' : IDL.Func(
-        [IDL.Principal, ByteBuf, IDL.Nat64],
-        [Result],
-        [],
-      ),
     'restore_trashed_values' : IDL.Func(
         [IDL.Principal, ByteBuf],
         [Result_2],
+        [],
+      ),
+    'restore_version' : IDL.Func(
+        [IDL.Principal, ByteBuf, IDL.Nat64],
+        [Result],
         [],
       ),
     'set_user_rights' : IDL.Func(

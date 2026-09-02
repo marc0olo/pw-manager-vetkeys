@@ -57,7 +57,7 @@ check("and appears in the owner's trash", (await trashOf(A, me, NAME)).length ==
 
 // ---- restore returns something that still decrypts --------------------------
 const trashRows = await trashOf(A, me, NAME);
-const restored = await B.api.restore_trashed_value(me, buf(NAME), trashRows[0].seq);
+const restored = await B.api.restore_version(me, buf(NAME), trashRows[0].seq);
 check("a collaborator with write access can restore it", "Ok" in restored, JSON.stringify(restored));
 const after = await A.maps.getValuesForMap(me, N);
 const back = after.find(([k]) => dec.decode(k) === "k1");
@@ -79,7 +79,7 @@ check("which still decrypts to the original",
   dec.decode(await A.maps.decryptFor(me, N, enc.encode("k2"), Uint8Array.from(rows[0].value.inner))) === "secret two");
 check("and says who deleted it and when",
   rows[0].deleted_by.compareTo(me) === "eq" && rows[0].deleted_at > 0n);
-await A.api.restore_trashed_value(me, buf(NAME), rows[0].seq);
+await A.api.restore_version(me, buf(NAME), rows[0].seq);
 
 // ---- a wipe trashes everything, and restores as one -------------------------
 await B.maps.removeMapValues(me, N);
@@ -161,7 +161,7 @@ await A.maps.setUserRights(me, N, danaId.getPrincipal(), { Read: null });
 check("a read-only member sees what was deleted", (await trashOf(D, me, NAME)).length === 1);
 check(
   "but cannot restore it",
-  "Err" in (await D.api.restore_trashed_value(me, buf(NAME), (await trashOf(D, me, NAME))[0].seq)),
+  "Err" in (await D.api.restore_version(me, buf(NAME), (await trashOf(D, me, NAME))[0].seq)),
 );
 check(
   "nor in bulk",
@@ -293,7 +293,7 @@ check("someone with no access to the vault is refused outright", denied.err === 
   const before = (await A.api.get_history(me, buf(RV), buf("k1"))).Ok.length;
   const row = (await trashOf(A, me, RV))[0];
 
-  check("restoring succeeds", "Ok" in (await A.api.restore_trashed_value(me, buf(RV), row.seq)));
+  check("restoring succeeds", "Ok" in (await A.api.restore_version(me, buf(RV), row.seq)));
   check("the secret leaves the trash", (await trashOf(A, me, RV)).length === 0);
   const after = (await A.api.get_history(me, buf(RV), buf("k1"))).Ok.length;
   // It leaves because the key is live again, not because a row was deleted —
@@ -355,6 +355,62 @@ check("someone with no access to the vault is refused outright", denied.err === 
     dec.decode((await A.maps.getValuesForMap(me, P)).find(([k]) => dec.decode(k) === "k1")[1]) === "v2");
 }
 
+// ---- a first write is on the record, and the stamp is the canister's -------
+//
+// Without a #Created event a never-edited secret has no canister-side
+// timestamp or author at all, and the only "updated" a client could show is
+// the one written *inside* the plaintext by whoever saved it.
+{
+  const CR = "Created", C2 = enc.encode(CR);
+  await A.maps.setValue(me, C2, enc.encode("k1"), enc.encode("v1"));
+
+  const events = (await A.api.get_history(me, buf(CR), buf("k1"))).Ok;
+  check("a first write records an event", events.length === 1, `${events.length} events`);
+  check("with no value, since it superseded nothing", events[0].value.length === 0);
+  check("marked as a creation", "Created" in events[0].kind, JSON.stringify(events[0].kind));
+  check("and attributed to the writer", events[0].by.compareTo(me) === "eq");
+
+  const summaries = (await A.api.get_item_summaries(me, buf(CR))).Ok;
+  const row = summaries.find((r) => dec.decode(Uint8Array.from(r.map_key.inner)) === "k1");
+  check("the item summary reports no restorable versions yet", row !== undefined && Number(row.versions) === 0,
+    row ? String(row.versions) : "missing");
+  check("but does report when the canister recorded the write", row !== undefined && row.updated_at > 0n);
+
+  // An edit adds a restorable version and moves the stamp forward.
+  const before = row.updated_at;
+  await A.maps.setValue(me, C2, enc.encode("k1"), enc.encode("v2"));
+  const after = (await A.api.get_item_summaries(me, buf(CR))).Ok
+    .find((r) => dec.decode(Uint8Array.from(r.map_key.inner)) === "k1");
+  check("an edit makes one version restorable", Number(after.versions) === 1, String(after.versions));
+  check("and moves the recorded write forward", after.updated_at > before);
+
+  // A version of a *live* secret restores like any other, and keeps what it
+  // replaced — which is why the endpoint is not called restore_trashed_value.
+  const versions = (await A.api.get_history(me, buf(CR), buf("k1"))).Ok.filter((v) => v.value.length > 0);
+  check("restoring a version of a live secret is allowed",
+    "Ok" in (await A.api.restore_version(me, buf(CR), versions[0].seq)));
+  check("and the value it replaced is kept too",
+    (await A.api.get_history(me, buf(CR), buf("k1"))).Ok.filter((v) => v.value.length > 0).length === 2);
+  check("so the live secret is the restored one",
+    dec.decode((await A.maps.getValuesForMap(me, C2)).find(([k]) => dec.decode(k) === "k1")[1]) === "v1");
+}
+
+// ---- reading the log needs read access, nothing more -----------------------
+{
+  const RA = "ReadAccess", RB = enc.encode(RA);
+  await A.maps.setValue(me, RB, enc.encode("k1"), enc.encode("v1"));
+  await A.maps.setValue(me, RB, enc.encode("k1"), enc.encode("v2"));
+  const reader = await connect(Ed25519KeyIdentity.generate());
+  await A.maps.setUserRights(me, RB, reader.me, { Read: null });
+
+  check("a reader sees the version history", (await reader.api.get_history(me, buf(RA), buf("k1"))).Ok.length >= 1);
+  check("and the item summaries", "Ok" in (await reader.api.get_item_summaries(me, buf(RA))));
+  const outsider = await connect(Ed25519KeyIdentity.generate());
+  check("someone with no access sees neither",
+    "Err" in (await outsider.api.get_history(me, buf(RA), buf("k1"))) &&
+      "Err" in (await outsider.api.get_item_summaries(me, buf(RA))));
+}
+
 // ---- pruning a trashed secret takes it out of the listing -----------------
 //
 // `drop_history` has no liveness check, so an owner can clear the version the
@@ -388,7 +444,7 @@ check("someone with no access to the vault is refused outright", denied.err === 
 
   // Restore one and delete another: the count is unchanged, the contents are
   // not. A count could not drive a second viewer's open dialog; this can.
-  await A.api.restore_trashed_value(me, buf(FP), (await trashOf(A, me, FP))[0].seq);
+  await A.api.restore_version(me, buf(FP), (await trashOf(A, me, FP))[0].seq);
   await A.maps.removeEncryptedValue(me, F, enc.encode("b"));
   const two = await digestOf();
   const count = (await trashOf(A, me, FP)).length;

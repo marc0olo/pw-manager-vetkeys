@@ -134,9 +134,21 @@ actor PasswordManager {
   ) : async Result<?ByteBuf, Text> {
     switch (encryptedMaps.insertEncryptedValue(msg.caller, (map_owner, map_name.inner), map_key.inner, value.inner)) {
       case (#err(e)) { #Err(e) };
-      // Nothing was superseded, so there is no version to keep. A first write
-      // is not an event in the history — the value it created is the live one.
-      case (#ok(null)) { #Ok(null) };
+      // Nothing was superseded, so there is no version to keep — but the write
+      // itself is worth recording. Otherwise a secret nobody has edited has no
+      // canister-side timestamp or author, and the only "updated" a client
+      // could show is the one written *inside* the plaintext by whoever saved
+      // it, which is the writer's to choose.
+      case (#ok(null)) {
+        record(
+          msg.caller,
+          map_owner,
+          map_name.inner,
+          [(map_key.inner, null, #Created)],
+          liveness(msg.caller, map_owner, map_name.inner),
+        );
+        #Ok(null);
+      };
       case (#ok(?blob)) {
         // The value this write replaced. Recording it here is the whole of
         // version history: without it an edit destroys the previous secret,
@@ -331,7 +343,7 @@ actor PasswordManager {
   };
 
   public type TrashedItem = {
-    /// Which event this row is, and what `restore_trashed_value` takes.
+    /// Which event this row is, and what `restore_version` takes.
     ///
     /// The map key is not an identity here: a secret can be deleted, restored
     /// and deleted again, so several events share it. Addressing a restore by
@@ -407,7 +419,7 @@ actor PasswordManager {
     );
   };
 
-  public type VersionKind = { #Edited; #Deleted; #Restored };
+  public type VersionKind = { #Created; #Edited; #Deleted; #Restored };
 
   public type Version = {
     seq : Nat64;
@@ -460,13 +472,18 @@ actor PasswordManager {
 
   /// Put one version back, addressed by its event.
   ///
+  /// Any version, not only a deleted one: restoring over a live secret
+  /// supersedes it, which is an edit, so the value being replaced is kept like
+  /// any other. That is why this is not called `restore_trashed_value` — the
+  /// trash is one view of the log, and this operates on the log.
+  ///
   /// Authorization is the library's: this is an insert, so a caller without
   /// write rights is refused there and nothing is recorded.
   ///
   /// Removes nothing. The row stays, and the secret leaves the trash because it
   /// has a live value again — which is what keeps a writer unable to destroy
   /// anything, and what lets a recovered secret keep its history.
-  public shared (msg) func restore_trashed_value(
+  public shared (msg) func restore_version(
     map_owner : Principal,
     map_name : ByteBuf,
     seq : Nat64,
@@ -505,6 +522,57 @@ actor PasswordManager {
         };
       };
     };
+  };
+
+  public type ItemSummary = {
+    map_key : ByteBuf;
+    /// Restorable versions: value-carrying events only. A `#Created` marker and
+    /// a version the owner has pruned are both on the record, but neither is
+    /// something a client can offer to put back.
+    versions : Nat;
+    /// When the canister recorded the write that produced the current value.
+    ///
+    /// The newest event's timestamp, which is exactly that: an event stores the
+    /// value it *replaced*, so the newest one is stamped when the replacement
+    /// landed. For a secret nobody has edited it is the `#Created` event.
+    ///
+    /// Authoritative in the way the item's own `updatedAt` is not — that field
+    /// lives inside the plaintext and is set by whoever last saved it, so it is
+    /// the writer's to choose.
+    updated_at : Nat64;
+  };
+
+  /// Per-item history facts for one vault: how much is restorable, and when the
+  /// current value was actually written.
+  ///
+  /// A separate query rather than fields on `get_vault_summaries`, which runs
+  /// every 15 s: #14 got the poll down to a digest and a key list, and two
+  /// numbers per item would grow it with the vault. This is read once when a
+  /// vault is opened, alongside the values themselves.
+  ///
+  /// No ciphertext, so it costs no key derivation.
+  public query (msg) func get_item_summaries(
+    map_owner : Principal,
+    map_name : ByteBuf,
+  ) : async Result<[ItemSummary], Text> {
+    if (not canRead(msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
+    let isLive = liveness(msg.caller, map_owner, map_name.inner);
+    let at = now();
+    var out : [ItemSummary] = [];
+    for (mapKey in History.keysIn(history, map_owner, map_name.inner).values()) {
+      let rows = History.forKey(history, map_owner, map_name.inner, mapKey);
+      if (not History.groupExpired(rows, isLive(mapKey), at)) {
+        var versions = 0;
+        var newestSeq : Nat64 = 0;
+        var updatedAt : Nat64 = 0;
+        for ((seq, entry) in rows.values()) {
+          if (entry.value != null) { versions += 1 };
+          if (updatedAt == 0 or seq > newestSeq) { newestSeq := seq; updatedAt := entry.at };
+        };
+        out := Array.concat(out, [{ map_key = { inner = mapKey }; versions; updated_at = updatedAt }]);
+      };
+    };
+    #Ok(out);
   };
 
   /// Put a whole vault's trash back, for undoing a wipe without one call per

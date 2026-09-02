@@ -69,6 +69,8 @@ describe("NO_VAULT_SESSION", () => {
     expect(Object.keys(NO_VAULT_SESSION).sort()).toEqual([
       "deleting",
       "denials",
+      "history",
+      "itemFacts",
       "openItems",
       "pane",
       "query",

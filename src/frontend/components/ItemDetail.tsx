@@ -1,11 +1,28 @@
 import { useEffect, useState } from "react";
 import { CopyIcon, EyeIcon, EyeOffIcon, ExternalIcon, TrashIcon } from "./Icons";
 import { displayHost, type VaultItem } from "../lib/items";
+import type { ItemVersion } from "../lib/vault";
 import { passwordStrength } from "../lib/password";
 
 interface Props {
   item: VaultItem;
   canWrite: boolean;
+  /** Whether pruning is offered — the owner's alone, like emptying the trash. */
+  isOwner: boolean;
+  /**
+   * When the canister recorded the write that produced this value, and how many
+   * earlier versions it has. Null while the vault is still being read.
+   *
+   * Deliberately not `item.updatedAt`: that lives inside the plaintext and is
+   * written by whoever last saved the item, so it is the writer's to choose.
+   */
+  facts: { versions: number; updatedAt: number } | null;
+  /** The expanded version list, or null when collapsed. */
+  versions: ItemVersion[] | null;
+  busy: boolean;
+  onToggleHistory: () => void;
+  onRestoreVersion: (seq: bigint) => void;
+  onDropHistory: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onCopy: (field: "username" | "password" | "url", value: string) => void;
@@ -14,8 +31,24 @@ interface Props {
 /** Auto-hide a revealed password so it does not sit on screen indefinitely. */
 const REVEAL_TIMEOUT_MS = 30_000;
 
-export function ItemDetail({ item, canWrite, onEdit, onDelete, onCopy }: Props) {
+export function ItemDetail({
+  item,
+  canWrite,
+  isOwner,
+  facts,
+  versions,
+  busy,
+  onToggleHistory,
+  onRestoreVersion,
+  onDropHistory,
+  onEdit,
+  onDelete,
+  onCopy,
+}: Props) {
   const [revealed, setRevealed] = useState(false);
+  const [confirmingDrop, setConfirmingDrop] = useState(false);
+
+  useEffect(() => setConfirmingDrop(false), [item.id]);
 
   useEffect(() => setRevealed(false), [item.id]);
 
@@ -37,8 +70,8 @@ export function ItemDetail({ item, canWrite, onEdit, onDelete, onCopy }: Props) 
         </span>
         <div>
           <h2>{item.title || host || "Untitled"}</h2>
-          {item.updatedAt > 0 && (
-            <p className="detail__stamp">Updated {new Date(item.updatedAt).toLocaleString()}</p>
+          {facts && facts.updatedAt > 0 && (
+            <p className="detail__stamp">Updated {new Date(facts.updatedAt).toLocaleString()}</p>
           )}
         </div>
       </header>
@@ -102,6 +135,70 @@ export function ItemDetail({ item, canWrite, onEdit, onDelete, onCopy }: Props) 
           </div>
         )}
       </dl>
+
+      {facts && facts.versions > 0 && (
+        <section className="history">
+          <button className="history__toggle" onClick={onToggleHistory} aria-expanded={versions !== null}>
+            {facts.versions} earlier {facts.versions === 1 ? "version" : "versions"}
+          </button>
+
+          {versions !== null && (
+            <>
+              <ul className="history__list">
+                {versions.map((entry) => (
+                  // Keyed on the event: two versions can hold the same content,
+                  // and the canister cannot tell that they do — AES-GCM uses a
+                  // random IV, so identical plaintext encrypts differently.
+                  <li key={String(entry.seq)}>
+                    <div>
+                      <div className="history__title">{entry.item.title || "Untitled"}</div>
+                      <code title={`Recorded by ${entry.by.toText()}`}>
+                        {entry.kind === "Deleted" ? "deleted" : "replaced"}{" "}
+                        {new Date(entry.at).toLocaleString()} by {entry.by.toText().slice(0, 8)}…
+                      </code>
+                    </div>
+                    {canWrite && (
+                      <button
+                        className="btn btn--ghost btn--sm"
+                        onClick={() => onRestoreVersion(entry.seq)}
+                        disabled={busy}
+                      >
+                        Restore
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+
+              {isOwner &&
+                (confirmingDrop ? (
+                  <p className="history__confirm">
+                    Delete {facts.versions} stored {facts.versions === 1 ? "version" : "versions"} for
+                    good? The record of who changed this and when is kept.{" "}
+                    <button className="btn btn--danger btn--sm" onClick={onDropHistory} disabled={busy}>
+                      {busy ? "Working…" : "Delete versions"}
+                    </button>
+                    <button
+                      className="btn btn--ghost btn--sm"
+                      onClick={() => setConfirmingDrop(false)}
+                      disabled={busy}
+                    >
+                      Keep them
+                    </button>
+                  </p>
+                ) : (
+                  <button
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => setConfirmingDrop(true)}
+                    disabled={busy}
+                  >
+                    Delete stored versions
+                  </button>
+                ))}
+            </>
+          )}
+        </section>
+      )}
 
       {canWrite && (
         <footer className="detail__actions">

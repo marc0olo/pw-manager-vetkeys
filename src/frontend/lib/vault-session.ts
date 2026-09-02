@@ -1,7 +1,6 @@
 import type { Denials } from "./capabilities";
 import type { VaultItem } from "./items";
-import type { TrashedItem } from "./vault";
-import type { VaultSummary } from "./vault";
+import type { ItemVersion, TrashedItem, VaultSummary } from "./vault";
 
 export type Pane = { mode: "view" } | { mode: "edit"; item: VaultItem; isNew: boolean };
 
@@ -52,6 +51,19 @@ export interface VaultSessionState {
   /** The trash dialog. Null when closed; the deleted items when open. */
   trash: TrashedItem[] | null;
   /**
+   * Per-item history facts for the open vault: restorable versions, and the
+   * canister's timestamp for the current value. Read once when the vault opens.
+   *
+   * Not plaintext, but it names items and counts their edits, so it goes with
+   * the rest of the session rather than outliving it.
+   */
+  itemFacts: Record<string, { versions: number; updatedAt: number }> | null;
+  /**
+   * The expanded version list for one item. Decrypted, so it is plaintext and
+   * must not survive a lock.
+   */
+  history: { itemId: string; rows: ItemVersion[] } | null;
+  /**
    * The delete-item confirmation. Names no item — it always refers to the
    * selected one — but it still goes on lock, because a dialog asking about an
    * item the next principal cannot see would be a leak of the fact it existed.
@@ -73,6 +85,8 @@ export const NO_VAULT_SESSION: VaultSessionState = {
   wiping: false,
   renaming: false,
   trash: null,
+  itemFacts: null,
+  history: null,
   deleting: false,
 };
 

@@ -20,9 +20,16 @@ export interface EncryptedMapData {
   'map_name' : ByteBuf,
   'map_owner' : Principal,
 }
+export interface ItemSummary {
+  'updated_at' : bigint,
+  'map_key' : ByteBuf,
+  'versions' : bigint,
+}
 export type Result = { 'Ok' : null } |
   { 'Err' : string };
 export type Result_1 = { 'Ok' : [] | [AccessRights] } |
+  { 'Err' : string };
+export type Result_10 = { 'Ok' : Array<[ByteBuf, ByteBuf]> } |
   { 'Err' : string };
 export type Result_2 = { 'Ok' : bigint } |
   { 'Err' : string };
@@ -34,11 +41,11 @@ export type Result_5 = { 'Ok' : Array<TrashedItem> } |
   { 'Err' : string };
 export type Result_6 = { 'Ok' : Array<[Principal, AccessRights]> } |
   { 'Err' : string };
-export type Result_7 = { 'Ok' : Array<Version> } |
+export type Result_7 = { 'Ok' : Array<ItemSummary> } |
   { 'Err' : string };
-export type Result_8 = { 'Ok' : ByteBuf } |
+export type Result_8 = { 'Ok' : Array<Version> } |
   { 'Err' : string };
-export type Result_9 = { 'Ok' : Array<[ByteBuf, ByteBuf]> } |
+export type Result_9 = { 'Ok' : ByteBuf } |
   { 'Err' : string };
 export interface TrashedItem {
   'seq' : bigint,
@@ -71,6 +78,7 @@ export interface Version {
 }
 export type VersionKind = { 'Edited' : null } |
   { 'Restored' : null } |
+  { 'Created' : null } |
   { 'Deleted' : null };
 export interface _SERVICE {
   /**
@@ -124,8 +132,8 @@ export interface _SERVICE {
     Array<[[Principal, ByteBuf], Array<[ByteBuf, ByteBuf]>]>
   >,
   'get_encrypted_value' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_4>,
-  'get_encrypted_values_for_map' : ActorMethod<[Principal, ByteBuf], Result_9>,
-  'get_encrypted_vetkey' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_8>,
+  'get_encrypted_values_for_map' : ActorMethod<[Principal, ByteBuf], Result_10>,
+  'get_encrypted_vetkey' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_9>,
   /**
    * / Every recorded version of one secret, oldest first.
    * /
@@ -138,7 +146,19 @@ export interface _SERVICE {
    * / Not on the poll. Values ride this because it is user-initiated and scoped
    * / to one secret; #14's rule is that nothing automatic carries ciphertext.
    */
-  'get_history' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_7>,
+  'get_history' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_8>,
+  /**
+   * / Per-item history facts for one vault: how much is restorable, and when the
+   * / current value was actually written.
+   * /
+   * / A separate query rather than fields on `get_vault_summaries`, which runs
+   * / every 15 s: #14 got the poll down to a digest and a key list, and two
+   * / numbers per item would grow it with the vault. This is read once when a
+   * / vault is opened, alongside the values themselves.
+   * /
+   * / No ciphertext, so it costs no key derivation.
+   */
+  'get_item_summaries' : ActorMethod<[Principal, ByteBuf], Result_7>,
   'get_owned_non_empty_map_names' : ActorMethod<[], Array<ByteBuf>>,
   'get_shared_user_access_for_map' : ActorMethod<
     [Principal, ByteBuf],
@@ -196,17 +216,6 @@ export interface _SERVICE {
   'remove_map_values' : ActorMethod<[Principal, ByteBuf], Result_3>,
   'remove_user' : ActorMethod<[Principal, ByteBuf, Principal], Result_1>,
   /**
-   * / Put one version back, addressed by its event.
-   * /
-   * / Authorization is the library's: this is an insert, so a caller without
-   * / write rights is refused there and nothing is recorded.
-   * /
-   * / Removes nothing. The row stays, and the secret leaves the trash because it
-   * / has a live value again — which is what keeps a writer unable to destroy
-   * / anything, and what lets a recovered secret keep its history.
-   */
-  'restore_trashed_value' : ActorMethod<[Principal, ByteBuf, bigint], Result>,
-  /**
    * / Put a whole vault's trash back, for undoing a wipe without one call per
    * / item.
    * /
@@ -221,6 +230,22 @@ export interface _SERVICE {
    * / `History.trash` already yields one row per key, which is that row.
    */
   'restore_trashed_values' : ActorMethod<[Principal, ByteBuf], Result_2>,
+  /**
+   * / Put one version back, addressed by its event.
+   * /
+   * / Any version, not only a deleted one: restoring over a live secret
+   * / supersedes it, which is an edit, so the value being replaced is kept like
+   * / any other. That is why this is not called `restore_trashed_value` — the
+   * / trash is one view of the log, and this operates on the log.
+   * /
+   * / Authorization is the library's: this is an insert, so a caller without
+   * / write rights is refused there and nothing is recorded.
+   * /
+   * / Removes nothing. The row stays, and the secret leaves the trash because it
+   * / has a live value again — which is what keeps a writer unable to destroy
+   * / anything, and what lets a recovered secret keep its history.
+   */
+  'restore_version' : ActorMethod<[Principal, ByteBuf, bigint], Result>,
   'set_user_rights' : ActorMethod<
     [Principal, ByteBuf, Principal, AccessRights],
     Result_1

@@ -80,6 +80,21 @@ export interface VaultSummary {
  * key works and no extra derivation is needed. Without this the dialog could
  * only offer "restore something deleted at 14:22", which is not recovery.
  */
+/** One stored version of a secret, decrypted. */
+export interface ItemVersion {
+  /** The event, and what `restoreVersion` takes. */
+  seq: bigint;
+  /** The value this event superseded, decrypted. */
+  item: VaultItem;
+  /**
+   * When the canister recorded the write. Not the item's own `updatedAt`,
+   * which is written by whoever last saved it — see {@link VaultClient.versions}.
+   */
+  at: number;
+  by: Principal;
+  kind: "Created" | "Edited" | "Deleted" | "Restored";
+}
+
 export interface TrashedItem {
   /**
    * Which deletion event this is, and what `restoreItem` takes.
@@ -428,10 +443,94 @@ export class VaultClient {
     );
   }
 
-  /** Put one version back, addressed by its event rather than by item id. */
-  async restoreItem(vault: VaultSummary, seq: bigint): Promise<void> {
-    const result = await this.backend.restore_trashed_value(vault.owner, { inner: nameBytes(vault.name) }, seq);
+  /**
+   * Put one version back, addressed by its event rather than by item id.
+   *
+   * Works for a version of a live secret as much as a deleted one: the insert
+   * supersedes whatever is current, so the value being replaced is kept like
+   * any other version. Nothing is lost by restoring the wrong one.
+   */
+  async restoreVersion(vault: VaultSummary, seq: bigint): Promise<void> {
+    const result = await this.backend.restore_version(vault.owner, { inner: nameBytes(vault.name) }, seq);
     if ("Err" in result) throw new Error(result.Err);
+  }
+
+  /**
+   * Per-item history facts for a vault: restorable versions, and when the
+   * current value was actually written.
+   *
+   * Read when a vault is opened rather than on the poll, so this costs no
+   * request per item and does not grow the 15 s poll (#14).
+   *
+   * `updatedAt` here is the canister's. The item's own `updatedAt` lives
+   * *inside* the plaintext and is written by whoever last saved it — chosen by
+   * the writer in exactly the way `deleted_by` was before the event log. It is
+   * not what "updated" should mean.
+   */
+  async itemSummaries(vault: VaultSummary): Promise<Record<string, { versions: number; updatedAt: number }>> {
+    const result = await this.backend.get_item_summaries(vault.owner, { inner: nameBytes(vault.name) });
+    if ("Err" in result) throw new Error(result.Err);
+    const out: Record<string, { versions: number; updatedAt: number }> = {};
+    for (const row of result.Ok) {
+      out[decoder.decode(Uint8Array.from(row.map_key.inner))] = {
+        versions: Number(row.versions),
+        updatedAt: Number(row.updated_at / 1_000_000n),
+      };
+    }
+    return out;
+  }
+
+  /**
+   * Every restorable version of one secret, newest first.
+   *
+   * Decrypted here, at no extra key derivation: a version was never
+   * re-encrypted, so the key material cached from opening the vault decrypts it.
+   *
+   * `at` is the canister's timestamp, and the item's own `updatedAt` is not.
+   * That field lives *inside* the plaintext and is written by whoever last
+   * saved the item, so it is chosen by the writer in exactly the way
+   * `deleted_by` used to be. Displaying it as "when this changed" would be
+   * repeating that mistake in a field nobody has looked at.
+   */
+  async versions(vault: VaultSummary, itemId: string): Promise<ItemVersion[]> {
+    const name = nameBytes(vault.name);
+    const result = await this.backend.get_history(vault.owner, { inner: name }, {
+      inner: encoder.encode(itemId),
+    });
+    if ("Err" in result) throw new Error(result.Err);
+    const withValues = result.Ok.filter((row) => row.value.length > 0);
+    const decrypted = await Promise.all(
+      withValues.map(async (row) => ({
+        seq: row.seq,
+        item: decodeItem(
+          itemId,
+          await this.encryptedMaps.decryptFor(
+            vault.owner,
+            name,
+            encoder.encode(itemId),
+            Uint8Array.from(row.value[0]!.inner),
+          ),
+        ),
+        at: Number(row.at / 1_000_000n),
+        by: row.by,
+        kind: Object.keys(row.kind)[0] as ItemVersion["kind"],
+      })),
+    );
+    return decrypted.sort((a, b) => (b.seq > a.seq ? 1 : -1));
+  }
+
+  /**
+   * Drop this secret's stored versions, keeping the secret.
+   *
+   * Owner-only, and it clears the ciphertext while keeping the events — so the
+   * record of who changed what survives, and pruning cannot launder it.
+   */
+  async dropHistory(vault: VaultSummary, itemId: string): Promise<number> {
+    const result = await this.backend.drop_history(vault.owner, { inner: nameBytes(vault.name) }, {
+      inner: encoder.encode(itemId),
+    });
+    if ("Err" in result) throw new Error(result.Err);
+    return Number(result.Ok);
   }
 
   /** Undo a whole wipe without one call per item. */

@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 import { Principal } from "@icp-sdk/core/principal";
 import type { VaultItem } from "../lib/items";
-import type { TrashedItem, VaultSummary } from "../lib/vault";
+import type { ItemVersion, TrashedItem, VaultSummary } from "../lib/vault";
 
 export const ALICE = Principal.fromText("2ibo7-dia");
 export const BOB = Principal.fromText("aaaaa-aa");
@@ -73,7 +73,28 @@ export class FakeClient {
     if (this.refuse === "open") throw new Error("unauthorized");
     return this.trash;
   });
-  restoreItem = vi.fn(async (_vault: VaultSummary, _seq: bigint) => this.guard("write"));
+  restoreVersion = vi.fn(async (_vault: VaultSummary, _seq: bigint) => this.guard("write"));
+
+  /** Versions per item id, for the history section. */
+  itemVersions: Record<string, ItemVersion[]> = {};
+
+  itemSummaries = vi.fn(async () =>
+    Object.fromEntries(
+      Object.entries(this.itemVersions).map(([id, rows]) => [
+        id,
+        { versions: rows.length, updatedAt: rows[0]?.at ?? Date.UTC(2026, 0, 3, 11, 15) },
+      ]),
+    ),
+  );
+  versions = vi.fn(async (_vault: VaultSummary, itemId: string) => this.itemVersions[itemId] ?? []);
+  dropHistory = vi.fn(async (_vault: VaultSummary, itemId: string) => {
+    if (this.refuseDrop) throw new Error("unauthorized");
+    const dropped = (this.itemVersions[itemId] ?? []).length;
+    this.itemVersions[itemId] = [];
+    return dropped;
+  });
+  /** Owner-only on the canister, so it refuses independently of write access. */
+  refuseDrop = false;
   restoreAll = vi.fn(async () => {
     this.guard("write");
     return this.trash.length;
@@ -94,6 +115,14 @@ export class FakeClient {
   revoke = vi.fn(async () => this.guard("manage"));
   lock = vi.fn(async () => {});
 }
+
+export const version = (o: Partial<ItemVersion> & { item: VaultItem }): ItemVersion => ({
+  seq: nextSeq++,
+  at: Date.UTC(2026, 0, 3, 11, 15),
+  by: ALICE,
+  kind: "Edited",
+  ...o,
+});
 
 let nextSeq = 0n;
 export const trashed = (o: Partial<TrashedItem> & { item: VaultItem }): TrashedItem => ({

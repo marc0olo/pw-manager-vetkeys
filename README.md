@@ -45,11 +45,17 @@ password — the vault key is derived for your Internet Identity principal.
   involved. The dialog shows real titles — the ciphertext comes back with the
   listing and is decrypted in the browser under the key already cached from
   opening the vault, so a deleted item is recognisable rather than a timestamp.
-  - **Every version is kept.** Editing a secret records the value it replaced,
-    so an edit is recoverable and not only a deletion. Trash, version history
-    and the audit trail are one append-only log: a deletion is a version with
-    nothing after it. Nothing is ever moved, so a trashed secret keeps its
-    history and a recovered one keeps it too.
+  - **Every version is kept**, and shown. An item's detail pane says how many
+    earlier versions it has and expands to list them, newest first, with who
+    recorded each and when; any can be restored. Restoring one keeps the value
+    it replaces, so nothing is lost by picking the wrong version. Trash,
+    version history and the audit trail are one append-only log: a deletion is
+    a version with nothing after it. Nothing is ever moved, so a trashed secret
+    keeps its history and a recovered one keeps it too.
+  - **"Updated" is the canister's timestamp**, not the item's own `updatedAt` —
+    that field lives inside the encrypted payload and is written by whoever
+    last saved the item, so it is the writer's to choose. A first write is
+    recorded too, so a secret nobody has edited still has an author and a time.
   - **Who sees it.** The log belongs to the vault: everyone who can read the
     vault reads it, and write access is what puts a version back. A member
     added later sees earlier versions — deliberate, since they can read the
@@ -58,7 +64,8 @@ password — the vault key is derived for your Internet Identity principal.
     Removing is the owner's: **Empty trash** makes a vault's deletions
     unrecoverable, and dropping a secret's history clears the stored
     ciphertext while keeping the events, so pruning cannot launder the record
-    of who changed what. Time is the only other remover — 90 days after a
+    of who changed what. Both are offered in the UI — Empty trash in the trash
+    view, Delete stored versions on the item. Time is the only other remover — 90 days after a
     deletion, the secret and its history go together.
   - **The share dialog** says how much a grantee would inherit, so the trade is
     stated where the decision is made.
