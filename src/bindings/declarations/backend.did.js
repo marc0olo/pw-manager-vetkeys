@@ -55,6 +55,7 @@ export const idlFactory = ({ IDL }) => {
     'item_keys' : IDL.Vec(ByteBuf),
     'access_control' : IDL.Vec(IDL.Tuple(IDL.Principal, AccessRights)),
     'trashed' : IDL.Nat,
+    'my_rights' : IDL.Opt(AccessRights),
     'digest' : ByteBuf,
     'map_name' : ByteBuf,
   });

@@ -10,22 +10,23 @@
  * If any of this drifts, the share dialog starts lying about what it grants.
  */
 import { execSync } from "node:child_process";
-import { HttpAgent } from "@icp-sdk/core/agent";
+import { Actor, HttpAgent } from "@icp-sdk/core/agent";
 import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
 import { DefaultEncryptedMapsClient, EncryptedMaps } from "@icp-sdk/vetkeys/encrypted_maps";
+import { idlFactory } from "../src/bindings/declarations/backend.did.js";
 
 const status = JSON.parse(execSync("icp network status --json", { encoding: "utf-8" }));
 const backendId = execSync("icp canister status backend --id-only", { encoding: "utf-8" }).trim();
 const rootKey = Uint8Array.from(Buffer.from(status.root_key, "hex"));
 const enc = new TextEncoder();
 
-const connect = async (identity) =>
-  new EncryptedMaps(
-    new DefaultEncryptedMapsClient(
-      await HttpAgent.create({ identity, host: status.api_url, rootKey }),
-      backendId,
-    ),
-  );
+const connect = async (identity) => {
+  const agent = await HttpAgent.create({ identity, host: status.api_url, rootKey });
+  const maps = new EncryptedMaps(new DefaultEncryptedMapsClient(agent, backendId));
+  // The app's own endpoints, which answer what the library will not.
+  maps.api = Actor.createActor(idlFactory, { agent, canisterId: backendId });
+  return maps;
+};
 
 const failures = [];
 const check = (label, pass, detail = "") => {
@@ -104,6 +105,29 @@ check(
     "while the write it hid actually succeeds",
     (await attempt(() => G.setValue(me, mapName, enc.encode("proof"), enc.encode("{}")))) === "ok",
   );
+}
+
+// ---- the app answers what the library will not ------------------------------
+//
+// #438 means a grantee cannot learn their own rights, so the UI used to offer
+// every control and withdraw whichever the canister refused — a read-only
+// collaborator was shown "Delete" and "Empty vault" until they tried one. The
+// backend reads the ACL it already holds and reports the caller's own rights,
+// which discloses nothing about anyone else.
+for (const level of ["Read", "ReadWrite", "ReadWriteManage"]) {
+  const { mapName, G } = await vaultSharedAt(level, `Vault Rights ${level}`);
+  const summaries = await G.api.get_vault_summaries();
+  const listed = summaries.find(
+    (m) => new TextDecoder().decode(Uint8Array.from(m.map_name.inner)) === `Vault Rights ${level}`,
+  );
+  const reported = listed?.my_rights?.[0] ? Object.keys(listed.my_rights[0])[0] : "none";
+  check(`a ${level} grantee is told they have ${level}`, reported === level, reported);
+  void mapName;
+}
+{
+  const stranger = await connect(Ed25519KeyIdentity.generate());
+  const listed = await stranger.api.get_vault_summaries();
+  check("someone with no access is told nothing", listed.length === 0, `${listed.length} vaults`);
 }
 
 // ---- what a wipe leaves behind, which the dialog promises ------------------
