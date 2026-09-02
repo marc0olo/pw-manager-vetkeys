@@ -167,6 +167,25 @@ check(
   "Err" in (await D.api.restore_trashed_values(me, buf(NAME))),
 );
 
+// The disclosure this rule actually makes, asserted rather than described.
+//
+// For a write-holder, vault-scoped trash reveals nothing new — they could
+// already restore the whole vault and read it. For a `Read` member it is new:
+// they hold the vault key, so the ciphertext decrypts, and Dana was granted
+// access *after* the deletion. There is no version of this where the listing
+// is shown and the value stays unreadable, which is exactly what makes it a
+// decision rather than an oversight.
+{
+  const rows = await trashOf(D, me, NAME);
+  const plain = new TextDecoder().decode(
+    await D.maps.decryptFor(me, N, enc.encode("k1"), Uint8Array.from(rows[0].value.inner)),
+  );
+  check(
+    "and can decrypt a secret destroyed before they had access",
+    plain === "secret one",
+    `read ${JSON.stringify(plain)} — the accepted cost of vault-scoped trash`,
+  );
+}
 // ---- revocation closes the window immediately -------------------------------
 //
 // The rule is asked on every read rather than recorded when the entry was made,

@@ -45,13 +45,20 @@ password — the vault key is derived for your Internet Identity principal.
   involved. The dialog shows real titles — the ciphertext comes back with the
   listing and is decrypted in the browser under the key already cached from
   opening the vault, so a deleted item is recognisable rather than a timestamp.
-  The trash belongs to the vault, so everyone who can read the vault sees it —
-  which is the same set that could already recover from it, since restoring is
-  gated on write access alone. Read access sees the list; write access puts
-  things back. **Empty trash**, in the trash view, makes those deletions
-  unrecoverable immediately — which is how a secret is taken out of reach
-  before sharing the vault with someone new. The share dialog says how many
-  entries a grantee would inherit, without duplicating the action.
+  - **Who sees it.** The trash belongs to the vault: everyone who can read the
+    vault sees it, and write access is what puts things back. For a member who
+    can write that discloses nothing new — restoring is gated on write access
+    alone and restores the whole vault, so they could already recover an entry
+    a stricter listing withheld. For a read-only member it genuinely is new:
+    they hold the vault key, so one added after a deletion can read a secret
+    destroyed before they had access. A deliberate trade, and the reason for
+    the next two points.
+  - **Empty trash**, in the trash view, makes a vault's deletions unrecoverable
+    immediately — the way to put a secret out of reach before sharing the vault
+    with someone new. Write access, matching who can fill and restore it.
+  - **The share dialog** says how many entries a grantee would inherit, so the
+    trade above is stated where the decision is made. A sentence, not a second
+    copy of the button.
 - **Rename a vault** you own. A vault *is* `(owner, name)` and its vetKey
   derives from that pair, so the map never moves: the backend stores a display
   name beside it and a rename is one write — nothing re-encrypted, nobody

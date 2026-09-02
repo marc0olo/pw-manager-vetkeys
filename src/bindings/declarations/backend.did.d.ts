@@ -100,15 +100,28 @@ export interface _SERVICE {
    * / can show what it was rather than only when it went. See `TrashedItem` for
    * / why returning values here is not the thing #14 removed from the poll.
    * /
-   * / Visible to everyone who can read the vault, because that is exactly the
-   * / set that can already recover from it: `restore_trashed_values` puts back
-   * / every entry in the vault and is gated on write access alone, so listing
-   * / less than it restores would hide entries without protecting them. Read
-   * / access sees the list; write access is what actually recovers.
+   * / Visible to everyone who can read the vault. What that changes differs by
+   * / access level, and the difference is worth stating precisely.
    * /
-   * / A member added after a deletion therefore does see it. That is a property
-   * / of granting someone the vault, and the share dialog says so before the
-   * / grant is made.
+   * / For a member who can **write**, nothing new is disclosed:
+   * / `restore_trashed_values` puts back every entry in the vault on write
+   * / access alone, so they could already recover an entry withheld from the
+   * / listing and then read it. Listing less than the restore path recovers
+   * / hides entries without keeping them out of reach.
+   * /
+   * / For a `Read` member it **is** a new disclosure. They hold the vault key,
+   * / so the ciphertext returned here decrypts, and one added after a deletion
+   * / can read a secret destroyed before they had any access — which no path
+   * / reached before. Accepted deliberately, not incidentally: trash belongs to
+   * / the vault, the share dialog says how many entries a grantee would
+   * / inherit, and `discard_trash` is the remedy.
+   * /
+   * / The alternative was to filter the restore path by the same predicate,
+   * / making owner-or-deleter real rather than cosmetic — one line, since
+   * / `restore_trashed_values` has the entry in hand. Rejected because it turns
+   * / `deletedBy` into authorization data rather than display, and because it
+   * / denies a team the case a shared vault exists for: recovering what a
+   * / colleague who has since left deleted.
    */
   'get_trash' : ActorMethod<[Principal, ByteBuf], Result_5>,
   'get_user_rights' : ActorMethod<[Principal, ByteBuf, Principal], Result_1>,
