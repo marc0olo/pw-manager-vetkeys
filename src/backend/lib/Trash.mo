@@ -81,6 +81,26 @@ module {
     Iter.toArray(Iter.map<(Key, Entry), (Blob, Entry)>(rows, func(((_, _, mapKey), entry)) { (mapKey, entry) }));
   };
 
+  /// Drop one vault's entries outright, expired or not. Unlike `purge` this is
+  /// a decision rather than housekeeping: it makes deletions unrecoverable
+  /// before their 90 days are up, which is the only way to take a secret out of
+  /// reach ahead of sharing the vault with someone new.
+  public func discard(store : Store, owner : Principal, mapName : Blob) : (Store, Nat) {
+    var dropped = 0;
+    let kept = Map.foldLeft<Key, Entry, Store>(
+      store,
+      empty(),
+      func(kept, key, entry) {
+        let (entryOwner, entryMap, _) = key;
+        if (Principal.compare(entryOwner, owner) == #equal and Blob.compare(entryMap, mapName) == #equal) {
+          dropped += 1;
+          kept;
+        } else { kept.add(compareKeys, key, entry) };
+      },
+    );
+    (kept, dropped);
+  };
+
   /// Drop everything past retention. Storage reclamation only — correctness
   /// does not depend on this having run.
   public func purge(store : Store, now : Nat64) : Store {

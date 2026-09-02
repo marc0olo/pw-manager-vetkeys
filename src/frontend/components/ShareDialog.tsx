@@ -35,6 +35,7 @@ export function ShareDialog({ vault, busy, onShare, onRevoke, onClose }: Props) 
   const [principalText, setPrincipalText] = useState("");
   const [level, setLevel] = useState<AccessLevel>("Read");
   const [error, setError] = useState<string | null>(null);
+  const one = vault.trashed === 1;
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -55,6 +56,20 @@ export function ShareDialog({ vault, busy, onShare, onRevoke, onClose }: Props) 
           The vault key is re-encrypted for the principal you name, so they can decrypt these items
           without you ever handing over a secret.
         </p>
+
+        {/*
+          Granting access hands over the trash as well, and this is the only
+          screen where that can be said before it happens. A statement, not a
+          control: emptying the trash lives in the trash view, where someone
+          looking for it will actually go, and duplicating a destructive action
+          across two screens is how the two drift apart.
+        */}
+        {vault.trashed > 0 && (
+          <p className="modal__notice" role="note">
+            This vault’s trash holds {vault.trashed} deleted {one ? "item" : "items"}, which anyone
+            you grant access to can also see. Empty it from the trash view first if that matters.
+          </p>
+        )}
 
         <form className="modal__form" onSubmit={submit}>
           <label className="input">

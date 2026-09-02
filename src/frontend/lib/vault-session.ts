@@ -51,6 +51,12 @@ export interface VaultSessionState {
   renaming: boolean;
   /** The trash dialog. Null when closed; the deleted items when open. */
   trash: TrashedItem[] | null;
+  /**
+   * The delete-item confirmation. Names no item — it always refers to the
+   * selected one — but it still goes on lock, because a dialog asking about an
+   * item the next principal cannot see would be a leak of the fact it existed.
+   */
+  deleting: boolean;
 }
 
 /** The locked state: nothing about any previous session survives it. */
@@ -67,6 +73,7 @@ export const NO_VAULT_SESSION: VaultSessionState = {
   wiping: false,
   renaming: false,
   trash: null,
+  deleting: false,
 };
 
 /**

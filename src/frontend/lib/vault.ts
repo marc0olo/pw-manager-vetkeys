@@ -429,6 +429,19 @@ export class VaultClient {
     return Number(result.Ok);
   }
 
+  /**
+   * Make this vault's deletions unrecoverable now.
+   *
+   * The remedy for trash being vault-scoped: sharing a vault hands over its
+   * trash, so this is how a secret is taken out of reach before granting
+   * someone access.
+   */
+  async discardTrash(vault: VaultSummary): Promise<number> {
+    const result = await this.backend.discard_trash(vault.owner, { inner: nameBytes(vault.name) });
+    if ("Err" in result) throw new Error(result.Err);
+    return Number(result.Ok);
+  }
+
   async wipe(vault: VaultSummary): Promise<void> {
     await this.encryptedMaps.removeMapValues(vault.owner, nameBytes(vault.name));
   }

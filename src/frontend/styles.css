@@ -858,6 +858,29 @@ code,
   color: var(--danger);
 }
 
+/* A consequence of the action about to be taken, not an error — so it is set
+   apart by a rule and a tint rather than by danger colour, which is reserved
+   for the button that resolves it. */
+.modal__notice {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--danger);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Sits in the dialog footer beside the buttons it qualifies, so the question
+   and its answers read as one row. `margin-right: auto` keeps the Done button
+   pinned right while the confirmation grows. */
+.modal__confirm {
+  margin-right: auto;
+  font-size: 13px;
+  color: var(--danger);
+}
+
 .modal__subhead {
   margin: 24px 0 10px;
   font-size: 13px;

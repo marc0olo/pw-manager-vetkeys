@@ -10,6 +10,7 @@ import { IDL } from '@icp-sdk/core/candid';
 
 export const idlFactory = ({ IDL }) => {
   const ByteBuf = IDL.Record({ 'inner' : IDL.Vec(IDL.Nat8) });
+  const Result_2 = IDL.Variant({ 'Ok' : IDL.Nat, 'Err' : IDL.Text });
   const AccessRights = IDL.Variant({
     'Read' : IDL.Null,
     'ReadWrite' : IDL.Null,
@@ -61,9 +62,9 @@ export const idlFactory = ({ IDL }) => {
   });
   const Result_3 = IDL.Variant({ 'Ok' : IDL.Vec(ByteBuf), 'Err' : IDL.Text });
   const Result = IDL.Variant({ 'Ok' : IDL.Null, 'Err' : IDL.Text });
-  const Result_2 = IDL.Variant({ 'Ok' : IDL.Nat, 'Err' : IDL.Text });
   
   return IDL.Service({
+    'discard_trash' : IDL.Func([IDL.Principal, ByteBuf], [Result_2], []),
     'get_accessible_shared_map_names' : IDL.Func(
         [],
         [IDL.Vec(IDL.Tuple(IDL.Principal, ByteBuf))],

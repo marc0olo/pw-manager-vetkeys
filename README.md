@@ -45,8 +45,20 @@ password — the vault key is derived for your Internet Identity principal.
   involved. The dialog shows real titles — the ciphertext comes back with the
   listing and is decrypted in the browser under the key already cached from
   opening the vault, so a deleted item is recognisable rather than a timestamp.
-  Visible to the vault's owner and to whoever deleted it, which stops someone
-  added *later* being shown a secret destroyed before they had access.
+  - **Who sees it.** The trash belongs to the vault: everyone who can read the
+    vault sees it, and write access is what puts things back. For a member who
+    can write that discloses nothing new — restoring is gated on write access
+    alone and restores the whole vault, so they could already recover an entry
+    a stricter listing withheld. For a read-only member it genuinely is new:
+    they hold the vault key, so one added after a deletion can read a secret
+    destroyed before they had access. A deliberate trade, and the reason for
+    the next two points.
+  - **Empty trash**, in the trash view, makes a vault's deletions unrecoverable
+    immediately — the way to put a secret out of reach before sharing the vault
+    with someone new. Write access, matching who can fill and restore it.
+  - **The share dialog** says how many entries a grantee would inherit, so the
+    trade above is stated where the decision is made. A sentence, not a second
+    copy of the button.
 - **Rename a vault** you own. A vault *is* `(owner, name)` and its vetKey
   derives from that pair, so the map never moves: the backend stores a display
   name beside it and a rename is one write — nothing re-encrypted, nobody
@@ -63,9 +75,9 @@ password — the vault key is derived for your Internet Identity principal.
 ```
 src/backend/main.mo        The whole backend: the mixin, vault names, poll summaries
 src/backend/lib/Digest.mo  The vault content digest — pure, and unit-tested
-src/backend/lib/Trash.mo   Retention and visibility — pure, and unit-tested
+src/backend/lib/Trash.mo   Retention, visibility and discard — pure, and unit-tested
 test/Digest.test.mo        Motoko tests: `mops test`, no replica needed
-test/Trash.test.mo         Retention, expiry-on-read, per-vault isolation
+test/Trash.test.mo         Retention, expiry-on-read, per-vault isolation, discard
 src/frontend/lib/vault.ts  Encrypt/decrypt and access control over EncryptedMaps
 src/frontend/lib/items.ts  The item model and its JSON encoding
 src/frontend/lib/reconcile.ts  What the UI does when the canister changes underneath
@@ -200,7 +212,7 @@ npm run smoke-test            # crypto + access control end to end
 npm run check-capabilities    # the access-level table the share dialog states
 npm run check-poll-cost       # a poll derives no keys and carries no ciphertext
 npm run check-vault-names     # renaming moves no map and derives no key
-npm run check-trash           # deletions recover, and disclose nothing new
+npm run check-trash           # the listing and the restore path agree on what exists
 ```
 
 The first four run in CI on every pull request; the replica ones do not, so
