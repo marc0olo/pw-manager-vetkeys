@@ -114,3 +114,41 @@ do {
   assert rows.size() == 3;
   for (row in rows.values()) { assert row.1.deletedAt == T0 };
 };
+
+do {
+  // `discard` is scoped to one vault. The neighbouring vault's entry has to
+  // survive, or emptying one vault's trash before sharing it would silently
+  // destroy recovery for every other vault the owner has.
+  var store = Trash.put(Trash.empty(), (alice, vault, key "a"), entry("x", T0, alice));
+  store := Trash.put(store, (alice, other, key "b"), entry("y", T0, alice));
+  store := Trash.put(store, (bob, vault, key "c"), entry("z", T0, bob));
+
+  let (after, dropped) = Trash.discard(store, alice, vault);
+  assert dropped == 1;
+  assert Trash.visible(after, alice, vault, T0).size() == 0;
+  assert Trash.visible(after, alice, other, T0).size() == 1;
+  // Same map name, different owner: a vault is the pair, not the name.
+  assert Trash.visible(after, bob, vault, T0).size() == 1;
+};
+
+do {
+  // Discarding takes expired entries too. They were already unreachable, so
+  // the count is the only thing that could disagree — and a caller emptying a
+  // trash should not be told about entries it could not have seen.
+  var store = Trash.put(Trash.empty(), (alice, vault, key "gone"), entry("x", T0, alice));
+  store := Trash.put(store, (alice, vault, key "live"), entry("y", T0 + Trash.RETENTION_NS, alice));
+  let at = T0 + Trash.RETENTION_NS;
+  assert Trash.visible(store, alice, vault, at).size() == 1;
+
+  let (after, dropped) = Trash.discard(store, alice, vault);
+  assert dropped == 2;
+  assert Trash.visible(after, alice, vault, at).size() == 0;
+};
+
+do {
+  // Discarding an empty trash is not an error, so the UI can offer it without
+  // first checking whether there is anything there.
+  let (after, dropped) = Trash.discard(Trash.empty(), alice, vault);
+  assert dropped == 0;
+  assert Trash.visible(after, alice, vault, T0).size() == 0;
+};

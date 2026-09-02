@@ -858,6 +858,29 @@ code,
   color: var(--danger);
 }
 
+/* A consequence of the action about to be taken, not an error — so it is set
+   apart by a rule and a tint rather than by danger colour, which is reserved
+   for the button that resolves it. */
+.modal__notice {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--danger);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.modal__notice p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.modal__noticeActions {
+  display: flex;
+  gap: 8px;
+}
+
 .modal__subhead {
   margin: 24px 0 10px;
   font-size: 13px;

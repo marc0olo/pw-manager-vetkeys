@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { ALICE, BOB, FakeClient, identityFor, item, vault } from "./harness";
+import { ALICE, BOB, FakeClient, identityFor, item, trashed, vault } from "./harness";
+import { toAccessRights, type AccessLevel } from "../lib/vault";
 
 /**
  * Tests for the layer every escaped defect has been in: not the logic, but how
@@ -332,5 +333,124 @@ describe("renaming a vault", () => {
 
     await waitFor(() => expect(client.rename).toHaveBeenCalled());
     expect(await screen.findAllByText("Home")).not.toHaveLength(0);
+  });
+});
+
+describe("trash in a shared vault", () => {
+  // Trash belongs to the vault, so read access is enough to look — and the
+  // canister agrees, since `restore_trashed_values` restores every entry in
+  // the vault on write access alone. The rule the UI has to get right is that
+  // seeing and recovering are separate.
+  const withTrash = (level: AccessLevel) =>
+    signedInAs(
+      ALICE,
+      Object.assign(
+        new FakeClient(
+          ALICE,
+          [personal, vault({ owner: BOB, name: "Team infra", isOwned: false, rights: toAccessRights(level), itemIds: ["x"], fingerprint: "s", trashed: 2 })],
+          { "Team infra": [item({ id: "x", title: "Grafana" })] },
+        ),
+        {
+          trash: [
+            trashed({ item: item({ id: "gone", title: "Old root password" }) }),
+            trashed({ item: item({ id: "gone2", title: "Retired API key" }), deletedBy: BOB }),
+          ],
+        },
+      ),
+    );
+
+  it("lets a read-only member see what was deleted", async () => {
+    withTrash("Read");
+    render(<App />);
+    fireEvent.click(await screen.findByText("Team infra"));
+
+    fireEvent.click(await screen.findByRole("button", { name: /2 deleted/i }));
+
+    // The titles, not just timestamps — the whole reason the listing carries
+    // ciphertext.
+    expect(await screen.findByText("Old root password")).toBeInTheDocument();
+    expect(screen.getByText("Retired API key")).toBeInTheDocument();
+  });
+
+  it("but does not offer to restore it", async () => {
+    const client = withTrash("Read");
+    render(<App />);
+    fireEvent.click(await screen.findByText("Team infra"));
+    fireEvent.click(await screen.findByRole("button", { name: /2 deleted/i }));
+    await screen.findByText("Old root password");
+
+    expect(screen.queryByRole("button", { name: /^restore$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /restore all/i })).not.toBeInTheDocument();
+    // And says why, rather than showing a list with no explanation for the
+    // missing buttons.
+    expect(screen.getByText(/read-only access/i)).toBeInTheDocument();
+    expect(client.restoreItem).not.toHaveBeenCalled();
+  });
+
+  it("offers recovery to a member who can write", async () => {
+    const client = withTrash("ReadWrite");
+    render(<App />);
+    fireEvent.click(await screen.findByText("Team infra"));
+    fireEvent.click(await screen.findByRole("button", { name: /2 deleted/i }));
+
+    fireEvent.click((await screen.findAllByRole("button", { name: /^restore$/i }))[0]);
+    await waitFor(() => expect(client.restoreItem).toHaveBeenCalled());
+  });
+});
+
+describe("sharing a vault that has trash", () => {
+  const owned = (count: number) =>
+    Object.assign(
+      new FakeClient(ALICE, [vault({ itemIds: ["a"], trashed: count })], {
+        Personal: [item({ id: "a", title: "GitHub" })],
+      }),
+      { trash: Array.from({ length: count }, (_, i) => trashed({ item: item({ id: `d${i}`, title: `Deleted ${i}` }) })) },
+    );
+
+  it("says what the grantee will be able to see", async () => {
+    signedInAs(ALICE, owned(3));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /share/i }));
+
+    expect(await screen.findByRole("note")).toHaveTextContent(/trash holds 3 deleted items/i);
+  });
+
+  it("stays quiet when there is nothing in the trash", async () => {
+    signedInAs(ALICE, owned(0));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /share/i }));
+    await screen.findByRole("dialog");
+
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
+  it("does not empty the trash on the first click", async () => {
+    const client = owned(3);
+    signedInAs(ALICE, client);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /share/i }));
+
+    fireEvent.click(await screen.findByRole("button", { name: /empty trash first/i }));
+
+    // Irreversible, and this dialog was opened to share rather than to destroy
+    // anything — so the first click only asks.
+    expect(client.discardTrash).not.toHaveBeenCalled();
+    expect(await screen.findByText(/cannot be recovered afterwards/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /delete permanently/i }));
+    await waitFor(() => expect(client.discardTrash).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps the trash when the confirmation is declined", async () => {
+    const client = owned(3);
+    signedInAs(ALICE, client);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /share/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /empty trash first/i }));
+
+    fireEvent.click(await screen.findByRole("button", { name: /keep them/i }));
+
+    expect(client.discardTrash).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: /empty trash first/i })).toBeInTheDocument();
   });
 });

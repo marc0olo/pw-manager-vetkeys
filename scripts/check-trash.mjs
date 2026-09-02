@@ -3,8 +3,9 @@
  *
  * `mops test` covers retention and visibility as pure functions of a store.
  * These are the parts that need a replica — that a deleted value really leaves
- * the map, that a restored one still *decrypts*, and that access control holds
- * across a grant made after the deletion.
+ * the map, that a restored one still *decrypts*, that read access sees the
+ * trash while write access is what recovers from it, and that the listing and
+ * the restore path agree about which entries exist.
  */
 import { execSync } from "node:child_process";
 import { Actor, HttpAgent } from "@icp-sdk/core/agent";
@@ -56,7 +57,7 @@ check("and appears in the owner's trash", (await trashOf(A, me, NAME)).length ==
 
 // ---- restore returns something that still decrypts --------------------------
 const restored = await B.api.restore_trashed_value(me, buf(NAME), buf("k1"));
-check("the deleter can restore it", "Ok" in restored, JSON.stringify(restored));
+check("a collaborator with write access can restore it", "Ok" in restored, JSON.stringify(restored));
 const after = await A.maps.getValuesForMap(me, N);
 const back = after.find(([k]) => dec.decode(k) === "k1");
 check(
@@ -122,33 +123,95 @@ const summaryFor = async (who) =>
   check("so it can be restored from", "Ok" in (await A.api.restore_trashed_values(me, buf(NAME))));
 }
 
-// ---- the retroactive-grant hole ---------------------------------------------
+// ---- trash is scoped to the vault, not to who deleted the item -------------
 //
-// A reader added *after* a deletion must not see it. Otherwise trash extends a
-// vault's visible history backwards across a grant boundary, disclosing a
-// secret that was destroyed before that person had any access — something
-// permanent deletion never allowed.
+// The invariant: what `get_trash` lists is what `restore_trashed_values` can
+// recover. Both are the vault's entries, gated on reading and on writing
+// respectively. Listing *less* than the restore path recovers would hide
+// entries without protecting them — a member could restore what they were not
+// shown, and then read it.
 await A.maps.removeEncryptedValue(me, N, enc.encode("k1"));
 const carolId = Ed25519KeyIdentity.generate();
 const C = await connect(carolId);
-await A.maps.setUserRights(me, N, carolId.getPrincipal(), { Read: null });
+await A.maps.setUserRights(me, N, carolId.getPrincipal(), { ReadWrite: null });
 
-check("a reader added after the deletion cannot see it", (await trashOf(C, me, NAME)).length === 0);
-check("the owner still can", (await trashOf(A, me, NAME)).length === 1);
-check("a collaborator who did not delete it cannot", (await trashOf(B, me, NAME)).length === 0);
+check("the owner sees the vault's trash", (await trashOf(A, me, NAME)).length === 1);
+check("so does a collaborator who did not delete it", (await trashOf(B, me, NAME)).length === 1);
+check("including one added after the deletion", (await trashOf(C, me, NAME)).length === 1);
+
+{
+  // The property, stated as a comparison rather than as two separate counts:
+  // whatever the listing shows, the restore path recovers exactly that.
+  const listed = (await trashOf(C, me, NAME)).length;
+  const recovered = await C.api.restore_trashed_values(me, buf(NAME));
+  check(
+    "and recovers exactly what it was shown — no hidden entries",
+    "Ok" in recovered && Number(recovered.Ok) === listed,
+    `listed ${listed}, restored ${JSON.stringify(recovered, (_, v) => (typeof v === "bigint" ? String(v) : v))}`,
+  );
+}
+
+// ---- reading is not recovering ---------------------------------------------
+await A.maps.removeEncryptedValue(me, N, enc.encode("k1"));
+const danaId = Ed25519KeyIdentity.generate();
+const D = await connect(danaId);
+await A.maps.setUserRights(me, N, danaId.getPrincipal(), { Read: null });
+
+check("a read-only member sees what was deleted", (await trashOf(D, me, NAME)).length === 1);
+check(
+  "but cannot restore it",
+  "Err" in (await D.api.restore_trashed_value(me, buf(NAME), buf("k1"))),
+);
+check(
+  "nor in bulk",
+  "Err" in (await D.api.restore_trashed_values(me, buf(NAME))),
+);
+
+// ---- revocation closes the window immediately -------------------------------
+//
+// The rule is asked on every read rather than recorded when the entry was made,
+// so losing the vault loses its trash. This is what would break if `canRead`
+// were ever replaced by something inferred from `deletedBy`.
+await A.maps.removeUser(me, N, danaId.getPrincipal());
+const revoked = await trashOf(D, me, NAME);
+check("a revoked member sees nothing at all", revoked.err === "unauthorized", JSON.stringify(revoked));
 
 const stranger = await connect(Ed25519KeyIdentity.generate());
 const denied = await trashOf(stranger, me, NAME);
 check("someone with no access to the vault is refused outright", denied.err === "unauthorized", JSON.stringify(denied));
 
-check(
-  "and a reader cannot restore what they cannot see",
-  "Err" in (await C.api.restore_trashed_value(me, buf(NAME), buf("k1"))),
-);
+// ---- emptying the trash, the remedy before sharing --------------------------
+//
+// Trash being vault-scoped means granting access hands over the trash too, so
+// there has to be a way to put a secret out of reach *before* the grant. Time
+// is otherwise the only remedy.
+{
+  check("there is something to discard", (await trashOf(A, me, NAME)).length > 0);
+  const reader = await connect(Ed25519KeyIdentity.generate());
+  await A.maps.setUserRights(me, N, reader.me, { Read: null });
+  const refused = await reader.api.discard_trash(me, buf(NAME));
+  check("a read-only member cannot empty the trash", "Err" in refused, JSON.stringify(refused));
+
+  const dropped = await A.api.discard_trash(me, buf(NAME));
+  check("the owner can", "Ok" in dropped, JSON.stringify(dropped, (_, v) => (typeof v === "bigint" ? String(v) : v)));
+  check("and the trash is empty", (await trashOf(A, me, NAME)).length === 0);
+  check("with nothing left to restore",
+    "Ok" in (await A.api.restore_trashed_values(me, buf(NAME))) &&
+      (await A.maps.getValuesForMap(me, N)).every(([k]) => dec.decode(k) !== "k1"));
+  check("the poll count agrees", Number((await summaryFor(A)).trashed ?? 0) === 0);
+
+  // Scoped to the vault: another vault's trash is untouched. Otherwise
+  // emptying one vault before sharing it would destroy recovery everywhere.
+  const OTHER = "Work", O = enc.encode(OTHER);
+  await A.maps.setValue(me, O, enc.encode("w1"), enc.encode("other secret"));
+  await A.maps.removeEncryptedValue(me, O, enc.encode("w1"));
+  await A.api.discard_trash(me, buf(NAME));
+  check("emptying one vault's trash leaves another's alone", (await trashOf(A, me, OTHER)).length === 1);
+}
 
 console.log(
   failures.length === 0
-    ? "\nDeletions are recoverable, restored values still decrypt, and trash discloses nothing new."
+    ? "\nDeletions are recoverable, restored values still decrypt, and the listing and the restore path agree."
     : `\n${failures.length} failure(s)`,
 );
 process.exit(failures.length === 0 ? 0 : 1);

@@ -494,16 +494,19 @@ export function App() {
                 Rename
               </button>
             )}
-            {writable && (
-              <TrashButton
-                count={vault.trashed}
-                onOpen={() =>
-                  void run(async () => {
-                    patch({ trash: await client!.listTrash(vault) });
-                  })
-                }
-              />
-            )}
+            {/*
+              Not gated on write: trash belongs to the vault, so anyone who can
+              read it can see what was deleted. The dialog withholds recovery
+              instead, since that is what needs write access.
+            */}
+            <TrashButton
+              count={vault.trashed}
+              onOpen={() =>
+                void run(async () => {
+                  patch({ trash: await client!.listTrash(vault) });
+                })
+              }
+            />
             {writable && vault.itemIds.length > 0 && (
               <button
                 className="btn btn--danger btn--sm"
@@ -583,6 +586,7 @@ export function App() {
           vault={vault}
           items={trash}
           busy={busy}
+          canRestore={writable}
           onClose={() => patch({ trash: null })}
           onRestore={(itemId) =>
             void run(
@@ -659,6 +663,15 @@ export function App() {
               vault: vaultId(vault),
               capability: "manage",
             })
+          }
+          onDiscardTrash={() =>
+            void run(
+              async () => {
+                await client!.discardTrash(vault);
+              },
+              "Trash emptied",
+              { vault: vaultId(vault), capability: "write" },
+            )
           }
         />
       )}

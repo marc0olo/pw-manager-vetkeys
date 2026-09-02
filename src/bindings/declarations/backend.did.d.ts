@@ -59,6 +59,22 @@ export interface VaultSummary {
   'map_name' : ByteBuf,
 }
 export interface _SERVICE {
+  /**
+   * / Make a vault's deletions unrecoverable now, rather than waiting out their
+   * / 90 days.
+   * /
+   * / The counterpart to trash being vault-scoped: sharing a vault hands the
+   * / grantee its trash too, so there has to be a way to take a secret out of
+   * / reach *before* granting access. Without this the exposure would have no
+   * / remedy but time.
+   * /
+   * / Write access, matching who can put items in the trash in the first place
+   * / and who can restore them. It does not narrow to the owner: `ReadWrite`
+   * / already destroys a vault's contents via `remove_map_values`, so an owner-
+   * / only rule here would guard the second step of a path whose first step is
+   * / open.
+   */
+  'discard_trash' : ActorMethod<[Principal, ByteBuf], Result_2>,
   'get_accessible_shared_map_names' : ActorMethod<
     [],
     Array<[Principal, ByteBuf]>
@@ -84,10 +100,15 @@ export interface _SERVICE {
    * / can show what it was rather than only when it went. See `TrashedItem` for
    * / why returning values here is not the thing #14 removed from the poll.
    * /
-   * / Visible to the vault's owner, and to whoever deleted the entry. Not to
-   * / every reader: a collaborator added *after* a deletion would otherwise be
-   * / shown a secret that was destroyed before they had any access to it, which
-   * / permanent deletion never allowed.
+   * / Visible to everyone who can read the vault, because that is exactly the
+   * / set that can already recover from it: `restore_trashed_values` puts back
+   * / every entry in the vault and is gated on write access alone, so listing
+   * / less than it restores would hide entries without protecting them. Read
+   * / access sees the list; write access is what actually recovers.
+   * /
+   * / A member added after a deletion therefore does see it. That is a property
+   * / of granting someone the vault, and the share dialog says so before the
+   * / grant is made.
    */
   'get_trash' : ActorMethod<[Principal, ByteBuf], Result_5>,
   'get_user_rights' : ActorMethod<[Principal, ByteBuf, Principal], Result_1>,
@@ -119,6 +140,11 @@ export interface _SERVICE {
   'restore_trashed_value' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result>,
   /**
    * / Put a whole vault back, for undoing a wipe without one call per item.
+   * /
+   * / Authorization is the library's, per insert, so write access is what this
+   * / needs and a reader is refused on the first entry. It restores every
+   * / visible entry in the vault rather than only the caller's own, which is why
+   * / `get_trash` lists the same set — see its comment.
    */
   'restore_trashed_values' : ActorMethod<[Principal, ByteBuf], Result_2>,
   'set_user_rights' : ActorMethod<

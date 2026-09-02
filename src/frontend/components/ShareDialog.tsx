@@ -8,6 +8,7 @@ interface Props {
   busy: boolean;
   onShare: (user: Principal, level: AccessLevel) => void;
   onRevoke: (user: Principal) => void;
+  onDiscardTrash: () => void;
   onClose: () => void;
 }
 
@@ -31,10 +32,14 @@ const LEVEL_DETAIL: Record<AccessLevel, string> = {
   ReadWriteManage: "All of the above, plus granting and revoking access for other people.",
 };
 
-export function ShareDialog({ vault, busy, onShare, onRevoke, onClose }: Props) {
+export function ShareDialog({ vault, busy, onShare, onRevoke, onDiscardTrash, onClose }: Props) {
   const [principalText, setPrincipalText] = useState("");
   const [level, setLevel] = useState<AccessLevel>("Read");
   const [error, setError] = useState<string | null>(null);
+  // Two-step, because this dialog was opened to share rather than to destroy
+  // anything, and emptying the trash cannot be undone.
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const one = vault.trashed === 1;
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -55,6 +60,59 @@ export function ShareDialog({ vault, busy, onShare, onRevoke, onClose }: Props) 
           The vault key is re-encrypted for the principal you name, so they can decrypt these items
           without you ever handing over a secret.
         </p>
+
+        {/*
+          Granting access hands over the trash as well, so the one place that
+          can be said before it happens is here. Stated as what the grantee
+          will see rather than as a warning about the feature: the reader is
+          about to make the decision, not to learn a policy.
+        */}
+        {vault.trashed > 0 && (
+          <div className="modal__notice" role="note">
+            {confirmingDiscard ? (
+              <>
+                <p>
+                  Permanently delete {vault.trashed} {one ? "item" : "items"} from the trash?{" "}
+                  {one ? "It" : "They"} cannot be recovered afterwards, by anyone.
+                </p>
+                <div className="modal__noticeActions">
+                  <button
+                    className="btn btn--danger btn--sm"
+                    onClick={() => {
+                      setConfirmingDiscard(false);
+                      onDiscardTrash();
+                    }}
+                    disabled={busy}
+                  >
+                    {busy ? "Working…" : "Delete permanently"}
+                  </button>
+                  <button
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => setConfirmingDiscard(false)}
+                    disabled={busy}
+                  >
+                    Keep {one ? "it" : "them"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p>
+                  This vault’s trash holds {vault.trashed} deleted {one ? "item" : "items"}. Anyone
+                  you grant access to can see {one ? "it" : "them"}, and recover {one ? "it" : "them"}{" "}
+                  with edit access.
+                </p>
+                <button
+                  className="btn btn--danger btn--sm"
+                  onClick={() => setConfirmingDiscard(true)}
+                  disabled={busy}
+                >
+                  Empty trash first
+                </button>
+              </>
+            )}
+          </div>
+        )}
 
         <form className="modal__form" onSubmit={submit}>
           <label className="input">

@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 import { Principal } from "@icp-sdk/core/principal";
 import type { VaultItem } from "../lib/items";
-import type { VaultSummary } from "../lib/vault";
+import type { TrashedItem, VaultSummary } from "../lib/vault";
 
 export const ALICE = Principal.fromText("2ibo7-dia");
 export const BOB = Principal.fromText("aaaaa-aa");
@@ -59,6 +59,25 @@ export class FakeClient {
     if (this.refuse === kind) throw new Error("unauthorized");
   }
 
+  /** What `listTrash` hands back. Set per test; the count lives on the summary. */
+  trash: TrashedItem[] = [];
+
+  listTrash = vi.fn(async () => {
+    if (this.refuse === "open") throw new Error("unauthorized");
+    return this.trash;
+  });
+  restoreItem = vi.fn(async () => this.guard("write"));
+  restoreAll = vi.fn(async () => {
+    this.guard("write");
+    return this.trash.length;
+  });
+  discardTrash = vi.fn(async () => {
+    this.guard("write");
+    const dropped = this.trash.length;
+    this.trash = [];
+    return dropped;
+  });
+
   saveItem = vi.fn(async () => this.guard("write"));
   deleteItem = vi.fn(async () => this.guard("write"));
   wipe = vi.fn(async () => this.guard("write"));
@@ -67,6 +86,12 @@ export class FakeClient {
   revoke = vi.fn(async () => this.guard("manage"));
   lock = vi.fn(async () => {});
 }
+
+export const trashed = (o: Partial<TrashedItem> & { item: VaultItem }): TrashedItem => ({
+  deletedAt: Date.UTC(2026, 0, 2, 9, 30),
+  deletedBy: ALICE,
+  ...o,
+});
 
 /** A minimal Identity: `App` only ever asks for the principal. */
 export const identityFor = (principal: Principal) =>

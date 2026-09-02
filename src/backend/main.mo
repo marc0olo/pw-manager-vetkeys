@@ -263,12 +263,13 @@ actor PasswordManager {
     trash := next;
   };
 
-  /// Whether the caller can see this vault at all, before asking whether they
-  /// may see a particular trash entry.
+  /// Whether the caller may read this vault, which is the whole of the trash
+  /// authorization: trash is a property of the vault, so anyone who can read
+  /// the vault can read what has been deleted from it.
   ///
-  /// Deliberately re-checked rather than inferred from having deleted something:
-  /// a collaborator who deleted an item and was later revoked should not keep a
-  /// window onto the vault through its trash.
+  /// Asked on every trash read rather than recorded when the entry was made, so
+  /// revocation takes effect immediately — a collaborator who deleted an item
+  /// and was later removed keeps no window onto the vault through its trash.
   func canRead(who : Principal, owner : Principal, mapName : Blob) : Bool {
     if (Principal.compare(who, owner) == #equal) return true;
     for ((sharedOwner, sharedName) in encryptedMaps.getAccessibleSharedMapNames(who).values()) {
@@ -279,17 +280,12 @@ actor PasswordManager {
     false;
   };
 
-  /// How many trashed items in this vault the caller may see. The same
-  /// owner-or-deleter rule as `get_trash`, so the count never hints at the
-  /// existence of an entry the caller is not allowed to know about.
+  /// How many trashed items in this vault the caller may see — the same rule as
+  /// `get_trash`, so the count on the poll never disagrees with the listing the
+  /// dialog shows.
   func visibleTrashCount(who : Principal, owner : Principal, mapName : Blob, at : Nat64) : Nat {
     if (not canRead(who, owner, mapName)) return 0;
-    let isOwner = Principal.compare(who, owner) == #equal;
-    var count = 0;
-    for ((_, entry) in Trash.visible(trash, owner, mapName, at).values()) {
-      if (isOwner or Principal.compare(entry.deletedBy, who) == #equal) { count += 1 };
-    };
-    count;
+    Trash.visible(trash, owner, mapName, at).size();
   };
 
   public type TrashedItem = {
@@ -315,26 +311,27 @@ actor PasswordManager {
   /// can show what it was rather than only when it went. See `TrashedItem` for
   /// why returning values here is not the thing #14 removed from the poll.
   ///
-  /// Visible to the vault's owner, and to whoever deleted the entry. Not to
-  /// every reader: a collaborator added *after* a deletion would otherwise be
-  /// shown a secret that was destroyed before they had any access to it, which
-  /// permanent deletion never allowed.
+  /// Visible to everyone who can read the vault, because that is exactly the
+  /// set that can already recover from it: `restore_trashed_values` puts back
+  /// every entry in the vault and is gated on write access alone, so listing
+  /// less than it restores would hide entries without protecting them. Read
+  /// access sees the list; write access is what actually recovers.
+  ///
+  /// A member added after a deletion therefore does see it. That is a property
+  /// of granting someone the vault, and the share dialog says so before the
+  /// grant is made.
   public query (msg) func get_trash(map_owner : Principal, map_name : ByteBuf) : async Result<[TrashedItem], Text> {
     if (not canRead(msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
-    let isOwner = Principal.compare(msg.caller, map_owner) == #equal;
-    let rows = Trash.visible(trash, map_owner, map_name.inner, now());
     #Ok(
-      Array.filterMap<(Blob, Trash.Entry), TrashedItem>(
-        rows,
+      Array.map<(Blob, Trash.Entry), TrashedItem>(
+        Trash.visible(trash, map_owner, map_name.inner, now()),
         func((mapKey, entry)) {
-          if (isOwner or Principal.compare(entry.deletedBy, msg.caller) == #equal) {
-            ?{
-              map_key = { inner = mapKey };
-              value = { inner = entry.value };
-              deleted_at = entry.deletedAt;
-              deleted_by = entry.deletedBy;
-            };
-          } else { null };
+          {
+            map_key = { inner = mapKey };
+            value = { inner = entry.value };
+            deleted_at = entry.deletedAt;
+            deleted_by = entry.deletedBy;
+          };
         },
       )
     );
@@ -365,6 +362,11 @@ actor PasswordManager {
   };
 
   /// Put a whole vault back, for undoing a wipe without one call per item.
+  ///
+  /// Authorization is the library's, per insert, so write access is what this
+  /// needs and a reader is refused on the first entry. It restores every
+  /// visible entry in the vault rather than only the caller's own, which is why
+  /// `get_trash` lists the same set — see its comment.
   public shared (msg) func restore_trashed_values(map_owner : Principal, map_name : ByteBuf) : async Result<Nat, Text> {
     let at = now();
     var restored = 0;
@@ -381,6 +383,30 @@ actor PasswordManager {
     };
     trash := next;
     #Ok(restored);
+  };
+
+  /// Make a vault's deletions unrecoverable now, rather than waiting out their
+  /// 90 days.
+  ///
+  /// The counterpart to trash being vault-scoped: sharing a vault hands the
+  /// grantee its trash too, so there has to be a way to take a secret out of
+  /// reach *before* granting access. Without this the exposure would have no
+  /// remedy but time.
+  ///
+  /// Write access, matching who can put items in the trash in the first place
+  /// and who can restore them. It does not narrow to the owner: `ReadWrite`
+  /// already destroys a vault's contents via `remove_map_values`, so an owner-
+  /// only rule here would guard the second step of a path whose first step is
+  /// open.
+  public shared (msg) func discard_trash(map_owner : Principal, map_name : ByteBuf) : async Result<Nat, Text> {
+    switch (rightsOf(msg.caller, map_owner, map_name.inner)) {
+      case (?#ReadWrite or ?#ReadWriteManage) {
+        let (next, dropped) = Trash.discard(trash, map_owner, map_name.inner);
+        trash := next;
+        #Ok(dropped);
+      };
+      case (_) { #Err("unauthorized") };
+    };
   };
 
   // ---------------------------------------------------------------------------
