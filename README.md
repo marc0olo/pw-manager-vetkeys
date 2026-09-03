@@ -37,6 +37,11 @@ password — the vault key is derived for your Internet Identity principal.
     read-only collaborator being shown Delete until it was refused. The
     adapt-on-refusal path remains as a fallback — the canister is still the only
     authority.
+- **You do not need a vault of your own.** With none, the app shows your
+  principal and offers to copy it, so you can be shared with instead of
+  creating one — and a vault shared while you sit there appears within the poll
+  interval, no reload. Both ways out, because having no vaults does not mean
+  wanting one.
 - **Create, rename and delete vaults.** As many as you like, but **no two of
   yours may show the same name** — the empty-vault and delete-vault
   confirmations arm on the typed label, so duplicates would have you confirm a

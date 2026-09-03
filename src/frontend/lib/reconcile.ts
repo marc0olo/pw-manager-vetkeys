@@ -44,7 +44,14 @@ export function reconcile({
   // Resolved against `previous`, because that is the list the user is currently
   // looking at. Returning the resolved id is what makes the selection explicit
   // from then on.
-  const selected = selection.vaultId ?? defaultVaultId(previous);
+  //
+  // Falling through to `next` matters when `previous` is empty: there is no
+  // vault the user is looking at, so the default has to come from what just
+  // arrived. Without it, going from *no* vaults to one leaves the selection
+  // null — the poll delivers the vault and the UI stays on its loading screen
+  // forever. Unreachable until vaults could be created, because the client used
+  // to synthesise one so `previous` was never empty.
+  const selected = selection.vaultId ?? defaultVaultId(previous) ?? defaultVaultId(next);
   if (selected === null) return { selection, notice: null, refreshItems: false };
   const resolved: Selection = { vaultId: selected, itemId: selection.itemId };
 

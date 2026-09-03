@@ -563,6 +563,18 @@ describe("deleting one item", () => {
   });
 });
 
+// Fake timers before render: the interval is scheduled during the effect, and
+// one created with the real timer is not advanced by a fake clock swapped in
+// afterwards.
+const onFakeTimers = async (body: () => Promise<void>) => {
+  vi.useFakeTimers();
+  try {
+    await body();
+  } finally {
+    vi.useRealTimers();
+  }
+};
+
 describe("someone else changes the trash while the dialog is open", () => {
   // The count alone cannot drive this: restore one item and delete another and
   // it is unchanged while the contents differ. The summary carries a
@@ -575,17 +587,6 @@ describe("someone else changes the trash while the dialog is open", () => {
       { trash: [trashed({ item: item({ id: "d0", title }) })] },
     );
 
-  // Fake timers before render: the interval is scheduled during the effect, and
-  // one created with the real timer is not advanced by a fake clock swapped in
-  // afterwards.
-  const onFakeTimers = async (body: () => Promise<void>) => {
-    vi.useFakeTimers();
-    try {
-      await body();
-    } finally {
-      vi.useRealTimers();
-    }
-  };
   const settle = () => act(() => vi.advanceTimersByTimeAsync(0));
   const poll = () => act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
 
@@ -1107,5 +1108,104 @@ describe("two vaults may not show the same name", () => {
     fireEvent.change(field, { target: { value: "Work" } });
     // Its own name — unchanged, so nothing to submit, but not reported as taken.
     expect(screen.queryByText(/already have a vault called/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("with no vaults, but wanting one shared with you", () => {
+  // The dead end #47 created: the principal lives in the sidebar, which renders
+  // after this screen's early return — so the one thing needed to leave the
+  // state was the one thing the state hid.
+  const none = () => new FakeClient(ALICE, [], {});
+
+  it("shows the principal, so someone can share with you", async () => {
+    signedInAs(ALICE, none());
+    render(<App />);
+    await screen.findByText(/no vaults yet/i);
+
+    expect(screen.getByText(ALICE.toText())).toBeInTheDocument();
+  });
+
+  it("copies it without needing a vault first", async () => {
+    const board = fakeClipboard();
+    signedInAs(ALICE, none());
+    render(<App />);
+    await screen.findByText(/no vaults yet/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /copy my principal/i }));
+
+    await waitFor(() => expect(board.text).toBe(ALICE.toText()));
+  });
+
+  it("does not imply creating one is the only way forward", async () => {
+    signedInAs(ALICE, none());
+    render(<App />);
+
+    // The screen used to assert a premise that is not true — that having no
+    // vaults means wanting to create one.
+    expect(await screen.findByText(/or share your principal/i)).toBeInTheDocument();
+  });
+
+  it("picks up a vault shared while sitting here, with no reload", async () =>
+    onFakeTimers(async () => {
+      const client = none();
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(screen.getByText(/no vaults yet/i)).toBeInTheDocument();
+
+      // Someone grants access. The poll is registered before this screen's
+      // early return, so nothing else has to happen.
+      client.vaults = [
+        vault({ owner: BOB, name: "Team infra", isOwned: false, rights: toAccessRights("Read"), itemIds: ["x"], fingerprint: "s" }),
+      ];
+      client.items.set("Team infra", [item({ id: "x", title: "Grafana" })]);
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+
+      // Queried synchronously: `findBy*` polls on timers, which a fake clock
+      // does not advance on its own, so awaiting one here hangs the test.
+      expect(screen.queryByText(/no vaults yet/i)).not.toBeInTheDocument();
+      // Sidebar row and pane title, which is the point — it is not merely in
+      // the list, it is selected and open.
+      expect(screen.getAllByText("Team infra").length).toBeGreaterThan(1);
+    }));
+});
+
+describe("when every vault you can see belongs to someone else", () => {
+  // Reachable for the first time: before #47 the client synthesised an owned
+  // vault, so there was always one. `defaultVaultId` prefers an owned vault and
+  // falls back to the first listed, which is now a shared one.
+  const sharedOnly = (level: AccessLevel) =>
+    new FakeClient(
+      ALICE,
+      [vault({ owner: BOB, name: "Team infra", isOwned: false, rights: toAccessRights(level), itemIds: ["x"], fingerprint: "s" })],
+      { "Team infra": [item({ id: "x", title: "Grafana" })] },
+    );
+
+  it("lands on it rather than on nothing", async () => {
+    signedInAs(ALICE, sharedOnly("ReadWrite"));
+    render(<App />);
+
+    expect(await screen.findByText("Grafana")).toBeInTheDocument();
+    expect(screen.queryByText(/no vaults yet/i)).not.toBeInTheDocument();
+  });
+
+  it("withholds the owner-only actions instead of offering them to fail", async () => {
+    signedInAs(ALICE, sharedOnly("ReadWriteManage"));
+    render(<App />);
+    await screen.findByText("Grafana");
+
+    // Manage rights are the most a grantee can have, and none of these are
+    // theirs — the canister decides ownership, and #35 tells the client.
+    expect(screen.queryByRole("button", { name: /delete vault/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /rename/i })).not.toBeInTheDocument();
+  });
+
+  it("still offers what a grantee may actually do", async () => {
+    signedInAs(ALICE, sharedOnly("ReadWrite"));
+    render(<App />);
+    await screen.findByText("Grafana");
+
+    expect(screen.getByRole("button", { name: /new item/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /new vault/i })).toBeInTheDocument();
   });
 });

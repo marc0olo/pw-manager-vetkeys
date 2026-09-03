@@ -42,7 +42,7 @@ import { DeleteVaultDialog } from "./components/DeleteVaultDialog";
 import { TrashButton, TrashDialog } from "./components/TrashDialog";
 import { ShareDialog } from "./components/ShareDialog";
 import { Sidebar } from "./components/Sidebar";
-import { CheckIcon, PencilIcon, ShareIcon, TrashIcon } from "./components/Icons";
+import { CheckIcon, CopyIcon, PencilIcon, ShareIcon, TrashIcon } from "./components/Icons";
 
 /** How often to re-read the vault list. Queries only, so this is cheap. */
 export const POLL_INTERVAL_MS = 15_000;
@@ -414,6 +414,22 @@ export function App() {
     };
   }, [client, refresh]);
 
+  /**
+   * Your own principal, on the clipboard.
+   *
+   * Not a secret, so `copyPlain` rather than `copySecret` — nothing to clear
+   * afterwards. Lifted out of the sidebar because the zero-vault screen needs
+   * it too: someone who wants a vault shared *with* them has to hand over this
+   * string, and it used to live only behind a screen they could not reach
+   * without creating a vault first.
+   */
+  const copyPrincipal = () => {
+    void copyPlain(client?.me.toText() ?? "").then(
+      () => notify("Your principal is on the clipboard"),
+      () => setError("The browser blocked clipboard access."),
+    );
+  };
+
   const copyField = async (field: "username" | "password" | "url", value: string) => {
     try {
       if (field === "password") {
@@ -435,22 +451,39 @@ export function App() {
   // No vaults at all, which is now a real state rather than one the client
   // papered over with a synthesised `Personal`. Reachable for a brand-new user
   // and for anyone who deletes their last vault.
+  //
+  // Both ways out are offered, because having no vaults does not mean wanting
+  // one: a user may only ever want vaults shared *with* them, and to be shared
+  // with they have to hand over their principal. Offering creation alone made
+  // that a dead end — the one thing needed to leave the state was the one thing
+  // the state hid, since the principal lives in the sidebar below.
+  //
+  // Nothing else is needed for the second path: the poll is registered above
+  // this return, so a vault shared while the user sits here appears within the
+  // interval, with no reload and no re-authentication.
   if (vaults !== null && vaults.length === 0) {
     return (
       <>
         <main className="loading">
-          <div>
+          <div className="empty">
             <p>You have no vaults yet.</p>
             <p className="pane__hint">
-              A vault holds a set of secrets under its own key. You can create more later, and
-              share each one separately.
+              A vault holds a set of secrets under its own key. Create one to store your own
+              secrets — or share your principal, and anything shared with you appears here.
             </p>
-            <button className="btn btn--primary" onClick={() => patch({ creating: true })}>
-              Create a vault
-            </button>
-            <button className="btn btn--ghost" onClick={() => void lock("manual")}>
-              Sign out
-            </button>
+            <code className="empty__principal">{client?.me.toText() ?? ""}</code>
+            <div className="empty__actions">
+              <button className="btn btn--primary" onClick={() => patch({ creating: true })}>
+                Create a vault
+              </button>
+              <button className="btn btn--ghost" onClick={copyPrincipal}>
+                <CopyIcon />
+                Copy my principal
+              </button>
+              <button className="btn btn--ghost" onClick={() => void lock("manual")}>
+                Sign out
+              </button>
+            </div>
           </div>
         </main>
         {creating && (
@@ -513,11 +546,7 @@ export function App() {
           setError(null);
         }}
         principal={client?.me.toText() ?? ""}
-        onCopyPrincipal={() =>
-          void copyPlain(client?.me.toText() ?? "").then(
-            () => notify("Your principal is on the clipboard"),
-            () => setError("The browser blocked clipboard access."),
-          )
+        onCopyPrincipal={() => copyPrincipal()
         }
         onSignOut={() => void lock("manual")}
         remainingMs={session ? session.remainingMs : null}
