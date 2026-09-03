@@ -59,8 +59,17 @@ password — the vault key is derived for your Internet Identity principal.
     the row already, so flagging it would report something you can see.
   - The marks live in `localStorage`, per principal, and **survive a lock** —
     unlike everything in the session state, because "since I last looked" is
-    meaningless if locking resets it. They name vaults on the device, which is
-    the same exposure vault names already have in the canister.
+    meaningless if locking resets it.
+  - **What that puts on the device**, stated precisely because "vault names on
+    disk" would be wrong twice over. A mark is
+    `<owner principal>/<map id>` → `<digest>:<digest>`. The **display name is
+    not written**, so nothing on disk says `Divorce lawyer`; map ids are random
+    for vaults this app creates. What *is* new is that the keys carry the
+    **owner principals of vaults shared with you**, and how many vaults each
+    shares — the first time this app records other people's identifiers
+    locally. Signing in sweeps every other principal's marks, for the same
+    reason the key-store purge deletes stores left by principals no longer
+    recorded.
 - **Changes appear on their own.** The vault list is re-read every 15 seconds
   and immediately on returning to the tab, so a vault someone shares with you
   shows up without a reload. The **check-for-changes** button only cuts that

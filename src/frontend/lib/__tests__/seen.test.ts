@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Principal } from "@icp-sdk/core/principal";
-import { afterPoll, afterViewing, changed, forget, load, save } from "../seen";
+import { afterPoll, afterViewing, changed, forget, load, save, sweep } from "../seen";
 import { vaultId, type VaultSummary } from "../vault";
 
 /**
@@ -143,6 +143,59 @@ describe("where the marks live", () => {
     expect(load("alice")).toEqual({});
     window.localStorage.setItem("vetvault:seen:alice", '{"a/b":42}');
     expect(load("alice")).toEqual({});
+  });
+
+  it("keeps only the signed-in principal's marks", () => {
+    // Another identity's marks name the *owners* of vaults shared with them, so
+    // a shared device should not accumulate them.
+    save("alice", { "a/b": "f0" });
+    save("bob", { "c/d": "f1" });
+    save("carol", { "e/f": "f2" });
+
+    sweep("alice");
+
+    expect(load("alice")).toEqual({ "a/b": "f0" });
+    expect(load("bob")).toEqual({});
+    expect(load("carol")).toEqual({});
+  });
+
+  it("sweeps every stale principal, not just the first", () => {
+    // Removing while iterating by index skips entries, which would leave half
+    // of them behind and look like it worked.
+    for (const who of ["b", "c", "d", "e", "f"]) save(who, { "x/y": "f" });
+    save("alice", { "a/b": "f0" });
+
+    sweep("alice");
+
+    for (const who of ["b", "c", "d", "e", "f"]) expect(load(who)).toEqual({});
+    expect(load("alice")).toEqual({ "a/b": "f0" });
+  });
+
+  it("leaves other storage alone — an outcome, not a guard", () => {
+    // Two things enforce the prefix: the filter in `sweep` and `forget`
+    // re-applying it. So this holds whichever is doing the work, and cannot
+    // distinguish them — which is worth stating rather than implying it pins
+    // the filter.
+    window.localStorage.setItem("vetvault:last-active", "123");
+    window.localStorage.setItem("something-else", "x");
+    save("alice", { "a/b": "f0" });
+
+    sweep("alice");
+
+    expect(window.localStorage.getItem("vetvault:last-active")).toBe("123");
+    expect(window.localStorage.getItem("something-else")).toBe("x");
+  });
+
+  it("writes no readable vault name", () => {
+    // The claim in the docstring, asserted: a mark is
+    // `<owner>/<map id>` -> `<digest>:<digest>`, and the display name — the
+    // only human-readable name a vault has — is not part of either.
+    const named = summary({ name: "a3f1b2c4d5e6", displayName: "Divorce lawyer" });
+    save("alice", afterPoll([named], {}, null));
+
+    const raw = window.localStorage.getItem("vetvault:seen:alice") ?? "";
+    expect(raw).not.toContain("Divorce");
+    expect(raw).toContain("a3f1b2c4d5e6");
   });
 
   it("does not fail the caller when storage is unavailable", () => {

@@ -150,6 +150,10 @@ export function App() {
       // rather than reset. First sight of a vault records it without flagging
       // it — otherwise a new device would mark everything.
       const principal = vaultClient.me.toText();
+      // Another identity's marks name the owners of vaults shared with *them*,
+      // so a shared device should not keep them. Swept here rather than on
+      // lock, which must leave the current principal's marks intact.
+      seen.sweep(principal);
       const advanced = seen.afterPoll(listed, seen.load(principal), landing);
       seen.save(principal, advanced);
       setMarks(advanced);

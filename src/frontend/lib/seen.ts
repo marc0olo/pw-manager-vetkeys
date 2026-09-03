@@ -20,9 +20,26 @@ import { vaultId, type VaultSummary } from "./vault";
  * Keyed per principal for the same reason the activity mark is: signing in as
  * someone else must not inherit the previous identity's marks.
  *
- * They do name vaults, on the device. That is the same exposure vault names
- * already have — access control is enforced in the clear — but it is now on
- * disk locally rather than only in the canister, which is worth knowing.
+ * ## What this actually writes
+ *
+ * Worth being exact, because "vault names on disk" would be wrong in both
+ * directions. A mark is `<owner principal>/<map id>` → `<digest>:<digest>`. The
+ * **display name is not written** — that is the only human-readable name a
+ * vault has, so nothing on disk says `Divorce lawyer`. Map ids are random for
+ * vaults this app creates; one created by a different client could carry a
+ * readable map name, and that would be written.
+ *
+ * What *is* new is the keys: they carry the **owner principals of vaults shared
+ * with you**, and how many vaults each of them shares. Before this, this app's
+ * `localStorage` held only your own principal and an activity timestamp — so
+ * this is the first time it records other people's identifiers.
+ *
+ * {@link sweep} drops the marks of every principal except the one signed in,
+ * for the same reason `purgeKeyMaterial` deletes stores "left by a principal no
+ * longer recorded": a shared device should not accumulate other identities'
+ * data. Deliberately at sign-in and not on lock — sweeping on lock would take
+ * the current principal's marks with it, which is the whole thing this design
+ * keeps.
  *
  * ## Why first sight records rather than flags
  *
@@ -85,6 +102,39 @@ export function forget(principal: string): void {
     window.localStorage.removeItem(PREFIX + principal);
   } catch {
     // Nothing to recover from.
+  }
+}
+
+/**
+ * Drop the marks of every principal except this one.
+ *
+ * Bounds what a shared device keeps. Without it each identity leaves a set
+ * behind indefinitely, and those sets name the *owners* of vaults shared with
+ * that identity — see the note above.
+ *
+ * Called at sign-in rather than at lock: locking must leave the current
+ * principal's marks alone, or "changed since I last looked" resets every time
+ * the vault locks.
+ */
+export function sweep(keep: string): void {
+  try {
+    const stale: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key !== null && key.startsWith(PREFIX) && key !== PREFIX + keep) {
+        stale.push(key.slice(PREFIX.length));
+      }
+    }
+    // Collected before removing: deleting while iterating by index skips
+    // entries, and half a sweep looks exactly like a whole one.
+    //
+    // The prefix is checked here *and* re-applied by `forget`, so a key
+    // belonging to something else survives either way. Belt and braces rather
+    // than one guard doing the work — worth saying, because a test cannot tell
+    // which of the two saved it.
+    for (const principal of stale) forget(principal);
+  } catch {
+    // Storage unavailable. Nothing here is load-bearing.
   }
 }
 
