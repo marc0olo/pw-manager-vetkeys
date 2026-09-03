@@ -1,3 +1,4 @@
+import { useDismiss } from "./useDismiss";
 import type { VaultItem } from "../lib/items";
 
 interface Props {
@@ -21,6 +22,7 @@ interface Props {
  * does.
  */
 export function DeleteItemDialog({ item, busy, onConfirm, onClose }: Props) {
+  useDismiss(onClose, busy);
   const label = item.title || "this item";
 
   return (

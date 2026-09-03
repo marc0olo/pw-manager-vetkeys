@@ -978,13 +978,19 @@ describe("with no vaults at all", () => {
     await waitFor(() => expect(client.createVault).toHaveBeenCalledWith("Divorce lawyer"));
   });
 
-  it("cannot be dismissed into a dead end", async () => {
+  it("can be dismissed, back to the screen that has the principal", async () => {
+    // It used to have no Cancel, on the reasoning that a user with no vaults
+    // had nothing behind the dialog. That stopped being true once the screen
+    // carried their principal — someone who opens this and then decides they
+    // would rather be shared with has to be able to get back to it.
     signedInAs(ALICE, empty());
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /create a vault/i }));
 
-    // No Cancel on the first vault: there is nothing behind the dialog.
-    expect(screen.queryByRole("button", { name: /^cancel$/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    expect(await screen.findByText(/no vaults yet/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /copy my principal/i })).toBeInTheDocument();
   });
 });
 
@@ -1134,6 +1140,30 @@ describe("with no vaults, but wanting one shared with you", () => {
     fireEvent.click(screen.getByRole("button", { name: /copy my principal/i }));
 
     await waitFor(() => expect(board.text).toBe(ALICE.toText()));
+    // And says so. The toast used to be rendered only by the main view, which
+    // is past this screen's early return — so the one screen whose whole
+    // purpose is copying a principal could not confirm that it had.
+    expect(await screen.findByRole("status")).toHaveTextContent(/principal is on the clipboard/i);
+  });
+
+  it("says so when the browser blocks the clipboard", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn(async () => {
+          throw new Error("denied");
+        }),
+      },
+    });
+    signedInAs(ALICE, none());
+    render(<App />);
+    await screen.findByText(/no vaults yet/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /copy my principal/i }));
+
+    // The error banner was past the early return too, so a blocked clipboard
+    // was as silent as a successful copy.
+    expect(await screen.findByRole("alert")).toHaveTextContent(/blocked clipboard access/i);
   });
 
   it("does not imply creating one is the only way forward", async () => {
@@ -1207,5 +1237,53 @@ describe("when every vault you can see belongs to someone else", () => {
 
     expect(screen.getByRole("button", { name: /new item/i })).not.toBeDisabled();
     expect(screen.getByRole("button", { name: /new vault/i })).toBeInTheDocument();
+  });
+});
+
+describe("dialogs can be got out of", () => {
+  // Reported: the first-vault dialog could not be exited. It had no Cancel, and
+  // no dialog handled Escape — which is the other half of the same complaint,
+  // since a modal that ignores the key everyone reaches for reads as stuck.
+  const press = () => fireEvent.keyDown(window, { key: "Escape" });
+
+  it("Escape closes the first-vault dialog", async () => {
+    signedInAs(ALICE, new FakeClient(ALICE, [], {}));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /create a vault/i }));
+    await screen.findByRole("dialog", { name: /new vault/i });
+
+    press();
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /copy my principal/i })).toBeInTheDocument();
+  });
+
+  it("Escape closes a typed confirmation without confirming it", async () => {
+    const client = signedInAs(ALICE);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /delete vault/i }));
+    await screen.findByRole("dialog", { name: /delete personal/i });
+
+    press();
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(client.deleteVault).not.toHaveBeenCalled();
+  });
+
+  it("but not while a request is in flight", async () => {
+    // Dismissing the dialog a pending request belongs to would leave its
+    // outcome with nowhere to be reported.
+    const client = signedInAs(ALICE);
+    client.share.mockImplementation(() => new Promise<void>(() => {}));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /share/i }));
+    fireEvent.change(await screen.findByPlaceholderText(/ryjl3/i), {
+      target: { value: "aaaaa-aa" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /grant access/i }));
+
+    press();
+
+    expect(await screen.findByRole("dialog", { name: /share/i })).toBeInTheDocument();
   });
 });

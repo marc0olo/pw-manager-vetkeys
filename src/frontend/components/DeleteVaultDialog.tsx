@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useDismiss } from "./useDismiss";
 import { vaultLabel, type Vault } from "../lib/vault";
 
 interface Props {
@@ -16,6 +17,7 @@ interface Props {
  * — the contents, their history and the sharing all go in one call.
  */
 export function DeleteVaultDialog({ vault, busy, onConfirm, onClose }: Props) {
+  useDismiss(onClose, busy);
   const [typed, setTyped] = useState("");
   const label = vaultLabel(vault);
   const armed = typed === label && !busy;

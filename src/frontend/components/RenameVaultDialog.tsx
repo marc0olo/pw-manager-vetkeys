@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useDismiss } from "./useDismiss";
 import { isValidDisplayName, MAX_DISPLAY_NAME_BYTES } from "../lib/backend";
 import { labelTaken, vaultId, vaultLabel, type Vault, type VaultSummary } from "../lib/vault";
 
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function RenameVaultDialog({ vault, vaults, busy, onRename, onClose }: Props) {
+  useDismiss(onClose, busy);
   const [name, setName] = useState(vaultLabel(vault));
   const trimmed = name.trim();
   const unchanged = trimmed === vaultLabel(vault);

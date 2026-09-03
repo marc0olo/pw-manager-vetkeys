@@ -47,6 +47,23 @@ import { CheckIcon, CopyIcon, PencilIcon, ShareIcon, TrashIcon } from "./compone
 /** How often to re-read the vault list. Queries only, so this is cheap. */
 export const POLL_INTERVAL_MS = 15_000;
 
+/**
+ * The confirmation strip.
+ *
+ * A component rather than inline markup because more than one screen needs it:
+ * the zero-vault screen's only action is copying a principal, and the toast
+ * lived past that screen's early return.
+ */
+function Toast({ message }: { message: string | null }) {
+  if (!message) return null;
+  return (
+    <div className="toast" role="status">
+      <CheckIcon />
+      {message}
+    </div>
+  );
+}
+
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -484,8 +501,20 @@ export function App() {
                 Sign out
               </button>
             </div>
+            {/*
+              Feedback for the copy button above. The toast used to be rendered
+              only by the main view, which is past this early return — so the
+              one screen whose whole purpose is copying a principal was the one
+              screen that could not say it had worked.
+            */}
+            {error && (
+              <p className="banner banner--error" role="alert">
+                {error}
+              </p>
+            )}
           </div>
         </main>
+        <Toast message={toast} />
         {creating && (
           <CreateVaultDialog
             busy={busy}
@@ -890,12 +919,7 @@ export function App() {
         />
       )}
 
-      {toast && (
-        <div className="toast" role="status">
-          <CheckIcon />
-          {toast}
-        </div>
-      )}
+      <Toast message={toast} />
     </div>
   );
 }
