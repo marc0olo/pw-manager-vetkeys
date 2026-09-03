@@ -24,7 +24,7 @@ function summary(overrides: Partial<VaultSummary> = {}): VaultSummary {
     itemIds: [],
     fingerprint: "f0",
     trashed: 0,
-  trashFingerprint: "t0",
+    trashFingerprint: "t0",
     ...overrides,
   };
 }
@@ -280,5 +280,37 @@ describe("a newly shared vault", () => {
     expect(result.selection).toEqual({ vaultId: vaultId(own), itemId: "a" });
     expect(result.notice).toBeNull();
     expect(result.refreshItems).toBe(false);
+  });
+});
+
+describe("going from no vaults to one", () => {
+  // Reachable only since vaults can be created and deleted. The client used to
+  // synthesise an owned vault, so `previous` was never empty and this branch
+  // returned an unchanged null selection — which leaves the UI on its loading
+  // screen after the poll has already delivered the vault.
+  it("selects what arrived, rather than staying on nothing", () => {
+    const arrived = summary({ owner: other, name: "Team infra", isOwned: false });
+
+    const result = reconcile({
+      previous: [],
+      next: [arrived],
+      selection: { vaultId: null, itemId: null },
+      openItems: null,
+    });
+
+    expect(result.selection.vaultId).toBe(vaultId(arrived));
+    expect(result.notice).toBeNull();
+  });
+
+  it("still reports nothing when nothing arrived", () => {
+    const result = reconcile({
+      previous: [],
+      next: [],
+      selection: { vaultId: null, itemId: null },
+      openItems: null,
+    });
+
+    expect(result.selection.vaultId).toBeNull();
+    expect(result.notice).toBeNull();
   });
 });

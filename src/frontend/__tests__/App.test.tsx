@@ -38,7 +38,7 @@ vi.mock("../lib/session", async (importOriginal) => ({
   startSession: () => ({ stop: vi.fn(), broadcastLock: vi.fn(), remainingMs: () => 300_000 }),
 }));
 
-const { App, POLL_INTERVAL_MS } = await import("../App");
+const { App, POLL_INTERVAL_MS, MIN_SYNC_FEEDBACK_MS } = await import("../App");
 
 const SECRET = "correct-horse-battery";
 const personal = vault({ itemIds: ["a"], fingerprint: "own-1" });
@@ -563,6 +563,18 @@ describe("deleting one item", () => {
   });
 });
 
+// Fake timers before render: the interval is scheduled during the effect, and
+// one created with the real timer is not advanced by a fake clock swapped in
+// afterwards.
+const onFakeTimers = async (body: () => Promise<void>) => {
+  vi.useFakeTimers();
+  try {
+    await body();
+  } finally {
+    vi.useRealTimers();
+  }
+};
+
 describe("someone else changes the trash while the dialog is open", () => {
   // The count alone cannot drive this: restore one item and delete another and
   // it is unchanged while the contents differ. The summary carries a
@@ -575,17 +587,6 @@ describe("someone else changes the trash while the dialog is open", () => {
       { trash: [trashed({ item: item({ id: "d0", title }) })] },
     );
 
-  // Fake timers before render: the interval is scheduled during the effect, and
-  // one created with the real timer is not advanced by a fake clock swapped in
-  // afterwards.
-  const onFakeTimers = async (body: () => Promise<void>) => {
-    vi.useFakeTimers();
-    try {
-      await body();
-    } finally {
-      vi.useRealTimers();
-    }
-  };
   const settle = () => act(() => vi.advanceTimersByTimeAsync(0));
   const poll = () => act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
 
@@ -977,13 +978,19 @@ describe("with no vaults at all", () => {
     await waitFor(() => expect(client.createVault).toHaveBeenCalledWith("Divorce lawyer"));
   });
 
-  it("cannot be dismissed into a dead end", async () => {
+  it("can be dismissed, back to the screen that has the principal", async () => {
+    // It used to have no Cancel, on the reasoning that a user with no vaults
+    // had nothing behind the dialog. That stopped being true once the screen
+    // carried their principal — someone who opens this and then decides they
+    // would rather be shared with has to be able to get back to it.
     signedInAs(ALICE, empty());
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /create a vault/i }));
 
-    // No Cancel on the first vault: there is nothing behind the dialog.
-    expect(screen.queryByRole("button", { name: /^cancel$/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    expect(await screen.findByText(/no vaults yet/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /copy my principal/i })).toBeInTheDocument();
   });
 });
 
@@ -1108,4 +1115,273 @@ describe("two vaults may not show the same name", () => {
     // Its own name — unchanged, so nothing to submit, but not reported as taken.
     expect(screen.queryByText(/already have a vault called/i)).not.toBeInTheDocument();
   });
+});
+
+describe("with no vaults, but wanting one shared with you", () => {
+  // The dead end #47 created: the principal lives in the sidebar, which renders
+  // after this screen's early return — so the one thing needed to leave the
+  // state was the one thing the state hid.
+  const none = () => new FakeClient(ALICE, [], {});
+
+  it("shows the principal, so someone can share with you", async () => {
+    signedInAs(ALICE, none());
+    render(<App />);
+    await screen.findByText(/no vaults yet/i);
+
+    expect(screen.getByText(ALICE.toText())).toBeInTheDocument();
+  });
+
+  it("copies it without needing a vault first", async () => {
+    const board = fakeClipboard();
+    signedInAs(ALICE, none());
+    render(<App />);
+    await screen.findByText(/no vaults yet/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /copy my principal/i }));
+
+    await waitFor(() => expect(board.text).toBe(ALICE.toText()));
+    // And says so. The toast used to be rendered only by the main view, which
+    // is past this screen's early return — so the one screen whose whole
+    // purpose is copying a principal could not confirm that it had.
+    expect(await screen.findByRole("status")).toHaveTextContent(/principal is on the clipboard/i);
+  });
+
+  it("says so when the browser blocks the clipboard", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn(async () => {
+          throw new Error("denied");
+        }),
+      },
+    });
+    signedInAs(ALICE, none());
+    render(<App />);
+    await screen.findByText(/no vaults yet/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /copy my principal/i }));
+
+    // The error banner was past the early return too, so a blocked clipboard
+    // was as silent as a successful copy.
+    expect(await screen.findByRole("alert")).toHaveTextContent(/blocked clipboard access/i);
+  });
+
+  it("does not imply creating one is the only way forward", async () => {
+    signedInAs(ALICE, none());
+    render(<App />);
+
+    // The screen used to assert a premise that is not true — that having no
+    // vaults means wanting to create one.
+    expect(await screen.findByText(/or share your principal/i)).toBeInTheDocument();
+  });
+
+  it("picks up a vault shared while sitting here, with no reload", async () =>
+    onFakeTimers(async () => {
+      const client = none();
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(screen.getByText(/no vaults yet/i)).toBeInTheDocument();
+
+      // Someone grants access. The poll is registered before this screen's
+      // early return, so nothing else has to happen.
+      client.vaults = [
+        vault({ owner: BOB, name: "Team infra", isOwned: false, rights: toAccessRights("Read"), itemIds: ["x"], fingerprint: "s" }),
+      ];
+      client.items.set("Team infra", [item({ id: "x", title: "Grafana" })]);
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+
+      // Queried synchronously: `findBy*` polls on timers, which a fake clock
+      // does not advance on its own, so awaiting one here hangs the test.
+      expect(screen.queryByText(/no vaults yet/i)).not.toBeInTheDocument();
+      // Sidebar row and pane title, which is the point — it is not merely in
+      // the list, it is selected and open.
+      expect(screen.getAllByText("Team infra").length).toBeGreaterThan(1);
+    }));
+});
+
+describe("when every vault you can see belongs to someone else", () => {
+  // Reachable for the first time: before #47 the client synthesised an owned
+  // vault, so there was always one. `defaultVaultId` prefers an owned vault and
+  // falls back to the first listed, which is now a shared one.
+  const sharedOnly = (level: AccessLevel) =>
+    new FakeClient(
+      ALICE,
+      [vault({ owner: BOB, name: "Team infra", isOwned: false, rights: toAccessRights(level), itemIds: ["x"], fingerprint: "s" })],
+      { "Team infra": [item({ id: "x", title: "Grafana" })] },
+    );
+
+  it("lands on it rather than on nothing", async () => {
+    signedInAs(ALICE, sharedOnly("ReadWrite"));
+    render(<App />);
+
+    expect(await screen.findByText("Grafana")).toBeInTheDocument();
+    expect(screen.queryByText(/no vaults yet/i)).not.toBeInTheDocument();
+  });
+
+  it("withholds the owner-only actions instead of offering them to fail", async () => {
+    signedInAs(ALICE, sharedOnly("ReadWriteManage"));
+    render(<App />);
+    await screen.findByText("Grafana");
+
+    // Manage rights are the most a grantee can have, and none of these are
+    // theirs — the canister decides ownership, and #35 tells the client.
+    expect(screen.queryByRole("button", { name: /delete vault/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /rename/i })).not.toBeInTheDocument();
+  });
+
+  it("still offers what a grantee may actually do", async () => {
+    signedInAs(ALICE, sharedOnly("ReadWrite"));
+    render(<App />);
+    await screen.findByText("Grafana");
+
+    expect(screen.getByRole("button", { name: /new item/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /new vault/i })).toBeInTheDocument();
+  });
+});
+
+describe("dialogs can be got out of", () => {
+  // Reported: the first-vault dialog could not be exited. It had no Cancel, and
+  // no dialog handled Escape — which is the other half of the same complaint,
+  // since a modal that ignores the key everyone reaches for reads as stuck.
+  const press = () => fireEvent.keyDown(window, { key: "Escape" });
+
+  it("Escape closes the first-vault dialog", async () => {
+    signedInAs(ALICE, new FakeClient(ALICE, [], {}));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /create a vault/i }));
+    await screen.findByRole("dialog", { name: /new vault/i });
+
+    press();
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /copy my principal/i })).toBeInTheDocument();
+  });
+
+  it("Escape closes a typed confirmation without confirming it", async () => {
+    const client = signedInAs(ALICE);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /delete vault/i }));
+    await screen.findByRole("dialog", { name: /delete personal/i });
+
+    press();
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(client.deleteVault).not.toHaveBeenCalled();
+  });
+
+  it("but not while a request is in flight", async () => {
+    // Dismissing the dialog a pending request belongs to would leave its
+    // outcome with nowhere to be reported.
+    const client = signedInAs(ALICE);
+    client.share.mockImplementation(() => new Promise<void>(() => {}));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /share/i }));
+    fireEvent.change(await screen.findByPlaceholderText(/ryjl3/i), {
+      target: { value: "aaaaa-aa" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /grant access/i }));
+
+    press();
+
+    expect(await screen.findByRole("dialog", { name: /share/i })).toBeInTheDocument();
+  });
+});
+
+describe("a vault's name cannot be cleared", () => {
+  // Clearing used to revert the label to the map name, which was reasonable
+  // while that was something the user chose. Vaults are created with a random
+  // id now, so "reset" would rename the vault to `a3f1b2c4…` — strictly worse
+  // than any name they could type.
+  it("offers no reset", async () => {
+    signedInAs(ALICE, new FakeClient(ALICE, [vault({ displayName: "Work", itemIds: ["a"] })], {
+      Personal: [item({ id: "a", title: "GitHub" })],
+    }));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /rename/i }));
+    const dialog = await screen.findByRole("dialog", { name: /rename/i });
+
+    expect(within(dialog).queryByRole("button", { name: /^reset$/i })).not.toBeInTheDocument();
+  });
+
+  it("will not submit an empty name", async () => {
+    const client = signedInAs(ALICE, new FakeClient(ALICE, [vault({ displayName: "Work", itemIds: ["a"] })], {
+      Personal: [item({ id: "a", title: "GitHub" })],
+    }));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /rename/i }));
+    const dialog = await screen.findByRole("dialog", { name: /rename/i });
+
+    fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "   " } });
+
+    expect(within(dialog).getByRole("button", { name: /^rename$/i })).toBeDisabled();
+    expect(client.rename).not.toHaveBeenCalled();
+  });
+});
+
+describe("checking for changes by hand", () => {
+  // The poll runs every 15 s and catches up on tab focus, so this button only
+  // buys cutting that wait — which matters in one flow: you have handed someone
+  // your principal and are waiting for the vault to appear. Reported as giving
+  // no feedback at all: the spinner exists, but a query finishes faster than a
+  // frame, so it rendered invisibly.
+  const check = () => screen.getByRole("button", { name: /check for changes/i });
+
+  it("holds the spinner long enough to be seen", async () =>
+    onFakeTimers(async () => {
+      signedInAs(ALICE);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      fireEvent.click(check());
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      // The request has already resolved by here; the floor is what keeps the
+      // state visible.
+      expect(check()).toBeDisabled();
+
+      await act(() => vi.advanceTimersByTimeAsync(MIN_SYNC_FEEDBACK_MS));
+      expect(check()).not.toBeDisabled();
+    }));
+
+  it("says so when nothing changed, because the screen cannot", async () =>
+    onFakeTimers(async () => {
+      signedInAs(ALICE);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      fireEvent.click(check());
+      await act(() => vi.advanceTimersByTimeAsync(MIN_SYNC_FEEDBACK_MS));
+
+      expect(screen.getByRole("status")).toHaveTextContent(/already up to date/i);
+    }));
+
+  it("stays quiet when something did, since that speaks for itself", async () =>
+    onFakeTimers(async () => {
+      const client = signedInAs(ALICE);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      client.vaults = [
+        vault({ itemIds: ["a"], fingerprint: "own-2" }),
+        vault({ owner: BOB, name: "Team infra", isOwned: false, rights: toAccessRights("Read"), itemIds: ["x"], fingerprint: "s" }),
+      ];
+      client.items.set("Team infra", [item({ id: "x", title: "Grafana" })]);
+      fireEvent.click(check());
+      await act(() => vi.advanceTimersByTimeAsync(MIN_SYNC_FEEDBACK_MS));
+
+      expect(screen.queryByText(/already up to date/i)).not.toBeInTheDocument();
+      expect(screen.getByText("Team infra")).toBeInTheDocument();
+    }));
+
+  it("does not announce anything on the automatic poll", async () =>
+    onFakeTimers(async () => {
+      signedInAs(ALICE);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+
+      // Every 15 seconds. A toast each time would be unusable.
+      expect(screen.queryByText(/already up to date/i)).not.toBeInTheDocument();
+    }));
 });

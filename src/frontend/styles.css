@@ -392,6 +392,31 @@ code,
 
 /* Sits under the owned group, so it reads as "add one of these" rather than as
    a global action. */
+/* The zero-vault screen. Wider than the loading text it replaces, because it
+   has to carry a principal without wrapping it into something unreadable. */
+.empty {
+  max-width: 520px;
+  display: grid;
+  gap: 14px;
+  justify-items: start;
+  text-align: left;
+}
+
+.empty__principal {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .sidebar__new {
   margin: 4px 0 18px;
   padding: 6px 10px;

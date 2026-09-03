@@ -37,6 +37,17 @@ password — the vault key is derived for your Internet Identity principal.
     read-only collaborator being shown Delete until it was refused. The
     adapt-on-refusal path remains as a fallback — the canister is still the only
     authority.
+- **Changes appear on their own.** The vault list is re-read every 15 seconds
+  and immediately on returning to the tab, so a vault someone shares with you
+  shows up without a reload. The **check-for-changes** button only cuts that
+  wait — worth having while you are watching for a share to land, and it says
+  *"Already up to date"* when nothing moved, since otherwise a click that found
+  nothing looks like a click that did nothing.
+- **You do not need a vault of your own.** With none, the app shows your
+  principal and offers to copy it, so you can be shared with instead of
+  creating one — and a vault shared while you sit there appears within the poll
+  interval, no reload. Both ways out, because having no vaults does not mean
+  wanting one.
 - **Create, rename and delete vaults.** As many as you like, but **no two of
   yours may show the same name** — the empty-vault and delete-vault
   confirmations arm on the typed label, so duplicates would have you confirm a
@@ -87,8 +98,10 @@ password — the vault key is derived for your Internet Identity principal.
     deletion, the secret and its history go together.
   - **The share dialog** says how much a grantee would inherit, so the trade is
     stated where the decision is made.
-- **Rename a vault** you own. A vault *is* `(owner, name)` and its vetKey
-  derives from that pair, so the map never moves: the backend stores a display
+- **Rename a vault** you own — but not un-name it: clearing the label would
+  revert it to the random map id, so there is nothing sensible to revert to.
+  A vault *is* `(owner, name)` and its vetKey derives from that pair, so the map
+  never moves: the backend stores a display
   name beside it and a rename is one write — nothing re-encrypted, nobody
   re-invited, collaborators see the change immediately.
   - The original name stays in the clear and cannot be changed, which the

@@ -42,10 +42,35 @@ import { DeleteVaultDialog } from "./components/DeleteVaultDialog";
 import { TrashButton, TrashDialog } from "./components/TrashDialog";
 import { ShareDialog } from "./components/ShareDialog";
 import { Sidebar } from "./components/Sidebar";
-import { CheckIcon, PencilIcon, ShareIcon, TrashIcon } from "./components/Icons";
+import { CheckIcon, CopyIcon, PencilIcon, ShareIcon, TrashIcon } from "./components/Icons";
 
 /** How often to re-read the vault list. Queries only, so this is cheap. */
 export const POLL_INTERVAL_MS = 15_000;
+
+/**
+ * How long the sync spinner stays up for a manual check.
+ *
+ * Not a delay for its own sake: the request itself is faster than a frame, so
+ * without a floor the only feedback a button press produced was invisible.
+ */
+export const MIN_SYNC_FEEDBACK_MS = 600;
+
+/**
+ * The confirmation strip.
+ *
+ * A component rather than inline markup because more than one screen needs it:
+ * the zero-vault screen's only action is copying a principal, and the toast
+ * lived past that screen's early return.
+ */
+function Toast({ message }: { message: string | null }) {
+  if (!message) return null;
+  return (
+    <div className="toast" role="status">
+      <CheckIcon />
+      {message}
+    </div>
+  );
+}
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -134,9 +159,10 @@ export function App() {
    * timer for exactly that reason.
    */
   const refresh = useCallback(
-    async ({ quiet = false }: { quiet?: boolean } = {}) => {
+    async ({ quiet = false, manual = false }: { quiet?: boolean; manual?: boolean } = {}) => {
       if (!client) return;
       if (!quiet) setSyncing(true);
+      const startedAt = Date.now();
       const current = loads.begin();
       try {
         const next = await client.listVaults();
@@ -152,6 +178,10 @@ export function App() {
           setError(null);
         }
         if (outcome.notice) notify(outcome.notice);
+        // A manual check has to answer even when the answer is "nothing".
+        // Anything that *did* change is its own feedback — the screen is
+        // different — so this only speaks up when nothing is.
+        if (manual && !outcome.changed && !outcome.notice) notify("Already up to date");
         if (outcome.refreshTrash) {
           // Someone else changed this vault's trash while the dialog is open.
           // A second read, guarded by the same load token: the dialog must not
@@ -169,6 +199,17 @@ export function App() {
         // A failed poll is not worth a banner; the next one will retry.
         if (!quiet) setError(message(caught));
       } finally {
+        if (manual) {
+          // A query against a local replica finishes in tens of milliseconds,
+          // so the spinner rendered for less than a frame and the click looked
+          // ignored. Held long enough to read as an event — only for a manual
+          // check, since `run` refreshes after every action and a floor there
+          // would add this delay to every save.
+          const elapsed = Date.now() - startedAt;
+          if (elapsed < MIN_SYNC_FEEDBACK_MS) {
+            await new Promise((resolve) => setTimeout(resolve, MIN_SYNC_FEEDBACK_MS - elapsed));
+          }
+        }
         if (!quiet) setSyncing(false);
       }
     },
@@ -414,6 +455,22 @@ export function App() {
     };
   }, [client, refresh]);
 
+  /**
+   * Your own principal, on the clipboard.
+   *
+   * Not a secret, so `copyPlain` rather than `copySecret` — nothing to clear
+   * afterwards. Lifted out of the sidebar because the zero-vault screen needs
+   * it too: someone who wants a vault shared *with* them has to hand over this
+   * string, and it used to live only behind a screen they could not reach
+   * without creating a vault first.
+   */
+  const copyPrincipal = () => {
+    void copyPlain(client?.me.toText() ?? "").then(
+      () => notify("Your principal is on the clipboard"),
+      () => setError("The browser blocked clipboard access."),
+    );
+  };
+
   const copyField = async (field: "username" | "password" | "url", value: string) => {
     try {
       if (field === "password") {
@@ -435,24 +492,53 @@ export function App() {
   // No vaults at all, which is now a real state rather than one the client
   // papered over with a synthesised `Personal`. Reachable for a brand-new user
   // and for anyone who deletes their last vault.
+  //
+  // Both ways out are offered, because having no vaults does not mean wanting
+  // one: a user may only ever want vaults shared *with* them, and to be shared
+  // with they have to hand over their principal. Offering creation alone made
+  // that a dead end — the one thing needed to leave the state was the one thing
+  // the state hid, since the principal lives in the sidebar below.
+  //
+  // Nothing else is needed for the second path: the poll is registered above
+  // this return, so a vault shared while the user sits here appears within the
+  // interval, with no reload and no re-authentication.
   if (vaults !== null && vaults.length === 0) {
     return (
       <>
         <main className="loading">
-          <div>
+          <div className="empty">
             <p>You have no vaults yet.</p>
             <p className="pane__hint">
-              A vault holds a set of secrets under its own key. You can create more later, and
-              share each one separately.
+              A vault holds a set of secrets under its own key. Create one to store your own
+              secrets — or share your principal, and anything shared with you appears here.
             </p>
-            <button className="btn btn--primary" onClick={() => patch({ creating: true })}>
-              Create a vault
-            </button>
-            <button className="btn btn--ghost" onClick={() => void lock("manual")}>
-              Sign out
-            </button>
+            <code className="empty__principal">{client?.me.toText() ?? ""}</code>
+            <div className="empty__actions">
+              <button className="btn btn--primary" onClick={() => patch({ creating: true })}>
+                Create a vault
+              </button>
+              <button className="btn btn--ghost" onClick={copyPrincipal}>
+                <CopyIcon />
+                Copy my principal
+              </button>
+              <button className="btn btn--ghost" onClick={() => void lock("manual")}>
+                Sign out
+              </button>
+            </div>
+            {/*
+              Feedback for the copy button above. The toast used to be rendered
+              only by the main view, which is past this early return — so the
+              one screen whose whole purpose is copying a principal was the one
+              screen that could not say it had worked.
+            */}
+            {error && (
+              <p className="banner banner--error" role="alert">
+                {error}
+              </p>
+            )}
           </div>
         </main>
+        <Toast message={toast} />
         {creating && (
           <CreateVaultDialog
             busy={busy}
@@ -513,16 +599,12 @@ export function App() {
           setError(null);
         }}
         principal={client?.me.toText() ?? ""}
-        onCopyPrincipal={() =>
-          void copyPlain(client?.me.toText() ?? "").then(
-            () => notify("Your principal is on the clipboard"),
-            () => setError("The browser blocked clipboard access."),
-          )
+        onCopyPrincipal={() => copyPrincipal()
         }
         onSignOut={() => void lock("manual")}
         remainingMs={session ? session.remainingMs : null}
         sessionExpiresAt={expiresAt}
-        onRefresh={() => void refresh()}
+        onRefresh={() => void refresh({ manual: true })}
         onNewVault={() => patch({ creating: true })}
         syncing={syncing}
         syncedAt={syncedAt}
@@ -799,7 +881,7 @@ export function App() {
                 await client!.rename(vault, displayName);
                 patch({ renaming: false });
               },
-              displayName === "" ? "Name reset" : "Vault renamed",
+              "Vault renamed",
             )
           }
         />
@@ -861,12 +943,7 @@ export function App() {
         />
       )}
 
-      {toast && (
-        <div className="toast" role="status">
-          <CheckIcon />
-          {toast}
-        </div>
-      )}
+      <Toast message={toast} />
     </div>
   );
 }

@@ -128,16 +128,22 @@ check(
   );
 }
 
-// ---- editing and clearing ---------------------------------------------------
+// ---- editing, but not clearing ----------------------------------------------
 await A.names.set_vault_name(bytes("Personal"), "  Work notes  ");
 check(
   "surrounding whitespace is trimmed, not rejected — it carries no identity here",
   nameFor(await A.names.get_vault_names(), me, "Personal") === "Work notes",
 );
 
-await A.names.set_vault_name(bytes("Personal"), "   ");
-check("an empty name clears the row, reverting to the map name",
-  (await A.names.get_vault_names()).length === 0);
+// A name used to be clearable, reverting the label to the map name. That was
+// reasonable while the map name was something a user chose; vaults are created
+// with a random id now, so clearing would rename the vault to `a3f1b2c4…`.
+const cleared = await A.names.set_vault_name(bytes("Personal"), "   ");
+check("an empty name is refused rather than clearing the row", "Err" in cleared, JSON.stringify(cleared));
+check(
+  "so the name it had survives",
+  nameFor(await A.names.get_vault_names(), me, "Personal") === "Work notes",
+);
 
 // ---- bounded ----------------------------------------------------------------
 const tooLong = await A.names.set_vault_name(bytes("Personal"), "x".repeat(MAX_DISPLAY_NAME_BYTES + 1));

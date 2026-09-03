@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useDismiss } from "./useDismiss";
 import { TrashIcon } from "./Icons";
 import { vaultLabel, type TrashedItem, type Vault } from "../lib/vault";
 
@@ -41,6 +42,7 @@ export function TrashDialog({
   onDiscardAll,
   onClose,
 }: Props) {
+  useDismiss(onClose, busy);
   // Two-step in place rather than a second dialog on top of this one. The
   // confirmation belongs beside the list it is about, and stacking modals
   // would hide the very thing being confirmed.

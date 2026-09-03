@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useDismiss } from "./useDismiss";
 import { Principal } from "@icp-sdk/core/principal";
 import { TrashIcon } from "./Icons";
 import { ACCESS_LEVELS, accessLevel, vaultLabel, type AccessLevel, type Vault } from "../lib/vault";
@@ -32,6 +33,7 @@ const LEVEL_DETAIL: Record<AccessLevel, string> = {
 };
 
 export function ShareDialog({ vault, busy, onShare, onRevoke, onClose }: Props) {
+  useDismiss(onClose, busy);
   const [principalText, setPrincipalText] = useState("");
   const [level, setLevel] = useState<AccessLevel>("Read");
   const [error, setError] = useState<string | null>(null);

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useDismiss } from "./useDismiss";
 import { isValidDisplayName, MAX_DISPLAY_NAME_BYTES } from "../lib/backend";
 import { labelTaken, type VaultSummary } from "../lib/vault";
 
@@ -6,13 +7,14 @@ interface Props {
   busy: boolean;
   /** Every vault on screen, so a duplicate label can be caught before submitting. */
   vaults: VaultSummary[];
-  /** True when this is the user's first vault, which changes what needs saying. */
+  /** True when this is the user's first vault, which only changes the heading. */
   first: boolean;
   onCreate: (displayName: string) => void;
   onClose: () => void;
 }
 
 export function CreateVaultDialog({ busy, vaults, first, onCreate, onClose }: Props) {
+  useDismiss(onClose, busy);
   const [name, setName] = useState("");
   const trimmed = name.trim();
   const overLong = trimmed.length > 0 && !isValidDisplayName(trimmed);
@@ -74,13 +76,19 @@ export function CreateVaultDialog({ busy, vaults, first, onCreate, onClose }: Pr
           </button>
         </form>
 
-        {!first && (
-          <footer className="modal__actions">
-            <button className="btn btn--ghost" onClick={onClose} disabled={busy}>
-              Cancel
-            </button>
-          </footer>
-        )}
+        {/*
+          Always dismissable, including the first one. It was not, on the
+          reasoning that there is nothing behind the dialog for a user with no
+          vaults — which stopped being true once that screen carried their
+          principal. Someone who opened this and then decided they would rather
+          be shared with needs a way back to it.
+        */}
+        <footer className="modal__actions">
+          <button className="btn btn--ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+        </footer>
+
       </div>
     </div>
   );

@@ -244,19 +244,22 @@ check("32 bytes exactly is accepted", "Ok" in (await A.api.create_vault(buf("x".
   // Renaming a vault to the label it already has is not a collision with itself.
   check("re-applying a vault's own name succeeds", "Ok" in (await N.api.set_vault_name(buf("v-one"), "Work")));
   // Clearing reverts to the map name and cannot collide.
-  check("clearing a name is always allowed", "Ok" in (await N.api.set_vault_name(buf("v-two"), "")));
+  check("clearing a name is refused, not a way to revert to the map id",
+    "Err" in (await N.api.set_vault_name(buf("v-two"), "")));
   check(
-    "and a label another vault still holds stays refused",
+    "and a label another vault holds stays refused",
     "Err" in (await N.api.set_vault_name(buf("v-two"), "Work")),
     "v-one has it",
   );
 
-  // v-two is unnamed now, so it renders as its map name — and a display name
-  // equal to that collides on screen just as surely as a duplicate display
-  // name would. Checked against the *unnamed* vault, since a named one renders
-  // as its label rather than its map name.
-  await N.api.create_vault(buf("v-three"));
-  const asMapName = await N.api.set_vault_name(buf("v-three"), "v-two");
+  // A vault can still be unnamed — creating one is two calls, and a failure
+  // between them leaves the label as the id until someone renames it. Such a
+  // vault renders as its map name, so a display name equal to that collides on
+  // screen just as surely as a duplicate display name would. `v-four` is left
+  // unnamed to model exactly that.
+  await N.api.create_vault(buf("v-four"));
+  await N.api.create_vault(buf("v-five"));
+  const asMapName = await N.api.set_vault_name(buf("v-five"), "v-four");
   check("a name equal to an unnamed vault's map name is refused", "Err" in asMapName, JSON.stringify(asMapName));
 
   // Case-sensitive on purpose: refusing a name for a difference the user cannot

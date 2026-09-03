@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useDismiss } from "./useDismiss";
 import { vaultLabel, type Vault } from "../lib/vault";
 
 interface Props {
@@ -18,6 +19,7 @@ interface Props {
  * trash is what makes it survivable.
  */
 export function EmptyVaultDialog({ vault, busy, onConfirm, onClose }: Props) {
+  useDismiss(onClose, busy);
   const [typed, setTyped] = useState("");
   const label = vaultLabel(vault);
   const armed = typed === label && !busy;

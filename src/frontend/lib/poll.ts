@@ -1,5 +1,5 @@
 import { reconcile } from "./reconcile";
-import { defaultVaultId, vaultId, type VaultSummary } from "./vault";
+import { accessLevel, defaultVaultId, vaultId, type VaultSummary } from "./vault";
 import type { VaultSessionState } from "./vault-session";
 
 export interface PollOutcome {
@@ -18,6 +18,56 @@ export interface PollOutcome {
    * item leaves the first person's open dialog wrong until they close it.
    */
   refreshTrash: boolean;
+  /**
+   * Whether anything a user could see actually moved.
+   *
+   * For a *manual* check, which needs to say something even when the answer is
+   * "nothing". An automatic poll that finds nothing should stay silent; a
+   * button press that finds nothing has to report that, or the click looks
+   * ignored — the screen is identical either way.
+   */
+  changed: boolean;
+}
+
+/**
+ * What a vault looks like to a viewer, as one comparable string.
+ *
+ * Everything on screen that the poll can change, which is more than the
+ * digests:
+ *
+ * - **both digests** — contents and trash, each moving when their own changes
+ * - **the id set** — a vault added, removed, or renamed at the map level
+ * - **the display name**, which moves neither digest nor id
+ * - **the membership**, rendered as "Shared with N" and listed in the share
+ *   dialog. The members themselves, not the count: swapping one person for
+ *   another is visible and leaves the count alone.
+ * - **your rights**, which decide whether Rename, Delete and Empty appear at
+ *   all — so being downgraded from `ReadWrite` to `Read` changes the screen
+ *   without touching anything else here.
+ *
+ * The last two were missing, so a check run right after an owner shared the
+ * vault or changed your access reported "nothing changed" while the screen
+ * visibly had.
+ *
+ * Sorted, so the canister's ordering cannot register as a change.
+ */
+function signature(vaults: VaultSummary[]): string {
+  return vaults
+    .map((vault) =>
+      [
+        vaultId(vault),
+        vault.fingerprint,
+        vault.trashFingerprint,
+        vault.displayName ?? "",
+        vault.rights === null ? "" : accessLevel(vault.rights),
+        vault.sharedWith
+          .map(([who, rights]) => `${who.toText()}=${accessLevel(rights)}`)
+          .sort()
+          .join(","),
+      ].join(":"),
+    )
+    .sort()
+    .join("|");
 }
 
 /**
@@ -75,5 +125,6 @@ export function pollUpdate(
     notice: outcome.notice,
     movedVault: outcome.selection.vaultId !== wasOn,
     refreshTrash,
+    changed: signature(before.vaults ?? []) !== signature(next),
   };
 }
