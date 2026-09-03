@@ -643,6 +643,10 @@ export function App() {
                     ? "Manage who can open this vault"
                     : "Give someone else access to this vault"
                 }
+                // Stable, unlike the visible text, which changes to "Shared
+                // with 3" once there are members — so the control announces
+                // itself differently depending on state.
+                aria-label="Share this vault"
               >
                 <ShareIcon />
                 {vault.sharedWith.length > 0 ? `Shared with ${vault.sharedWith.length}` : "Share"}

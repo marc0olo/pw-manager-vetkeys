@@ -20,9 +20,17 @@ const backendId = execSync("icp canister status backend --id-only", { encoding: 
 const rootKey = Uint8Array.from(Buffer.from(status.root_key, "hex"));
 const enc = new TextEncoder();
 
+/** Counts vetKD derivations, so "changing rights re-keys nothing" is measured. */
+let derivations = 0;
 const connect = async (identity) => {
   const agent = await HttpAgent.create({ identity, host: status.api_url, rootKey });
-  const maps = new EncryptedMaps(new DefaultEncryptedMapsClient(agent, backendId));
+  const raw = new DefaultEncryptedMapsClient(agent, backendId);
+  const real = raw.get_encrypted_vetkey.bind(raw);
+  raw.get_encrypted_vetkey = (...args) => {
+    derivations++;
+    return real(...args);
+  };
+  const maps = new EncryptedMaps(raw);
   // The app's own endpoints, which answer what the library will not.
   maps.api = Actor.createActor(idlFactory, { agent, canisterId: backendId });
   return maps;
@@ -190,6 +198,65 @@ for (const level of ["Read", "ReadWrite", "ReadWriteManage"]) {
       O.setUserRights(me, mapName, Ed25519KeyIdentity.generate().getPrincipal(), { Read: null }),
     )) === "ok",
   );
+}
+
+// ---- changing someone's access replaces it, rather than adding a second one -
+//
+// The transition nothing pinned. `setUserRights` was only ever exercised as a
+// first grant, so "what happens if I share with someone who already has
+// access" was answered by reading the library rather than by running it — and
+// the UI's wording depended on the answer.
+//
+// It replaces: one ACL row, changed in place, returning the level it replaced.
+{
+  const { mapName, grantee, G } = await vaultSharedAt("Read", "Transitions");
+  const rowsFor = async () => {
+    const listed = await O.canisterClient.get_all_accessible_encrypted_maps();
+    const map = listed.find((m) => new TextDecoder().decode(Uint8Array.from(m.map_name.inner)) === "Transitions");
+    return map.access_control.filter(([who]) => who.compareTo(grantee.getPrincipal()) === "eq");
+  };
+
+  check("one entry after the first grant", (await rowsFor()).length === 1);
+
+  derivations = 0;
+  const promoted = await O.setUserRights(me, mapName, grantee.getPrincipal(), { ReadWrite: null });
+  const rows = await rowsFor();
+  check("still one entry after granting a second time", rows.length === 1, `${rows.length} entries`);
+  check("and it is the new level", "ReadWrite" in rows[0][1], JSON.stringify(rows[0][1]));
+  check(
+    "the call reports the level it replaced",
+    promoted !== undefined && "Read" in promoted,
+    JSON.stringify(promoted),
+  );
+  check(
+    "changing access derives no key",
+    derivations === 0,
+    "the vetKey is per vault, so rights gate access rather than derivation",
+  );
+
+  // The promotion takes effect without the grantee doing anything.
+  check(
+    "the grantee can write immediately, with nothing to re-authenticate",
+    await G.setValue(me, mapName, enc.encode("i3"), enc.encode("{}")).then(() => true, () => false),
+  );
+
+  // And downward, which is the same operation.
+  const demoted = await O.setUserRights(me, mapName, grantee.getPrincipal(), { Read: null });
+  check("demoting reports the level it replaced", demoted !== undefined && "ReadWrite" in demoted, JSON.stringify(demoted));
+  check("still one entry", (await rowsFor()).length === 1);
+  check(
+    "the write is refused straight away",
+    await G.setValue(me, mapName, enc.encode("i4"), enc.encode("{}")).then(() => false, () => true),
+  );
+  check(
+    "but reading still works — it is a demotion, not a revocation",
+    await G.getValuesForMap(me, mapName).then((v) => v.length > 0, () => false),
+  );
+
+  // A first grant has nothing to report, which is how a caller tells the two
+  // apart without reading the ACL first.
+  const fresh = await O.setUserRights(me, mapName, Ed25519KeyIdentity.generate().getPrincipal(), { Read: null });
+  check("a first grant reports no previous level", fresh === undefined, JSON.stringify(fresh));
 }
 
 console.log(
