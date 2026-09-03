@@ -45,6 +45,22 @@ password — the vault key is derived for your Internet Identity principal.
     read-only collaborator being shown Delete until it was refused. The
     adapt-on-refusal path remains as a fallback — the canister is still the only
     authority.
+- **You can see which vaults changed while you were away.** A dot on the
+  sidebar row, and one line of text — *"2 vaults changed"* — that takes you to
+  the first. Deliberately not a notification: it never interrupts, and it clears
+  by the action it describes, opening the vault.
+  - Costs nothing on the wire. The poll already carries a content digest and a
+    trash digest per vault; this is a second reader of data that was only being
+    used to refresh the view.
+  - **A vault seen for the first time is recorded, not flagged.** Otherwise a
+    new device, a fresh browser or cleared site data would mark everything,
+    which is the noise the feature exists to avoid.
+  - Only contents and trash count. A rename or a new collaborator is visible in
+    the row already, so flagging it would report something you can see.
+  - The marks live in `localStorage`, per principal, and **survive a lock** —
+    unlike everything in the session state, because "since I last looked" is
+    meaningless if locking resets it. They name vaults on the device, which is
+    the same exposure vault names already have in the canister.
 - **Changes appear on their own.** The vault list is re-read every 15 seconds
   and immediately on returning to the tab, so a vault someone shares with you
   shows up without a reload. The **check-for-changes** button only cuts that
@@ -131,6 +147,7 @@ src/frontend/lib/vault.ts  Encrypt/decrypt and access control over EncryptedMaps
 src/frontend/lib/items.ts  The item model and its JSON encoding
 src/frontend/lib/reconcile.ts  What the UI does when the canister changes underneath
 src/frontend/lib/poll.ts     What a poll changes, as one patch
+src/frontend/lib/seen.ts     Which vaults changed since you last looked
 src/frontend/lib/auth.ts   Internet Identity, and the load-time session gate
 src/frontend/lib/session.ts  Idle timeout, activity mark, cross-tab lock, key purge
 src/frontend/lib/lock.ts     The lock sequence: ordering and failure safety

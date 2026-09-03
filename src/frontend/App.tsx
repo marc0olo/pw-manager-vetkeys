@@ -41,6 +41,7 @@ import { DeleteItemDialog } from "./components/DeleteItemDialog";
 import { DeleteVaultDialog } from "./components/DeleteVaultDialog";
 import { TrashButton, TrashDialog } from "./components/TrashDialog";
 import { ShareDialog } from "./components/ShareDialog";
+import * as seen from "./lib/seen";
 import { Sidebar } from "./components/Sidebar";
 import { CheckIcon, CopyIcon, PencilIcon, ShareIcon, TrashIcon } from "./components/Icons";
 
@@ -93,6 +94,14 @@ export function App() {
     setVaultSession(vaultStateRef.current);
   }, []);
   const [syncing, setSyncing] = useState(false);
+  /**
+   * Per-vault "what it held when you last looked".
+   *
+   * Not in `VaultSessionState`: every field there is cleared on lock because it
+   * holds plaintext or an open dialog, and "since I last looked" is meaningless
+   * if locking resets it. Persisted per principal instead — see lib/seen.ts.
+   */
+  const [marks, setMarks] = useState<seen.Marks>({});
   // Guards every load that crosses an await. See lib/vault-session: a request
   // already on the wire when the vault locks must not write the previous
   // session's vault list back into the state the lock just cleared.
@@ -135,7 +144,15 @@ export function App() {
       // Chosen here rather than left to the render, so that the vault on screen
       // and the vault every other consumer reasons about are the same one. See
       // #16: an implicit selection meant the poll ignored the open vault.
-      patch({ vaults: listed, selectedVaultId: defaultVaultId(listed), syncedAt: Date.now() });
+      const landing = defaultVaultId(listed);
+      patch({ vaults: listed, selectedVaultId: landing, syncedAt: Date.now() });
+      // Marks are per principal and survive a lock, so they are read here
+      // rather than reset. First sight of a vault records it without flagging
+      // it — otherwise a new device would mark everything.
+      const principal = vaultClient.me.toText();
+      const advanced = seen.afterPoll(listed, seen.load(principal), landing);
+      seen.save(principal, advanced);
+      setMarks(advanced);
     } catch (caught) {
       // A failure that belongs to an ended session must not raise a banner on
       // the locked screen.
@@ -171,6 +188,13 @@ export function App() {
         if (!current()) return;
         const outcome = pollUpdate(vaultStateRef.current, next, Date.now());
         patch(outcome.patch);
+        // After the patch, so the vault the user is now on is the one whose
+        // mark advances — the poll can move the selection.
+        setMarks((current) => {
+          const advanced = seen.afterPoll(next, current, outcome.patch.selectedVaultId ?? null);
+          seen.save(client.me.toText(), advanced);
+          return advanced;
+        });
         if (outcome.movedVault) {
           // Any banner was about the vault we just left. "You no longer have
           // access to this vault" is worse than useless once "this vault" is a
@@ -416,6 +440,10 @@ export function App() {
     [summary, openItems],
   );
 
+  // Recomputed rather than stored: it is a comparison of two things already in
+  // state, and storing it would give it a second chance to disagree with them.
+  const changedVaults = useMemo(() => seen.changed(vaults ?? [], marks), [vaults, marks]);
+
   const visibleItems = useMemo(
     () => (openItems ?? []).filter((item) => matchesQuery(item, query)).sort(compareItems),
     [openItems, query],
@@ -582,6 +610,13 @@ export function App() {
         vaults={vaults ?? []}
         selectedId={vaultId(vault)}
         onSelect={(id) => {
+          // Opening it is what "I looked" means, so the flag clears here rather
+          // than on the next poll.
+          setMarks((current) => {
+            const marked = seen.afterViewing(vaults ?? [], current, id);
+            if (client) seen.save(client.me.toText(), marked);
+            return marked;
+          });
           patch({
             selectedVaultId: id,
             selectedItemId: null,
@@ -606,6 +641,25 @@ export function App() {
         sessionExpiresAt={expiresAt}
         onRefresh={() => void refresh({ manual: true })}
         onNewVault={() => patch({ creating: true })}
+        changed={changedVaults}
+        onShowChanged={() => {
+          const first = changedVaults[0];
+          if (first === undefined) return;
+          setMarks((current) => {
+            const marked = seen.afterViewing(vaults ?? [], current, first);
+            if (client) seen.save(client.me.toText(), marked);
+            return marked;
+          });
+          patch({
+            selectedVaultId: first,
+            selectedItemId: null,
+            openItems: null,
+            itemFacts: null,
+            history: null,
+            pane: { mode: "view" },
+            query: "",
+          });
+        }}
         syncing={syncing}
         syncedAt={syncedAt}
       />
