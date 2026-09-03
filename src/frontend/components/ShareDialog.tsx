@@ -39,15 +39,42 @@ export function ShareDialog({ vault, busy, onShare, onRevoke, onClose }: Props) 
   const [error, setError] = useState<string | null>(null);
   const one = vault.trashed === 1;
 
+  // Parsed as the user types, so the form can say what granting will actually
+  // do before they press the button.
+  const typed = (() => {
+    try {
+      return Principal.fromText(principalText.trim());
+    } catch {
+      return null;
+    }
+  })();
+
+  const isOwner = typed !== null && typed.compareTo(vault.owner) === "eq";
+  /**
+   * Their current access, if they already have some.
+   *
+   * `setUserRights` **replaces** an existing entry rather than adding one — one
+   * ACL row, changed in place, and it returns the level it replaced. Verified
+   * against a replica. So granting to someone who already has access is a
+   * *change*, and a form that reads "Grant access" for both makes promoting
+   * someone look identical to inviting a stranger.
+   */
+  const current = typed === null
+    ? null
+    : (vault.sharedWith.find(([who]) => who.compareTo(typed) === "eq")?.[1] ?? null);
+  const currentLevel = current === null ? null : accessLevel(current);
+  const unchanged = currentLevel === level;
+
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
-    try {
-      onShare(Principal.fromText(principalText.trim()), level);
-      setPrincipalText("");
-    } catch {
+    if (typed === null) {
       setError("That is not a valid principal.");
+      return;
     }
+    if (isOwner || unchanged) return;
+    onShare(typed, level);
+    setPrincipalText("");
   };
 
   return (
@@ -94,8 +121,23 @@ export function ShareDialog({ vault, busy, onShare, onRevoke, onClose }: Props) 
             </select>
           </label>
           <p className="modal__hint">{LEVEL_DETAIL[level]}</p>
-          <button className="btn btn--primary" type="submit" disabled={busy || !principalText.trim()}>
-            {busy ? "Working…" : "Grant access"}
+          {isOwner ? (
+            <p className="modal__hint">
+              That is this vault’s owner. They already have full access, and it cannot be changed.
+            </p>
+          ) : currentLevel !== null ? (
+            <p className="modal__hint">
+              {unchanged
+                ? `They already have “${LEVEL_LABEL[currentLevel]}”. Pick a different level to change it.`
+                : `They currently have “${LEVEL_LABEL[currentLevel]}”. This replaces it — there is one entry per person, not one per grant.`}
+            </p>
+          ) : null}
+          <button
+            className="btn btn--primary"
+            type="submit"
+            disabled={busy || !principalText.trim() || isOwner || unchanged}
+          >
+            {busy ? "Working…" : currentLevel !== null ? "Change access" : "Grant access"}
           </button>
         </form>
 

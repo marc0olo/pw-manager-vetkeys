@@ -30,6 +30,14 @@ password — the vault key is derived for your Internet Identity principal.
   - Read/write is **destructive**: the canister guards "delete every item" with
     the same write check, so there is no separate delete right. The share dialog
     says so rather than calling it "can edit items".
+  - **One entry per person, not one per grant.** Sharing with someone who
+    already has access *replaces* their level rather than adding a second row —
+    the call even reports the level it replaced. So promoting and demoting are
+    the same operation, they take effect immediately with no key re-derivation,
+    and a demotion is not a revocation: writes are refused at once while reads
+    keep working. The dialog says which of the two you are doing, because
+    "Grant access" for both made promoting someone look like inviting a
+    stranger.
   - The library will not tell a grantee their own rights
     ([dfinity/vetkeys#438]), so this backend does: it reads the access list it
     already holds and reports what *you* may do, which discloses nothing about
@@ -301,7 +309,7 @@ npm run check-ii-metadata     # validates the II app-metadata document
 
 # these need a running replica and a deployed canister
 npm run smoke-test            # crypto + access control end to end
-npm run check-capabilities    # the access-level table the share dialog states
+npm run check-capabilities    # the access-level table, and what changing someone's access does
 npm run check-poll-cost       # a poll derives no keys and carries no ciphertext
 npm run check-vault-names     # renaming moves no map and derives no key
 npm run check-history         # a writer can add versions but destroy none

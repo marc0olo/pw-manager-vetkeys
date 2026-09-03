@@ -1385,3 +1385,77 @@ describe("checking for changes by hand", () => {
       expect(screen.queryByText(/already up to date/i)).not.toBeInTheDocument();
     }));
 });
+
+describe("sharing with someone who already has access", () => {
+  // `setUserRights` replaces the existing entry rather than adding one — one
+  // ACL row, changed in place, returning the level it replaced. Verified on a
+  // replica in check-capabilities. So this is a *change*, and a form reading
+  // "Grant access" for both made promoting someone look like inviting a
+  // stranger.
+  const shared = (level: AccessLevel) =>
+    new FakeClient(
+      ALICE,
+      [vault({ itemIds: ["a"], sharedWith: [[BOB, toAccessRights(level)]] })],
+      { Personal: [item({ id: "a", title: "GitHub" })] },
+    );
+
+  const openShare = async (client: FakeClient) => {
+    signedInAs(ALICE, client);
+    render(<App />);
+    // By aria-label: the visible text becomes "Shared with 1" once there are
+    // members, and the sidebar row's name contains it too.
+    fireEvent.click(await screen.findByRole("button", { name: /share this vault/i }));
+    return screen.findByRole("dialog", { name: /^share/i });
+  };
+
+  it("says what they have now, and that this replaces it", async () => {
+    const dialog = await openShare(shared("Read"));
+    fireEvent.change(within(dialog).getByPlaceholderText(/ryjl3/i), { target: { value: BOB.toText() } });
+    fireEvent.change(within(dialog).getByRole("combobox"), { target: { value: "ReadWrite" } });
+
+    expect(within(dialog).getByText(/currently have “Read only”/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/one entry per person, not one per grant/i)).toBeInTheDocument();
+  });
+
+  it("calls it a change rather than a grant", async () => {
+    const dialog = await openShare(shared("Read"));
+    fireEvent.change(within(dialog).getByPlaceholderText(/ryjl3/i), { target: { value: BOB.toText() } });
+    fireEvent.change(within(dialog).getByRole("combobox"), { target: { value: "ReadWriteManage" } });
+
+    expect(within(dialog).getByRole("button", { name: /change access/i })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: /grant access/i })).not.toBeInTheDocument();
+  });
+
+  it("will not submit a level they already have", async () => {
+    const client = shared("ReadWrite");
+    const dialog = await openShare(client);
+    fireEvent.change(within(dialog).getByPlaceholderText(/ryjl3/i), { target: { value: BOB.toText() } });
+    fireEvent.change(within(dialog).getByRole("combobox"), { target: { value: "ReadWrite" } });
+
+    expect(within(dialog).getByRole("button", { name: /change access/i })).toBeDisabled();
+    expect(within(dialog).getByText(/pick a different level/i)).toBeInTheDocument();
+    expect(client.share).not.toHaveBeenCalled();
+  });
+
+  it("still says Grant access for someone new", async () => {
+    const dialog = await openShare(shared("Read"));
+    fireEvent.change(within(dialog).getByPlaceholderText(/ryjl3/i), {
+      target: { value: "2vxsx-fae" },
+    });
+
+    expect(within(dialog).getByRole("button", { name: /grant access/i })).toBeInTheDocument();
+    expect(within(dialog).queryByText(/currently have/i)).not.toBeInTheDocument();
+  });
+
+  it("refuses the owner in the form rather than by throwing", async () => {
+    const client = shared("Read");
+    const dialog = await openShare(client);
+    fireEvent.change(within(dialog).getByPlaceholderText(/ryjl3/i), { target: { value: ALICE.toText() } });
+
+    // It used to be caught by `share` throwing, which surfaced as an error
+    // banner after the click.
+    expect(within(dialog).getByText(/already have full access/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /grant access/i })).toBeDisabled();
+    expect(client.share).not.toHaveBeenCalled();
+  });
+});
