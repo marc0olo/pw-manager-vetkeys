@@ -82,6 +82,25 @@ export type VersionKind = { 'Edited' : null } |
   { 'Deleted' : null };
 export interface _SERVICE {
   /**
+   * / Claim a vault that holds nothing yet.
+   * /
+   * / The point of the registry: an entry can be written without inserting a
+   * / value, which is what "create an empty vault" has always meant here. Until
+   * / now a vault began existing when its first secret was stored, so there was
+   * / no moment at which to name it or to land on it.
+   * /
+   * / The caller becomes the owner — a vault *is* `(owner, mapName)`, so there
+   * / is nothing to assign. Idempotent: claiming one you already own succeeds
+   * / and changes nothing, so a retry after a failed response is safe.
+   * /
+   * / The name is the caller's to choose and is stored in the clear, like every
+   * / map name. The app generates an opaque id rather than a readable name (#13)
+   * / so that renaming a vault does not leave the original in plaintext forever;
+   * / that is a client concern, the same as item ids, and not something this can
+   * / enforce.
+   */
+  'create_vault' : ActorMethod<[ByteBuf], Result>,
+  /**
    * / Make a vault's deletions unrecoverable now, rather than waiting out their
    * / 90 days.
    * /
@@ -160,6 +179,13 @@ export interface _SERVICE {
    */
   'get_item_summaries' : ActorMethod<[Principal, ByteBuf], Result_7>,
   'get_owned_non_empty_map_names' : ActorMethod<[], Array<ByteBuf>>,
+  /**
+   * / Every vault this caller owns, whether or not it holds anything.
+   * /
+   * / The registry read on its own, for a client that wants to know what it owns
+   * / without inferring it from a listing that also carries shared vaults.
+   */
+  'get_owned_vaults' : ActorMethod<[], Array<ByteBuf>>,
   'get_shared_user_access_for_map' : ActorMethod<
     [Principal, ByteBuf],
     Result_6

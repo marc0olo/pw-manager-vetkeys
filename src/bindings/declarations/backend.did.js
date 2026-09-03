@@ -10,6 +10,7 @@ import { IDL } from '@icp-sdk/core/candid';
 
 export const idlFactory = ({ IDL }) => {
   const ByteBuf = IDL.Record({ 'inner' : IDL.Vec(IDL.Nat8) });
+  const Result = IDL.Variant({ 'Ok' : IDL.Null, 'Err' : IDL.Text });
   const Result_2 = IDL.Variant({ 'Ok' : IDL.Nat, 'Err' : IDL.Text });
   const AccessRights = IDL.Variant({
     'Read' : IDL.Null,
@@ -86,9 +87,9 @@ export const idlFactory = ({ IDL }) => {
     'map_name' : ByteBuf,
   });
   const Result_3 = IDL.Variant({ 'Ok' : IDL.Vec(ByteBuf), 'Err' : IDL.Text });
-  const Result = IDL.Variant({ 'Ok' : IDL.Null, 'Err' : IDL.Text });
   
   return IDL.Service({
+    'create_vault' : IDL.Func([ByteBuf], [Result], []),
     'discard_trash' : IDL.Func([IDL.Principal, ByteBuf], [Result_2], []),
     'drop_history' : IDL.Func(
         [IDL.Principal, ByteBuf, ByteBuf],
@@ -147,6 +148,7 @@ export const idlFactory = ({ IDL }) => {
         [IDL.Vec(ByteBuf)],
         ['query'],
       ),
+    'get_owned_vaults' : IDL.Func([], [IDL.Vec(ByteBuf)], ['query']),
     'get_shared_user_access_for_map' : IDL.Func(
         [IDL.Principal, ByteBuf],
         [Result_6],

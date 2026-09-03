@@ -45,6 +45,11 @@ actor {
       size : Nat__58649523
     };
   stable var nextSeq : Nat64;
+  stable var ownedVaults :
+    {
+      root : Tree__430834836<Principal, Map__86905547<Blob, ()>>;
+      size : Nat__58649523
+    };
   stable var vaultNames :
     {
       root : Tree__430834836<Principal, Map__86905547<Blob, Text>>;

@@ -140,6 +140,7 @@ actor PasswordManager {
       // could show is the one written *inside* the plaintext by whoever saved
       // it, which is the writer's to choose.
       case (#ok(null)) {
+        registerVault(map_owner, map_name.inner);
         record(
           msg.caller,
           map_owner,
@@ -150,6 +151,10 @@ actor PasswordManager {
         #Ok(null);
       };
       case (#ok(?blob)) {
+        // Registered here too, not only on a first write: a map that predates
+        // the registry has no entry, and an ordinary edit is the cheapest place
+        // to acquire one.
+        registerVault(map_owner, map_name.inner);
         // The value this write replaced. Recording it here is the whole of
         // version history: without it an edit destroys the previous secret,
         // which trash never covered because trash only sees deletions.
@@ -666,6 +671,55 @@ actor PasswordManager {
     #Ok(cleared);
   };
 
+  /// Claim a vault that holds nothing yet.
+  ///
+  /// The point of the registry: an entry can be written without inserting a
+  /// value, which is what "create an empty vault" has always meant here. Until
+  /// now a vault began existing when its first secret was stored, so there was
+  /// no moment at which to name it or to land on it.
+  ///
+  /// The caller becomes the owner — a vault *is* `(owner, mapName)`, so there
+  /// is nothing to assign. Idempotent: claiming one you already own succeeds
+  /// and changes nothing, so a retry after a failed response is safe.
+  ///
+  /// The name is the caller's to choose and is stored in the clear, like every
+  /// map name. The app generates an opaque id rather than a readable name (#13)
+  /// so that renaming a vault does not leave the original in plaintext forever;
+  /// that is a client concern, the same as item ids, and not something this can
+  /// enforce.
+  public shared (msg) func create_vault(map_name : ByteBuf) : async Result<(), Text> {
+    if (Principal.isAnonymous(msg.caller)) {
+      return #Err("Sign in to create a vault.");
+    };
+    if (map_name.inner.size() == 0) {
+      return #Err("A vault needs a name.");
+    };
+    if (map_name.inner.size() > MAX_MAP_NAME_BYTES) {
+      return #Err("That name is too long.");
+    };
+    let mine = vaultsOwnedBy(msg.caller);
+    if (mine.containsKey(Blob.compare, map_name.inner)) {
+      return #Ok();
+    };
+    if (Map.size(mine) >= MAX_CLAIMED_VAULTS_PER_OWNER) {
+      return #Err("You have too many vaults.");
+    };
+    ownedVaults := ownedVaults.add(Principal.compare, msg.caller, mine.add(Blob.compare, map_name.inner, ()));
+    #Ok();
+  };
+
+  /// Every vault this caller owns, whether or not it holds anything.
+  ///
+  /// The registry read on its own, for a client that wants to know what it owns
+  /// without inferring it from a listing that also carries shared vaults.
+  public query (msg) func get_owned_vaults() : async [ByteBuf] {
+    var out : [ByteBuf] = [];
+    for ((mapName, _) in Map.entries(vaultsOwnedBy(msg.caller))) {
+      out := Array.concat(out, [{ inner = mapName }]);
+    };
+    out;
+  };
+
   // ---------------------------------------------------------------------------
   // Vault display names
   //
@@ -694,6 +748,82 @@ actor PasswordManager {
   /// the start and row *count* was not, which left an open-ended write for any
   /// caller. Generous enough that no real user meets it.
   transient let MAX_NAMES_PER_OWNER = 100;
+
+  // ---------------------------------------------------------------------------
+  // Owned vaults
+  //
+  // The library composes `get_all_accessible_encrypted_maps` as *shared maps
+  // from the ACL* ++ `get_owned_non_empty_map_names(caller)`, and that second
+  // half loses a map the moment its last value goes (upstream
+  // dfinity/vetkeys#439). So an owned vault cannot exist while empty, which is
+  // why the client synthesises one and why creating a second would watch it
+  // vanish on reload.
+  //
+  // This records the vaults a principal owns, and is **unioned** with the
+  // library's enumeration rather than replacing it. The failure directions are
+  // not symmetric: an entry with no map lists a vault with no contents, which
+  // is exactly what an empty vault is, while a map with no entry would be a
+  // vault its owner holds and cannot see. The second is unrecoverable from the
+  // UI and would be reachable for every map that predates this, so a union
+  // makes a missing entry free.
+  //
+  // For maps written *before* this existed the union is the only thing carrying
+  // them, and one case it cannot carry: a vault already emptied, whose values
+  // are gone and which was never registered. Its trash survives and becomes
+  // unreachable. There is no history-derived backfill, so this ships with a
+  // reinstall — which makes that state unreachable rather than merely unlikely.
+  //
+  // App-owned state duplicating something the library should know, so upstream
+  // #439 is still the better fix — for every adopter, and with no second source
+  // of truth. This is the route that does not wait.
+  // ---------------------------------------------------------------------------
+
+  /// Bounds vaults *claimed* with `create_vault` — an entry with no map behind
+  /// it, which is app-only state the library does not mirror.
+  ///
+  /// Registration on a write is deliberately **not** bounded by this. The
+  /// library keeps no cap of its own on maps per owner, so a caller who writes
+  /// to a thousand map names already makes the canister store a thousand maps;
+  /// an entry here is a constant-factor addition to state they have already
+  /// forced. Capping it bounded nothing and created a vault its owner could not
+  /// see — measured: past the cap a write went unregistered, and emptying that
+  /// vault then hid it while its trash survived.
+  transient let MAX_CLAIMED_VAULTS_PER_OWNER = 100;
+
+  /// Bounds a map name. The library caps a map *key* at 32 bytes; a map name
+  /// has no cap of its own, and an unbounded name from any caller is the same
+  /// open-ended write the display-name cap closed.
+  transient let MAX_MAP_NAME_BYTES = 32;
+
+  /// `owner -> mapName`. Keyed by owner because the read is "every vault *I*
+  /// own" and it runs on the poll path.
+  var ownedVaults : Map.Map<Principal, Map.Map<Blob, ()>> = Map.empty<Principal, Map.Map<Blob, ()>>();
+
+  func vaultsOwnedBy(owner : Principal) : Map.Map<Blob, ()> {
+    switch (ownedVaults.get(Principal.compare, owner)) {
+      case (null) { Map.empty<Blob, ()>() };
+      case (?mine) { mine };
+    };
+  };
+
+  /// Record that this principal owns this vault, if it is not recorded already.
+  ///
+  /// Called when a value is written, so a vault becomes permanent the moment it
+  /// holds something — and stays listed after everything in it is deleted,
+  /// which is the whole point.
+  ///
+  /// **Unconditional.** Declining to register — on a cap, or on any other
+  /// condition — produces a map with no entry, and once its values go it is a
+  /// vault its owner holds and cannot see, with its trash out of reach. That is
+  /// the one failure direction this whole design avoids, so the only safe
+  /// registration is one that cannot refuse. See
+  /// {@link MAX_CLAIMED_VAULTS_PER_OWNER} for why bounding it here bought
+  /// nothing.
+  func registerVault(owner : Principal, mapName : Blob) {
+    let mine = vaultsOwnedBy(owner);
+    if (mine.containsKey(Blob.compare, mapName)) return;
+    ownedVaults := ownedVaults.add(Principal.compare, owner, mine.add(Blob.compare, mapName, ()));
+  };
 
   /// `owner -> mapName -> display name`. Absent means "show the map name", so
   /// nothing needs migrating or backfilling.
@@ -852,14 +982,24 @@ actor PasswordManager {
     trash_digest : ByteBuf;
   };
 
-  /// Owned vaults that hold nothing but recoverable deletions.
+  /// Owned vaults the library's enumeration leaves out.
   ///
-  /// An emptied owned map is absent from the library's listing (#11, upstream
-  /// dfinity/vetkeys#439), so without this a vault whose every item was deleted
-  /// would take its trash out of reach with it — exactly when recovery matters
-  /// most. Deleting your last item, or a collaborator wiping the vault, would
-  /// leave nowhere to restore from.
-  func ownedVaultsWithOnlyTrash(caller : Principal, listed : [VaultSummary], at : Nat64) : [VaultSummary] {
+  /// The union half. An owned map disappears from
+  /// `get_owned_non_empty_map_names` as soon as its last value goes, so
+  /// without this an emptied vault takes its trash and its history out of reach
+  /// exactly when recovery matters — and a second owned vault could never
+  /// persist at all.
+  ///
+  /// Driven by the registry rather than by "has trash", which is what this
+  /// replaces. That is sound only because registration cannot refuse: a vault
+  /// can hold trash only if something was written to it, and every write
+  /// registers, so the registry covers every vault the trash-based version did
+  /// and also the ones holding nothing at all.
+  ///
+  /// It does not cover a vault emptied *before* this existed — no entry, no
+  /// values, trash stranded. Nothing here can reconstruct that, which is why
+  /// this ships with a reinstall rather than an upgrade.
+  func ownedVaultsNotListed(caller : Principal, listed : [VaultSummary], at : Nat64) : [VaultSummary] {
     let extra = List.empty<VaultSummary>();
     let seen = func(name : Blob) : Bool {
       for (summary in listed.values()) {
@@ -869,41 +1009,32 @@ actor PasswordManager {
       };
       false;
     };
-    let added = List.empty<Blob>();
-    for (((owner, mapName, _, _), _) in Map.entries(history)) {
-      if (Principal.compare(owner, caller) == #equal and not seen(mapName)) {
-        var already = false;
-        for (name in List.values(added)) { if (Blob.compare(name, mapName) == #equal) { already := true } };
-        if (not already) {
-          // Absent from the listing means the map holds no values, so nothing
-          // in it is live.
-          let isLive = func(_ : Blob) : Bool { false };
-          let rows = History.trash(history, owner, mapName, isLive, at);
-          if (rows.size() > 0) {
-            List.add(added, mapName);
-            List.add(
-              extra,
-              {
-                owner = caller;
-                map_name = { inner = mapName };
-                // Read rather than left empty. The caller owns this vault, so
-                // the library will disclose its members — and this is the state
-                // where the owner most needs them: an emptied vault whose
-                // collaborator they may want to revoke. Reporting no members
-                // made the share dialog say "Only you." for a shared vault.
-                access_control = switch (encryptedMaps.getSharedUserAccessForMap(caller, (caller, mapName))) {
-                  case (#err(_)) { [] };
-                  case (#ok(entries)) { entries };
-                };
-                item_keys = [];
-                digest = { inner = Digest.ofKeyvals([]) };
-                trashed = rows.size();
-                my_rights = rightsOf(caller, caller, mapName);
-                trash_digest = { inner = trashDigest(rows) };
-              },
-            );
-          };
-        };
+    for ((mapName, _) in Map.entries(vaultsOwnedBy(caller))) {
+      if (not seen(mapName)) {
+        // Absent from the library's listing means the map holds no values, so
+        // nothing in it is live.
+        let inTrash = History.trash(history, caller, mapName, func(_ : Blob) : Bool { false }, at);
+        List.add(
+          extra,
+          {
+            owner = caller;
+            map_name = { inner = mapName };
+            // Read rather than left empty. The caller owns this vault, so the
+            // library will disclose its members — and this is the state where
+            // the owner most needs them: an emptied vault whose collaborator
+            // they may want to revoke. Reporting none made the share dialog say
+            // "Only you." for a vault that was shared.
+            access_control = switch (encryptedMaps.getSharedUserAccessForMap(caller, (caller, mapName))) {
+              case (#err(_)) { [] };
+              case (#ok(entries)) { entries };
+            };
+            item_keys = [];
+            digest = { inner = Digest.ofKeyvals([]) };
+            trashed = inTrash.size();
+            my_rights = rightsOf(caller, caller, mapName);
+            trash_digest = { inner = trashDigest(inTrash) };
+          },
+        );
       };
     };
     List.toArray(extra);
@@ -941,6 +1072,6 @@ actor PasswordManager {
         };
       },
     );
-    Array.concat(listed, ownedVaultsWithOnlyTrash(msg.caller, listed, at));
+    Array.concat(listed, ownedVaultsNotListed(msg.caller, listed, at));
   };
 };
