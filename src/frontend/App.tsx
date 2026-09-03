@@ -48,6 +48,14 @@ import { CheckIcon, CopyIcon, PencilIcon, ShareIcon, TrashIcon } from "./compone
 export const POLL_INTERVAL_MS = 15_000;
 
 /**
+ * How long the sync spinner stays up for a manual check.
+ *
+ * Not a delay for its own sake: the request itself is faster than a frame, so
+ * without a floor the only feedback a button press produced was invisible.
+ */
+export const MIN_SYNC_FEEDBACK_MS = 600;
+
+/**
  * The confirmation strip.
  *
  * A component rather than inline markup because more than one screen needs it:
@@ -151,9 +159,10 @@ export function App() {
    * timer for exactly that reason.
    */
   const refresh = useCallback(
-    async ({ quiet = false }: { quiet?: boolean } = {}) => {
+    async ({ quiet = false, manual = false }: { quiet?: boolean; manual?: boolean } = {}) => {
       if (!client) return;
       if (!quiet) setSyncing(true);
+      const startedAt = Date.now();
       const current = loads.begin();
       try {
         const next = await client.listVaults();
@@ -169,6 +178,10 @@ export function App() {
           setError(null);
         }
         if (outcome.notice) notify(outcome.notice);
+        // A manual check has to answer even when the answer is "nothing".
+        // Anything that *did* change is its own feedback — the screen is
+        // different — so this only speaks up when nothing is.
+        if (manual && !outcome.changed && !outcome.notice) notify("Already up to date");
         if (outcome.refreshTrash) {
           // Someone else changed this vault's trash while the dialog is open.
           // A second read, guarded by the same load token: the dialog must not
@@ -186,6 +199,17 @@ export function App() {
         // A failed poll is not worth a banner; the next one will retry.
         if (!quiet) setError(message(caught));
       } finally {
+        if (manual) {
+          // A query against a local replica finishes in tens of milliseconds,
+          // so the spinner rendered for less than a frame and the click looked
+          // ignored. Held long enough to read as an event — only for a manual
+          // check, since `run` refreshes after every action and a floor there
+          // would add this delay to every save.
+          const elapsed = Date.now() - startedAt;
+          if (elapsed < MIN_SYNC_FEEDBACK_MS) {
+            await new Promise((resolve) => setTimeout(resolve, MIN_SYNC_FEEDBACK_MS - elapsed));
+          }
+        }
         if (!quiet) setSyncing(false);
       }
     },
@@ -580,7 +604,7 @@ export function App() {
         onSignOut={() => void lock("manual")}
         remainingMs={session ? session.remainingMs : null}
         sessionExpiresAt={expiresAt}
-        onRefresh={() => void refresh()}
+        onRefresh={() => void refresh({ manual: true })}
         onNewVault={() => patch({ creating: true })}
         syncing={syncing}
         syncedAt={syncedAt}

@@ -38,7 +38,7 @@ vi.mock("../lib/session", async (importOriginal) => ({
   startSession: () => ({ stop: vi.fn(), broadcastLock: vi.fn(), remainingMs: () => 300_000 }),
 }));
 
-const { App, POLL_INTERVAL_MS } = await import("../App");
+const { App, POLL_INTERVAL_MS, MIN_SYNC_FEEDBACK_MS } = await import("../App");
 
 const SECRET = "correct-horse-battery";
 const personal = vault({ itemIds: ["a"], fingerprint: "own-1" });
@@ -1317,4 +1317,71 @@ describe("a vault's name cannot be cleared", () => {
     expect(within(dialog).getByRole("button", { name: /^rename$/i })).toBeDisabled();
     expect(client.rename).not.toHaveBeenCalled();
   });
+});
+
+describe("checking for changes by hand", () => {
+  // The poll runs every 15 s and catches up on tab focus, so this button only
+  // buys cutting that wait — which matters in one flow: you have handed someone
+  // your principal and are waiting for the vault to appear. Reported as giving
+  // no feedback at all: the spinner exists, but a query finishes faster than a
+  // frame, so it rendered invisibly.
+  const check = () => screen.getByRole("button", { name: /check for changes/i });
+
+  it("holds the spinner long enough to be seen", async () =>
+    onFakeTimers(async () => {
+      signedInAs(ALICE);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      fireEvent.click(check());
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      // The request has already resolved by here; the floor is what keeps the
+      // state visible.
+      expect(check()).toBeDisabled();
+
+      await act(() => vi.advanceTimersByTimeAsync(MIN_SYNC_FEEDBACK_MS));
+      expect(check()).not.toBeDisabled();
+    }));
+
+  it("says so when nothing changed, because the screen cannot", async () =>
+    onFakeTimers(async () => {
+      signedInAs(ALICE);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      fireEvent.click(check());
+      await act(() => vi.advanceTimersByTimeAsync(MIN_SYNC_FEEDBACK_MS));
+
+      expect(screen.getByRole("status")).toHaveTextContent(/already up to date/i);
+    }));
+
+  it("stays quiet when something did, since that speaks for itself", async () =>
+    onFakeTimers(async () => {
+      const client = signedInAs(ALICE);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      client.vaults = [
+        vault({ itemIds: ["a"], fingerprint: "own-2" }),
+        vault({ owner: BOB, name: "Team infra", isOwned: false, rights: toAccessRights("Read"), itemIds: ["x"], fingerprint: "s" }),
+      ];
+      client.items.set("Team infra", [item({ id: "x", title: "Grafana" })]);
+      fireEvent.click(check());
+      await act(() => vi.advanceTimersByTimeAsync(MIN_SYNC_FEEDBACK_MS));
+
+      expect(screen.queryByText(/already up to date/i)).not.toBeInTheDocument();
+      expect(screen.getByText("Team infra")).toBeInTheDocument();
+    }));
+
+  it("does not announce anything on the automatic poll", async () =>
+    onFakeTimers(async () => {
+      signedInAs(ALICE);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+
+      // Every 15 seconds. A toast each time would be unusable.
+      expect(screen.queryByText(/already up to date/i)).not.toBeInTheDocument();
+    }));
 });

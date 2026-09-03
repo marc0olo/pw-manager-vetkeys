@@ -37,6 +37,12 @@ password — the vault key is derived for your Internet Identity principal.
     read-only collaborator being shown Delete until it was refused. The
     adapt-on-refusal path remains as a fallback — the canister is still the only
     authority.
+- **Changes appear on their own.** The vault list is re-read every 15 seconds
+  and immediately on returning to the tab, so a vault someone shares with you
+  shows up without a reload. The **check-for-changes** button only cuts that
+  wait — worth having while you are watching for a share to land, and it says
+  *"Already up to date"* when nothing moved, since otherwise a click that found
+  nothing looks like a click that did nothing.
 - **You do not need a vault of your own.** With none, the app shows your
   principal and offers to copy it, so you can be shared with instead of
   creating one — and a vault shared while you sit there appears within the poll

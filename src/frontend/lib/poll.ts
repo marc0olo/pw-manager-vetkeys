@@ -18,6 +18,30 @@ export interface PollOutcome {
    * item leaves the first person's open dialog wrong until they close it.
    */
   refreshTrash: boolean;
+  /**
+   * Whether anything a user could see actually moved.
+   *
+   * For a *manual* check, which needs to say something even when the answer is
+   * "nothing". An automatic poll that finds nothing should stay silent; a
+   * button press that finds nothing has to report that, or the click looks
+   * ignored — the screen is identical either way.
+   */
+  changed: boolean;
+}
+
+/**
+ * What a vault looks like to a viewer, as one comparable string.
+ *
+ * Ids plus both digests: the content digest moves when items change, the trash
+ * digest when deletions do, and the id set when a vault is added, removed or
+ * renamed at the map level. Sorted, so the canister's ordering cannot register
+ * as a change.
+ */
+function signature(vaults: VaultSummary[]): string {
+  return vaults
+    .map((vault) => `${vaultId(vault)}:${vault.fingerprint}:${vault.trashFingerprint}:${vault.displayName ?? ""}`)
+    .sort()
+    .join("|");
 }
 
 /**
@@ -75,5 +99,6 @@ export function pollUpdate(
     notice: outcome.notice,
     movedVault: outcome.selection.vaultId !== wasOn,
     refreshTrash,
+    changed: signature(before.vaults ?? []) !== signature(next),
   };
 }
