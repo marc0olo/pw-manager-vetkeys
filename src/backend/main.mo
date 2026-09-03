@@ -701,7 +701,7 @@ actor PasswordManager {
     if (mine.containsKey(Blob.compare, map_name.inner)) {
       return #Ok();
     };
-    if (Map.size(mine) >= MAX_VAULTS_PER_OWNER) {
+    if (Map.size(mine) >= MAX_CLAIMED_VAULTS_PER_OWNER) {
       return #Err("You have too many vaults.");
     };
     ownedVaults := ownedVaults.add(Principal.compare, msg.caller, mine.add(Blob.compare, map_name.inner, ()));
@@ -765,16 +765,30 @@ actor PasswordManager {
   // is exactly what an empty vault is, while a map with no entry would be a
   // vault its owner holds and cannot see. The second is unrecoverable from the
   // UI and would be reachable for every map that predates this, so a union
-  // makes a missing entry free and needs no backfill.
+  // makes a missing entry free.
+  //
+  // For maps written *before* this existed the union is the only thing carrying
+  // them, and one case it cannot carry: a vault already emptied, whose values
+  // are gone and which was never registered. Its trash survives and becomes
+  // unreachable. There is no history-derived backfill, so this ships with a
+  // reinstall — which makes that state unreachable rather than merely unlikely.
   //
   // App-owned state duplicating something the library should know, so upstream
   // #439 is still the better fix — for every adopter, and with no second source
   // of truth. This is the route that does not wait.
   // ---------------------------------------------------------------------------
 
-  /// The same bound as display names, for the same reason: any caller can write
-  /// an entry for any name they choose.
-  transient let MAX_VAULTS_PER_OWNER = 100;
+  /// Bounds vaults *claimed* with `create_vault` — an entry with no map behind
+  /// it, which is app-only state the library does not mirror.
+  ///
+  /// Registration on a write is deliberately **not** bounded by this. The
+  /// library keeps no cap of its own on maps per owner, so a caller who writes
+  /// to a thousand map names already makes the canister store a thousand maps;
+  /// an entry here is a constant-factor addition to state they have already
+  /// forced. Capping it bounded nothing and created a vault its owner could not
+  /// see — measured: past the cap a write went unregistered, and emptying that
+  /// vault then hid it while its trash survived.
+  transient let MAX_CLAIMED_VAULTS_PER_OWNER = 100;
 
   /// Bounds a map name. The library caps a map *key* at 32 bytes; a map name
   /// has no cap of its own, and an unbounded name from any caller is the same
@@ -796,12 +810,18 @@ actor PasswordManager {
   ///
   /// Called when a value is written, so a vault becomes permanent the moment it
   /// holds something — and stays listed after everything in it is deleted,
-  /// which is the whole point. Re-registering is a no-op rather than an error,
-  /// so an ordinary write never fails on the cap.
+  /// which is the whole point.
+  ///
+  /// **Unconditional.** Declining to register — on a cap, or on any other
+  /// condition — produces a map with no entry, and once its values go it is a
+  /// vault its owner holds and cannot see, with its trash out of reach. That is
+  /// the one failure direction this whole design avoids, so the only safe
+  /// registration is one that cannot refuse. See
+  /// {@link MAX_CLAIMED_VAULTS_PER_OWNER} for why bounding it here bought
+  /// nothing.
   func registerVault(owner : Principal, mapName : Blob) {
     let mine = vaultsOwnedBy(owner);
     if (mine.containsKey(Blob.compare, mapName)) return;
-    if (Map.size(mine) >= MAX_VAULTS_PER_OWNER) return;
     ownedVaults := ownedVaults.add(Principal.compare, owner, mine.add(Blob.compare, mapName, ()));
   };
 
@@ -971,9 +991,14 @@ actor PasswordManager {
   /// persist at all.
   ///
   /// Driven by the registry rather than by "has trash", which is what this
-  /// replaces. A vault can only hold trash if something was once written to it,
-  /// and writing is what registers it, so the registry covers every vault the
-  /// trash-based version did and also the ones holding nothing at all.
+  /// replaces. That is sound only because registration cannot refuse: a vault
+  /// can hold trash only if something was written to it, and every write
+  /// registers, so the registry covers every vault the trash-based version did
+  /// and also the ones holding nothing at all.
+  ///
+  /// It does not cover a vault emptied *before* this existed — no entry, no
+  /// values, trash stranded. Nothing here can reconstruct that, which is why
+  /// this ships with a reinstall rather than an upgrade.
   func ownedVaultsNotListed(caller : Principal, listed : [VaultSummary], at : Nat64) : [VaultSummary] {
     let extra = List.empty<VaultSummary>();
     let seen = func(name : Blob) : Bool {

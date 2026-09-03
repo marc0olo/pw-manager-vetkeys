@@ -81,36 +81,48 @@ check("its trash is empty, not an error", "Ok" in (await A.api.get_trash(me, buf
 check("creating the same vault again succeeds", "Ok" in (await A.api.create_vault(buf("Empty"))));
 check("and does not duplicate it", (await owned(A)).filter((n) => n === "Empty").length === 1);
 
-// ---- the union: a map with no registry entry is still visible ---------------
+// ---- registration cannot refuse ---------------------------------------------
 //
-// The important direction, and it needed a reachable way to produce the state.
-// Every write goes through `insert_encrypted_value`, which registers — so a map
-// with no entry cannot be made by writing normally. The cap is what makes it
-// reachable: past `MAX_VAULTS_PER_OWNER` the registry stops recording, while
-// the library still accepts the write. That is also the state every map that
-// predates the registry is in.
+// The gap this closes, measured before the fix: with registration bounded by
+// the claim cap, a write past it went unregistered — and once that vault was
+// emptied it left the library's enumeration too, so its owner could not see it
+// and its trash was unreachable. A stranded recovery path is what #34 and #39
+// exist to prevent, so the only safe registration is one that cannot decline.
 //
-// With the listing as registry ∪ library the vault stays visible. With the
-// registry alone its owner would hold a vault they cannot see.
+// Bounding it also bought nothing: the library keeps no cap on maps per owner,
+// so those writes already made the canister store the maps themselves.
 {
   const capped = await connect(Ed25519KeyIdentity.generate());
   for (let i = 0; i < 100; i++) await capped.api.create_vault(buf(`c${i}`));
-  check("this principal is at the cap", (await owned(capped)).length === 100);
+  check("this principal is at the claim cap", (await owned(capped)).length === 100);
+  check("so claiming another is refused", "Err" in (await capped.api.create_vault(buf("Claimed"))));
 
-  await capped.maps.setValue(capped.me, enc.encode("Beyond"), enc.encode("k1"), enc.encode("v1"));
-  check(
-    "a write past the cap is not registered",
-    !(await owned(capped)).includes("Beyond"),
-    "which is what makes the next assertion meaningful",
-  );
-  check(
-    "but the vault is still listed to its owner",
-    (await summaryFor(capped, capped.me, "Beyond")) !== undefined,
-    "the union with the library's enumeration is what carries it",
-  );
+  // A write is not a claim, and must still register.
+  await capped.maps.setValue(capped.me, enc.encode("Beyond"), enc.encode("k1"), enc.encode("worth recovering"));
+  check("but writing past the cap still registers the vault", (await owned(capped)).includes("Beyond"));
+
+  await capped.maps.removeEncryptedValue(capped.me, enc.encode("Beyond"), enc.encode("k1"));
   const beyond = await summaryFor(capped, capped.me, "Beyond");
-  check("with its contents", beyond !== undefined && beyond.item_keys.length === 1);
+  check("so emptying it does not hide it from its owner", beyond !== undefined);
+  check(
+    "and its trash is still reachable",
+    beyond !== undefined && Number(beyond.trashed) === 1,
+    "unreachable trash is a destroyed secret as far as recovery is concerned",
+  );
 }
+
+// ---- the union still carries a map the registry never saw -------------------
+//
+// Not reachable through the API any more — that is the point of registration
+// being unconditional — so this asserts the surviving direction rather than the
+// legacy one: a vault with values is listed whether or not it has an entry,
+// because the library's enumeration is unioned in rather than replaced.
+//
+// The legacy case the union cannot carry (emptied before the registry existed,
+// so no entry and no values) is why this ships with a reinstall.
+await A.maps.setValue(me, enc.encode("Unregistered"), enc.encode("k1"), enc.encode("v1"));
+check("a vault with values is listed", (await summaryFor(A, me, "Unregistered")) !== undefined);
+check("and is registered by that write", (await owned(A)).includes("Unregistered"));
 
 // ---- an emptied vault survives ----------------------------------------------
 await A.maps.setValue(me, enc.encode("Emptied"), enc.encode("k1"), enc.encode("secret"));

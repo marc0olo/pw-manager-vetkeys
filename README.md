@@ -225,6 +225,12 @@ icp deploy                    # builds the canister and the frontend, then syncs
 
 `icp deploy` prints the frontend URL: `http://frontend.local.localhost:8100/`.
 
+> A **reinstall is sometimes wanted even when an upgrade would work.** The
+> owned-vault registry is the example: the stable signature is compatible, but
+> a vault emptied before the registry existed has no entry and no values, so
+> nothing can reconstruct it and its trash would be stranded. That is a reason
+> to reinstall pre-production; it is not the reason below.
+>
 > **`Candid compatibility check failed`** is not a reason to reinstall. Two
 > different things can block a deploy and only one of them loses data:
 >
