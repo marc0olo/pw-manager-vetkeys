@@ -178,6 +178,98 @@ check("32 bytes exactly is accepted", "Ok" in (await A.api.create_vault(buf("x".
   check("but re-creating one they hold still succeeds", "Ok" in (await hoarder.api.create_vault(buf("v0"))));
 }
 
+// ---- deleting a vault takes everything with it ------------------------------
+//
+// One update message, so there is no half-deleted state: #21's design assumed
+// the client would wipe and then revoke per grantee, which could fail partway.
+// Owning the endpoints removes that.
+{
+  const D = await connect(Ed25519KeyIdentity.generate());
+  const dId = D.me;
+  const V = enc.encode("Doomed");
+  await D.maps.setValue(dId, V, enc.encode("k1"), enc.encode("v1"));
+  await D.maps.setValue(dId, V, enc.encode("k1"), enc.encode("v2")); // a version
+  await D.maps.setValue(dId, V, enc.encode("k2"), enc.encode("trash me"));
+  await D.maps.removeEncryptedValue(dId, V, enc.encode("k2"));       // a trash row
+  await D.api.set_vault_name(buf("Doomed"), "Work stuff");
+  await D.maps.setUserRights(dId, V, bobId.getPrincipal(), { ReadWrite: null });
+
+  check("it is there, shared, named, with history and trash",
+    (await summaryFor(D, dId, "Doomed")) !== undefined &&
+      (await D.api.get_trash(dId, buf("Doomed"))).Ok.length === 1 &&
+      (await D.api.get_history(dId, buf("Doomed"), buf("k1"))).Ok.length >= 1 &&
+      (await D.api.get_vault_names()).some((r) => r.display_name === "Work stuff"));
+
+  // Not an ownership check that could be got wrong: `delete_vault` names the
+  // caller as the owner, so a collaborator asking to delete "Doomed" asks about
+  // *their own* vault of that name, which does not exist.
+  const refusedByGrantee = await B.api.delete_vault(buf("Doomed"));
+  check("a collaborator cannot reach the owner's vault at all", "Err" in refusedByGrantee, JSON.stringify(refusedByGrantee));
+  check("and the owner's vault is untouched by their attempt", (await summaryFor(D, dId, "Doomed")) !== undefined);
+
+  check("the owner can", "Ok" in (await D.api.delete_vault(buf("Doomed"))));
+  check("it is gone from the listing", (await summaryFor(D, dId, "Doomed")) === undefined);
+  check("and from the registry", !(await owned(D)).includes("Doomed"));
+  check("its trash is gone, not stranded", (await D.api.get_trash(dId, buf("Doomed"))).Ok?.length === 0);
+  check("its history too", (await D.api.get_history(dId, buf("Doomed"), buf("k1"))).Ok.length === 0);
+  check("its display name does not outlive it",
+    !(await D.api.get_vault_names()).some((r) => r.display_name === "Work stuff"),
+    "or it would reappear on a vault later created with the same name");
+  check("and the collaborator no longer sees it", !(await listed(B)).some((v) => v.endsWith("/Doomed")));
+
+  check("deleting one that does not exist is refused", "Err" in (await D.api.delete_vault(buf("Never"))));
+  // A vault claimed but never written to is still deletable.
+  await D.api.create_vault(buf("Claimed"));
+  check("a vault holding nothing can be deleted", "Ok" in (await D.api.delete_vault(buf("Claimed"))));
+}
+
+// ---- two of your vaults may not show the same label -------------------------
+//
+// Not tidiness. The empty-vault and delete-vault confirmations arm on the typed
+// label matching the vault's, and delete is irreversible — so two vaults called
+// "Work" turn that confirmation into something the user is deliberate about a
+// *name* over rather than a vault. Reachable only since vaults can be created,
+// which is why the rule arrives with them.
+{
+  const N = await connect(Ed25519KeyIdentity.generate());
+  await N.api.create_vault(buf("v-one"));
+  await N.api.create_vault(buf("v-two"));
+  check("naming the first succeeds", "Ok" in (await N.api.set_vault_name(buf("v-one"), "Work")));
+
+  const dup = await N.api.set_vault_name(buf("v-two"), "Work");
+  check("naming a second one the same is refused", "Err" in dup, JSON.stringify(dup));
+  check("and trimming does not sneak it past", "Err" in (await N.api.set_vault_name(buf("v-two"), "  Work  ")));
+  check("a different name is fine", "Ok" in (await N.api.set_vault_name(buf("v-two"), "Home")));
+
+  // Renaming a vault to the label it already has is not a collision with itself.
+  check("re-applying a vault's own name succeeds", "Ok" in (await N.api.set_vault_name(buf("v-one"), "Work")));
+  // Clearing reverts to the map name and cannot collide.
+  check("clearing a name is always allowed", "Ok" in (await N.api.set_vault_name(buf("v-two"), "")));
+  check(
+    "and a label another vault still holds stays refused",
+    "Err" in (await N.api.set_vault_name(buf("v-two"), "Work")),
+    "v-one has it",
+  );
+
+  // v-two is unnamed now, so it renders as its map name — and a display name
+  // equal to that collides on screen just as surely as a duplicate display
+  // name would. Checked against the *unnamed* vault, since a named one renders
+  // as its label rather than its map name.
+  await N.api.create_vault(buf("v-three"));
+  const asMapName = await N.api.set_vault_name(buf("v-three"), "v-two");
+  check("a name equal to an unnamed vault's map name is refused", "Err" in asMapName, JSON.stringify(asMapName));
+
+  // Case-sensitive on purpose: refusing a name for a difference the user cannot
+  // see is its own problem, and normalisation has no clean answer.
+  check("but a different case is allowed", "Ok" in (await N.api.set_vault_name(buf("v-three"), "work")));
+
+  // Per owner. Someone else calling theirs "Work" is not a collision — the
+  // sidebar separates owned from shared and names the sharer.
+  const other = await connect(Ed25519KeyIdentity.generate());
+  await other.api.create_vault(buf("theirs"));
+  check("another principal may use the same label", "Ok" in (await other.api.set_vault_name(buf("theirs"), "Work")));
+}
+
 // ---- reading it costs nothing ------------------------------------------------
 derivations = 0;
 await A.api.get_owned_vaults();

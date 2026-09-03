@@ -37,8 +37,23 @@ password — the vault key is derived for your Internet Identity principal.
     read-only collaborator being shown Delete until it was refused. The
     adapt-on-refusal path remains as a fallback — the canister is still the only
     authority.
+- **Create, rename and delete vaults.** As many as you like, but **no two of
+  yours may show the same name** — the empty-vault and delete-vault
+  confirmations arm on the typed label, so duplicates would have you confirm a
+  name rather than a vault. Per owner, since the sidebar already separates your
+  vaults from ones shared with you and names the sharer. Exact match after
+  trimming, and deliberately case-sensitive: refusing a name for a difference
+  you cannot see is its own problem. A new vault gets a
+  *random* map name and a display name beside it, because a vault **is**
+  `(owner, mapName)` and its key derives from that pair — so the map name can
+  never change, and a readable one would keep the original in plaintext however
+  often you rename it. Deleting takes the contents, every version of them, the
+  trash and the sharing, in one call; it does not destroy the key, since the key
+  is derived rather than stored, and the dialog says so.
 - **Empty vault** removes every item at once, behind a typed confirmation. The
-  vault and its sharing survive.
+  vault and its sharing survive. Kept separate from Delete because revoking
+  needs manage rights, so a `ReadWrite` collaborator can only empty — one button
+  that quietly degraded would be the dishonest kind of label.
 - **Trash.** A deleted item — or a whole emptied vault — is recoverable for 90
   days. The map key never changes, so a restored value decrypts under exactly
   the key material it always did: nothing is re-encrypted and no client is
@@ -389,14 +404,6 @@ voids the whole document — so run `npm run check-ii-metadata` after editing it
 
 ## Known limitations
 
-- **One owned vault, still — but no longer for a backend reason.** The library
-  lists only *non-empty* owned vaults ([dfinity/vetkeys#439]), so the canister
-  now keeps its own registry of owned vaults and unions it with the library's
-  enumeration: `create_vault` claims one that holds nothing, and an emptied
-  vault stays listed. What is missing is the UI — creating, deleting, and the
-  zero-vault state have to land together (#11, #13, #21), because the client
-  still synthesises a `Personal` vault when it sees none and removing that
-  needs somewhere else for a new user to start.
 - No browser extension, autofill, TOTP, or attachments.
 - Expired versions are not purged on a schedule — there is no timer, because
   Motoko timers do not survive an upgrade. A deleted secret and its history are

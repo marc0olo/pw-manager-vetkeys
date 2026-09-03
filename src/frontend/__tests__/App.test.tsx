@@ -931,3 +931,181 @@ describe("a version's password", () => {
     expect(board.text).toBe("old-secret");
   });
 });
+
+describe("with no vaults at all", () => {
+  // A real state now: the client used to synthesise a `Personal` vault whenever
+  // it saw none, which is what made "zero vaults" unreachable and hid the fact
+  // that the app had nowhere to start.
+  const empty = () => new FakeClient(ALICE, [], {});
+
+  it("says so, instead of loading forever", async () => {
+    signedInAs(ALICE, empty());
+    render(<App />);
+
+    expect(await screen.findByText(/no vaults yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/deriving your vault key/i)).not.toBeInTheDocument();
+  });
+
+  it("offers to create one, and lands on it", async () => {
+    const client = empty();
+    signedInAs(ALICE, client);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /create a vault/i }));
+
+    const field = await screen.findByLabelText(/name/i);
+    fireEvent.change(field, { target: { value: "Work" } });
+    fireEvent.click(screen.getByRole("button", { name: /create vault/i }));
+
+    await waitFor(() => expect(client.createVault).toHaveBeenCalledWith("Work"));
+    // The label the user typed, not the map name — in the sidebar and as the
+    // pane title, which is why this counts rather than expecting one.
+    expect((await screen.findAllByText("Work")).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/no vaults yet/i)).not.toBeInTheDocument();
+  });
+
+  it("passes the label through, and nothing else", async () => {
+    // Only the wiring. Whether the *map* name is opaque is a property of
+    // `VaultClient.createVault`, which this suite mocks — so asserting it here
+    // would be asserting the fake. It is pinned in vaultname.test.ts instead.
+    const client = empty();
+    signedInAs(ALICE, client);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /create a vault/i }));
+    fireEvent.change(await screen.findByLabelText(/name/i), { target: { value: "  Divorce lawyer  " } });
+    fireEvent.click(screen.getByRole("button", { name: /create vault/i }));
+
+    await waitFor(() => expect(client.createVault).toHaveBeenCalledWith("Divorce lawyer"));
+  });
+
+  it("cannot be dismissed into a dead end", async () => {
+    signedInAs(ALICE, empty());
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /create a vault/i }));
+
+    // No Cancel on the first vault: there is nothing behind the dialog.
+    expect(screen.queryByRole("button", { name: /^cancel$/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("creating another vault", () => {
+  it("is offered in the sidebar", async () => {
+    const client = signedInAs(ALICE);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /new vault/i }));
+
+    fireEvent.change(await screen.findByLabelText(/name/i), { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: /create vault/i }));
+
+    await waitFor(() => expect(client.createVault).toHaveBeenCalledWith("Second"));
+  });
+
+  it("warns that the label is stored unencrypted", async () => {
+    signedInAs(ALICE);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /new vault/i }));
+
+    expect(await screen.findByText(/stored unencrypted/i)).toBeInTheDocument();
+  });
+});
+
+describe("deleting a vault", () => {
+  it("needs the name typed, and says the key is not destroyed", async () => {
+    const client = signedInAs(ALICE);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /delete vault/i }));
+    // Scoped: the trigger and the confirmation share a label, and that is
+    // deliberate — the button you press twice should say the same thing.
+    const dialog = await screen.findByRole("dialog", { name: /delete personal/i });
+
+    // The honest caveat: the key derives from (owner, name), so deleting data
+    // is not the same as destroying the key.
+    expect(within(dialog).getByText(/not the same as destroying the key/i)).toBeInTheDocument();
+
+    const confirm = within(dialog).getByRole("button", { name: /^delete vault$/i });
+    expect(confirm).toBeDisabled();
+
+    fireEvent.change(within(dialog).getByLabelText(/to confirm/i), { target: { value: "Personal" } });
+    expect(confirm).not.toBeDisabled();
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(client.deleteVault).toHaveBeenCalledTimes(1));
+  });
+
+  it("is not offered on a vault shared with you", async () => {
+    signedInAs(
+      ALICE,
+      new FakeClient(ALICE, [vault({ owner: BOB, name: "Team infra", isOwned: false, rights: toAccessRights("ReadWriteManage"), itemIds: ["x"], fingerprint: "s" })], {
+        "Team infra": [item({ id: "x", title: "Grafana" })],
+      }),
+    );
+    render(<App />);
+    await screen.findByText("Grafana");
+
+    // Revoking needs manage rights, which a grantee can have — but the vault is
+    // not theirs to remove, so Empty is as far as it goes.
+    expect(screen.queryByRole("button", { name: /delete vault/i })).not.toBeInTheDocument();
+  });
+
+  it("falls back to the zero-vault state when it was the last one", async () => {
+    const client = signedInAs(ALICE);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /delete vault/i }));
+    const dialog = await screen.findByRole("dialog", { name: /delete personal/i });
+    fireEvent.change(within(dialog).getByLabelText(/to confirm/i), { target: { value: "Personal" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /^delete vault$/i }));
+
+    await waitFor(() => expect(client.deleteVault).toHaveBeenCalled());
+    expect(await screen.findByText(/no vaults yet/i)).toBeInTheDocument();
+  });
+});
+
+describe("two vaults may not show the same name", () => {
+  // The typed delete confirmation arms on the label, so duplicates make it
+  // confirm a name rather than a vault — and delete is irreversible.
+  const twoVaults = () =>
+    new FakeClient(
+      ALICE,
+      [vault({ name: "aaa", displayName: "Work", itemIds: ["a"] }), vault({ name: "bbb", displayName: "Home" })],
+      { aaa: [item({ id: "a", title: "GitHub" })] },
+    );
+
+  it("refuses a duplicate before submitting", async () => {
+    const client = twoVaults();
+    signedInAs(ALICE, client);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /new vault/i }));
+    fireEvent.change(await screen.findByLabelText(/name/i), { target: { value: "Home" } });
+
+    expect(screen.getByRole("button", { name: /create vault/i })).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/already have a vault called/i);
+    expect(client.createVault).not.toHaveBeenCalled();
+  });
+
+  it("allows one that is merely similar", async () => {
+    signedInAs(ALICE, twoVaults());
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /new vault/i }));
+    fireEvent.change(await screen.findByLabelText(/name/i), { target: { value: "home" } });
+
+    // Case-sensitive on purpose: refusing a name for a difference the user
+    // cannot see is its own problem.
+    expect(screen.getByRole("button", { name: /create vault/i })).not.toBeDisabled();
+  });
+
+  it("does not refuse renaming a vault to what it is already called", async () => {
+    signedInAs(ALICE, twoVaults());
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /rename/i }));
+    // Scoped: the sidebar's vault rows also match /name/i.
+    const dialog = await screen.findByRole("dialog", { name: /rename/i });
+
+    const field = within(dialog).getByRole("textbox");
+    fireEvent.change(field, { target: { value: "Home" } });
+    // Another vault holds it.
+    expect(within(dialog).getByRole("button", { name: /^rename$/i })).toBeDisabled();
+
+    fireEvent.change(field, { target: { value: "Work" } });
+    // Its own name — unchanged, so nothing to submit, but not reported as taken.
+    expect(screen.queryByText(/already have a vault called/i)).not.toBeInTheDocument();
+  });
+});

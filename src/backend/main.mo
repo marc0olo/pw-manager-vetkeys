@@ -708,6 +708,81 @@ actor PasswordManager {
     #Ok();
   };
 
+  /// Delete a vault: its contents, its history, its sharing and its name.
+  ///
+  /// **Atomic**, which is worth stating because the design in #21 assumed it
+  /// could not be. That assumed the *client* would orchestrate it — wipe, then
+  /// one `remove_user` per grantee — leaving a half-deleted vault if any call
+  /// failed. Owning the endpoints makes it one update message, so it either all
+  /// happens or none of it does, and there is no partial state for the UI to
+  /// represent.
+  ///
+  /// **Owner only.** Revoking needs manage rights, so a `ReadWrite`
+  /// collaborator can only empty a vault — which is why the UI keeps Empty and
+  /// Delete as separate actions rather than one that quietly degrades.
+  ///
+  /// **Not cryptographic erasure.** A vault's key derives from
+  /// `(owner, mapName)`, so re-creating one with the same name yields the same
+  /// key and anyone holding old ciphertext can still read it. This removes data
+  /// from the canister; it does not revoke the key. Vaults created through the
+  /// app get a random name for exactly this reason (#13), which makes reuse
+  /// effectively impossible — but the copy must not promise erasure.
+  public shared (msg) func delete_vault(map_name : ByteBuf) : async Result<(), Text> {
+    if (Principal.isAnonymous(msg.caller)) return #Err("unauthorized");
+    let mapName = map_name.inner;
+    let id = (msg.caller, mapName);
+
+    // Ownership is identity-derived, so this is the whole check: a vault *is*
+    // `(owner, mapName)` and the caller can only name their own.
+    let mine = vaultsOwnedBy(msg.caller);
+    let hasValues = switch (encryptedMaps.getEncryptedValuesForMap(msg.caller, id)) {
+      case (#err(_)) { false };
+      case (#ok(pairs)) { pairs.size() > 0 };
+    };
+    if (not mine.containsKey(Blob.compare, mapName) and not hasValues) {
+      return #Err("no such vault");
+    };
+
+    // Revoke first. Doing it after the wipe would leave a window — inside this
+    // message, so unobservable, but the order that reads correctly is the one
+    // where nobody has access to a vault mid-teardown.
+    switch (encryptedMaps.getSharedUserAccessForMap(msg.caller, id)) {
+      case (#err(_)) {};
+      case (#ok(entries)) {
+        for ((user, _) in entries.values()) {
+          if (Principal.compare(user, msg.caller) != #equal) {
+            ignore encryptedMaps.removeUser(msg.caller, id, user);
+          };
+        };
+      };
+    };
+
+    ignore encryptedMaps.removeMapValues(msg.caller, id);
+
+    // Everything, not just the trash: nothing should survive a vault that is
+    // gone, and events left behind would sit under a name no listing returns.
+    let (next, _) = History.discardVault(history, msg.caller, mapName);
+    history := next;
+
+    let remaining = mine.remove(Blob.compare, mapName);
+    ownedVaults := if (Map.isEmpty(remaining)) {
+      ownedVaults.remove(Principal.compare, msg.caller);
+    } else {
+      ownedVaults.add(Principal.compare, msg.caller, remaining);
+    };
+
+    // The display name would otherwise outlive the vault and reappear on a
+    // vault later created with the same name.
+    let names = namesOwnedBy(msg.caller).remove(Blob.compare, mapName);
+    vaultNames := if (Map.isEmpty(names)) {
+      vaultNames.remove(Principal.compare, msg.caller);
+    } else {
+      vaultNames.add(Principal.compare, msg.caller, names);
+    };
+
+    #Ok();
+  };
+
   /// Every vault this caller owns, whether or not it holds anything.
   ///
   /// The registry read on its own, for a client that wants to know what it owns
@@ -852,6 +927,33 @@ actor PasswordManager {
   /// no way to address someone else's vault. A collaborator renaming a shared
   /// vault for everyone would be a surprise, and this makes it unrepresentable
   /// rather than merely checked.
+  /// Whether another vault of this owner's already shows this label.
+  ///
+  /// Checks display names *and* map names, because an unnamed vault renders as
+  /// its map name — so a display name equal to another vault's map name
+  /// collides on screen just as surely as a duplicate display name. Vaults
+  /// created through the app have random map names, which makes that case
+  /// vanishingly unlikely rather than impossible.
+  ///
+  /// Excludes the vault being named, so renaming one to the label it already
+  /// carries is not a collision with itself.
+  func labelTaken(owner : Principal, mapName : Blob, wanted : Text) : Bool {
+    let names = namesOwnedBy(owner);
+    for ((otherName, display) in Map.entries(names)) {
+      if (Blob.compare(otherName, mapName) != #equal and display == wanted) return true;
+    };
+    for ((otherName, _) in Map.entries(vaultsOwnedBy(owner))) {
+      if (Blob.compare(otherName, mapName) != #equal and names.get(Blob.compare, otherName) == null) {
+        // Unnamed, so it renders as its map name.
+        switch (Text.decodeUtf8(otherName)) {
+          case (?asText) { if (asText == wanted) return true };
+          case (null) {};
+        };
+      };
+    };
+    false;
+  };
+
   public shared (msg) func set_vault_name(map_name : ByteBuf, display_name : Text) : async Result<(), Text> {
     // Nothing an anonymous caller stores can ever be read back — every row is
     // keyed on its author and only surfaces for them or for someone they shared
@@ -890,6 +992,26 @@ actor PasswordManager {
     // one counts against the cap.
     if (Map.size(mine) >= MAX_NAMES_PER_OWNER and mine.get(Blob.compare, map_name.inner) == null) {
       return #Err("You have named the maximum of " # debug_show (MAX_NAMES_PER_OWNER) # " vaults.");
+    };
+
+    // No two of this caller's vaults may *render* the same label.
+    //
+    // Not tidiness. `EmptyVaultDialog` and `DeleteVaultDialog` arm on the typed
+    // label matching the vault's, and delete takes the values, their history,
+    // the trash, the sharing and the registry entry in one irreversible call.
+    // Two vaults labelled "Work" turn that confirmation into something the user
+    // is deliberate about a *name* over, rather than a vault.
+    //
+    // Impossible before vaults could be created — an owner had exactly one — so
+    // this arrives with the change that makes it reachable.
+    //
+    // Per owner, because cross-owner collision is already resolved on screen:
+    // the sidebar splits owned from shared and tags the sharer. Exact match
+    // after trimming, and deliberately neither case-insensitive nor
+    // Unicode-normalised — `Work` and `work` are visually distinct, and
+    // refusing a name for a difference the user cannot see is its own problem.
+    if (labelTaken(msg.caller, map_name.inner, trimmed)) {
+      return #Err("You already have a vault called \"" # trimmed # "\".");
     };
 
     store(mine.add(Blob.compare, map_name.inner, trimmed));

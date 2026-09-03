@@ -238,6 +238,28 @@ module {
     (kept, dropped);
   };
 
+  /// Drop every event belonging to one vault, whatever its state.
+  ///
+  /// For deleting the vault itself, where {@link discardTrash}'s scoping to
+  /// non-live keys would be wrong: nothing should survive a vault that is gone,
+  /// and leaving events behind would strand them under a name no listing
+  /// returns. Distinct from `discardTrash` so the intent is in the name rather
+  /// than in the caller happening to have removed the values first.
+  public func discardVault(store : Store, owner : Principal, mapName : Blob) : (Store, Nat) {
+    var dropped = 0;
+    let kept = Map.foldLeft<Key, Entry, Store>(
+      store,
+      empty(),
+      func(kept, key, entry) {
+        if (inVault(key, owner, mapName)) {
+          dropped += 1;
+          kept;
+        } else { kept.add(compareKeys, key, entry) };
+      },
+    );
+    (kept, dropped);
+  };
+
   /// Drop the *ciphertext* of one live secret's history, keeping the events.
   ///
   /// The owner's way to reclaim storage without losing the record: "edited by X
