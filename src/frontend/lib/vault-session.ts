@@ -48,6 +48,10 @@ export interface VaultSessionState {
   wiping: boolean;
   /** The rename dialog, which holds a draft name. */
   renaming: boolean;
+  /** The new-vault dialog, which holds a draft name. */
+  creating: boolean;
+  /** The delete-vault confirmation, which holds a typed vault name. */
+  deletingVault: boolean;
   /** The trash dialog. Null when closed; the deleted items when open. */
   trash: TrashedItem[] | null;
   /**
@@ -84,6 +88,8 @@ export const NO_VAULT_SESSION: VaultSessionState = {
   sharing: false,
   wiping: false,
   renaming: false,
+  creating: false,
+  deletingVault: false,
   trash: null,
   itemFacts: null,
   history: null,

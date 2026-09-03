@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidVaultName } from "../vault";
+import { isValidVaultName, newVaultName } from "../vault";
 
 /**
  * A vault *is* `(owner, name)`, so a name that differs by a space addresses a
@@ -45,5 +45,29 @@ describe("vault names", () => {
     // The alternative — trimming — would address a different map than the caller
     // named. Rejecting is what keeps identity and display in agreement.
     expect(isValidVaultName("Work ")).toBe(false);
+  });
+});
+
+describe("newVaultName", () => {
+  // A vault *is* `(owner, mapName)` and its key derives from that pair, so the
+  // map name can never change. A readable one would therefore keep the
+  // original in plaintext canister state forever, however often the vault is
+  // renamed — renaming only adds a display name beside it.
+  it("is opaque, so a rename leaves nothing behind", () => {
+    expect(newVaultName()).toMatch(/^[0-9a-f]{24}$/);
+  });
+
+  it("is random rather than sequential", () => {
+    // A counter would leak how many vaults someone has created, need global
+    // mutable state, and serialise creation.
+    const names = new Set(Array.from({ length: 200 }, () => newVaultName()));
+    expect(names.size).toBe(200);
+  });
+
+  it("fits the canister's cap on a map name", () => {
+    // 12 bytes as hex is 24 characters, inside 32 — and 96 bits of entropy,
+    // which is what makes deleting and re-creating "the same" vault
+    // effectively impossible. That matters because the key would be identical.
+    expect(new TextEncoder().encode(newVaultName()).length).toBeLessThanOrEqual(32);
   });
 });

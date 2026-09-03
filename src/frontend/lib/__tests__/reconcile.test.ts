@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Principal } from "@icp-sdk/core/principal";
 import { reconcile } from "../reconcile";
-import { OWN_VAULT_NAME, vaultId, type VaultSummary } from "../vault";
+import { vaultId, type VaultSummary } from "../vault";
 import type { VaultItem } from "../items";
 
 /**
@@ -16,7 +16,7 @@ const other = Principal.fromText("aaaaa-aa");
 function summary(overrides: Partial<VaultSummary> = {}): VaultSummary {
   return {
     owner: me,
-    name: OWN_VAULT_NAME,
+    name: "Personal",
     displayName: null,
     isOwned: true,
     rights: null,
@@ -226,7 +226,7 @@ describe("access to the selected vault was revoked", () => {
       selection: { vaultId: vaultId(own), itemId: null },
       openItems: null,
     });
-    expect(result.notice).toBe(`“${OWN_VAULT_NAME}” is no longer available.`);
+    expect(result.notice).toBe(`“${"Personal"}” is no longer available.`);
   });
 });
 

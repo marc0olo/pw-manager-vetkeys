@@ -14,6 +14,7 @@ interface Props {
   /** When the delegation stops being valid, in ms since the epoch. */
   sessionExpiresAt: number | null;
   onRefresh: () => void;
+  onNewVault: () => void;
   syncing: boolean;
   /** When the vault list was last read, in ms since the epoch. */
   syncedAt: number | null;
@@ -38,6 +39,7 @@ export function Sidebar({
   remainingMs,
   sessionExpiresAt,
   onRefresh,
+  onNewVault,
   syncing,
   syncedAt,
 }: Props) {
@@ -65,7 +67,16 @@ export function Sidebar({
       </div>
 
       <nav className="sidebar__nav">
-        <VaultGroup title="My vault" vaults={owned} selectedId={selectedId} onSelect={onSelect} />
+        {/* "My vault" was accurate when there could only be one. */}
+        <VaultGroup
+          title={owned.length === 1 ? "My vault" : "My vaults"}
+          vaults={owned}
+          selectedId={selectedId}
+          onSelect={onSelect}
+        />
+        <button className="sidebar__new" onClick={onNewVault}>
+          + New vault
+        </button>
         {shared.length > 0 && (
           <VaultGroup title="Shared with me" vaults={shared} selectedId={selectedId} onSelect={onSelect} />
         )}

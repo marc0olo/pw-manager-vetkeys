@@ -67,7 +67,9 @@ describe("NO_VAULT_SESSION", () => {
     // A field kept in its own useState instead of here would not be cleared by
     // the lock. Update this list deliberately when the shape changes.
     expect(Object.keys(NO_VAULT_SESSION).sort()).toEqual([
+      "creating",
       "deleting",
+      "deletingVault",
       "denials",
       "history",
       "itemFacts",

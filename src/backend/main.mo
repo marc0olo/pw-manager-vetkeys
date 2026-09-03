@@ -708,6 +708,81 @@ actor PasswordManager {
     #Ok();
   };
 
+  /// Delete a vault: its contents, its history, its sharing and its name.
+  ///
+  /// **Atomic**, which is worth stating because the design in #21 assumed it
+  /// could not be. That assumed the *client* would orchestrate it — wipe, then
+  /// one `remove_user` per grantee — leaving a half-deleted vault if any call
+  /// failed. Owning the endpoints makes it one update message, so it either all
+  /// happens or none of it does, and there is no partial state for the UI to
+  /// represent.
+  ///
+  /// **Owner only.** Revoking needs manage rights, so a `ReadWrite`
+  /// collaborator can only empty a vault — which is why the UI keeps Empty and
+  /// Delete as separate actions rather than one that quietly degrades.
+  ///
+  /// **Not cryptographic erasure.** A vault's key derives from
+  /// `(owner, mapName)`, so re-creating one with the same name yields the same
+  /// key and anyone holding old ciphertext can still read it. This removes data
+  /// from the canister; it does not revoke the key. Vaults created through the
+  /// app get a random name for exactly this reason (#13), which makes reuse
+  /// effectively impossible — but the copy must not promise erasure.
+  public shared (msg) func delete_vault(map_name : ByteBuf) : async Result<(), Text> {
+    if (Principal.isAnonymous(msg.caller)) return #Err("unauthorized");
+    let mapName = map_name.inner;
+    let id = (msg.caller, mapName);
+
+    // Ownership is identity-derived, so this is the whole check: a vault *is*
+    // `(owner, mapName)` and the caller can only name their own.
+    let mine = vaultsOwnedBy(msg.caller);
+    let hasValues = switch (encryptedMaps.getEncryptedValuesForMap(msg.caller, id)) {
+      case (#err(_)) { false };
+      case (#ok(pairs)) { pairs.size() > 0 };
+    };
+    if (not mine.containsKey(Blob.compare, mapName) and not hasValues) {
+      return #Err("no such vault");
+    };
+
+    // Revoke first. Doing it after the wipe would leave a window — inside this
+    // message, so unobservable, but the order that reads correctly is the one
+    // where nobody has access to a vault mid-teardown.
+    switch (encryptedMaps.getSharedUserAccessForMap(msg.caller, id)) {
+      case (#err(_)) {};
+      case (#ok(entries)) {
+        for ((user, _) in entries.values()) {
+          if (Principal.compare(user, msg.caller) != #equal) {
+            ignore encryptedMaps.removeUser(msg.caller, id, user);
+          };
+        };
+      };
+    };
+
+    ignore encryptedMaps.removeMapValues(msg.caller, id);
+
+    // Everything, not just the trash: nothing should survive a vault that is
+    // gone, and events left behind would sit under a name no listing returns.
+    let (next, _) = History.discardVault(history, msg.caller, mapName);
+    history := next;
+
+    let remaining = mine.remove(Blob.compare, mapName);
+    ownedVaults := if (Map.isEmpty(remaining)) {
+      ownedVaults.remove(Principal.compare, msg.caller);
+    } else {
+      ownedVaults.add(Principal.compare, msg.caller, remaining);
+    };
+
+    // The display name would otherwise outlive the vault and reappear on a
+    // vault later created with the same name.
+    let names = namesOwnedBy(msg.caller).remove(Blob.compare, mapName);
+    vaultNames := if (Map.isEmpty(names)) {
+      vaultNames.remove(Principal.compare, msg.caller);
+    } else {
+      vaultNames.add(Principal.compare, msg.caller, names);
+    };
+
+    #Ok();
+  };
+
   /// Every vault this caller owns, whether or not it holds anything.
   ///
   /// The registry read on its own, for a client that wants to know what it owns

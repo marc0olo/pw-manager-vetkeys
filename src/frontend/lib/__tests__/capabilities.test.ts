@@ -8,7 +8,7 @@ import {
   withDenial,
   type Denials,
 } from "../capabilities";
-import { OWN_VAULT_NAME, vaultId, type VaultSummary } from "../vault";
+import { vaultId, type VaultSummary } from "../vault";
 
 const me = Principal.fromText("2ibo7-dia");
 const other = Principal.fromText("aaaaa-aa");
@@ -29,7 +29,7 @@ function vault(overrides: Partial<VaultSummary> = {}): VaultSummary {
   };
 }
 
-const owned = vault({ owner: me, name: OWN_VAULT_NAME, isOwned: true });
+const owned = vault({ owner: me, name: "Personal", isOwned: true });
 const shared = vault();
 const id = vaultId(shared);
 const none: Denials = [];

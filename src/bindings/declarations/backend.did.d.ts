@@ -101,6 +101,28 @@ export interface _SERVICE {
    */
   'create_vault' : ActorMethod<[ByteBuf], Result>,
   /**
+   * / Delete a vault: its contents, its history, its sharing and its name.
+   * /
+   * / **Atomic**, which is worth stating because the design in #21 assumed it
+   * / could not be. That assumed the *client* would orchestrate it — wipe, then
+   * / one `remove_user` per grantee — leaving a half-deleted vault if any call
+   * / failed. Owning the endpoints makes it one update message, so it either all
+   * / happens or none of it does, and there is no partial state for the UI to
+   * / represent.
+   * /
+   * / **Owner only.** Revoking needs manage rights, so a `ReadWrite`
+   * / collaborator can only empty a vault — which is why the UI keeps Empty and
+   * / Delete as separate actions rather than one that quietly degrades.
+   * /
+   * / **Not cryptographic erasure.** A vault's key derives from
+   * / `(owner, mapName)`, so re-creating one with the same name yields the same
+   * / key and anyone holding old ciphertext can still read it. This removes data
+   * / from the canister; it does not revoke the key. Vaults created through the
+   * / app get a random name for exactly this reason (#13), which makes reuse
+   * / effectively impossible — but the copy must not promise erasure.
+   */
+  'delete_vault' : ActorMethod<[ByteBuf], Result>,
+  /**
    * / Make a vault's deletions unrecoverable now, rather than waiting out their
    * / 90 days.
    * /

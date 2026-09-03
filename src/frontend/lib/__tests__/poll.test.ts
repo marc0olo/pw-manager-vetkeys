@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Principal } from "@icp-sdk/core/principal";
 import { pollUpdate } from "../poll";
 import { NO_VAULT_SESSION, type VaultSessionState } from "../vault-session";
-import { OWN_VAULT_NAME, vaultId, type VaultSummary } from "../vault";
+import { vaultId, type VaultSummary } from "../vault";
 import type { VaultItem } from "../items";
 
 const me = Principal.fromText("2ibo7-dia");
@@ -10,7 +10,7 @@ const other = Principal.fromText("aaaaa-aa");
 
 const summary = (o: Partial<VaultSummary> = {}): VaultSummary => ({
   owner: me,
-  name: OWN_VAULT_NAME,
+  name: "Personal",
   displayName: null,
   isOwned: true,
   rights: null,

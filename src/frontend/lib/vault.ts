@@ -13,8 +13,6 @@ import { keyCacheName } from "./session";
 
 export type { AccessRights };
 
-/** The one vault every user owns. Vault names are capped at 32 bytes. */
-export const OWN_VAULT_NAME = "Personal";
 
 /**
  * What a poll knows about a vault, without decrypting anything.
@@ -149,8 +147,34 @@ export function toAccessRights(level: AccessLevel): AccessRights {
  * which is the kind of split that produces a UI disagreeing with itself.
  */
 export function defaultVaultId(vaults: VaultSummary[]): string | null {
-  const preferred = vaults.find((vault) => vault.isOwned && vault.name === OWN_VAULT_NAME) ?? vaults[0];
+  // Your own vault before one shared with you, and otherwise the first listed.
+  // It used to prefer the one *named* `Personal`, which stopped meaning
+  // anything once vaults are created with opaque ids — the name a user sees is
+  // the display name, and the map name is deliberately not human-readable.
+  const preferred = vaults.find((vault) => vault.isOwned) ?? vaults[0];
   return preferred ? vaultId(preferred) : null;
+}
+
+/**
+ * The map name for a newly created vault: 12 random bytes as hex.
+ *
+ * Opaque on purpose. A vault *is* `(owner, mapName)` and its key derives from
+ * that pair, so the map name can never change — renaming only adds a display
+ * name beside it. A vault created as `Divorce lawyer` and renamed to `Misc`
+ * would therefore keep `Divorce lawyer` in plaintext canister state forever.
+ * With a random name there is nothing to leak, and the display name is the only
+ * human-readable one there is.
+ *
+ * Per-vault random rather than a counter: a counter leaks how many vaults
+ * someone has created, needs global mutable state, and serialises creation.
+ * 24 characters, inside the canister's 32-byte cap, 96 bits of entropy — which
+ * also makes deleting and re-creating "the same" vault effectively impossible,
+ * and that matters because the key would be identical if it happened.
+ */
+export function newVaultName(): string {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export function canWrite(vault: VaultSummary): boolean {
@@ -182,17 +206,6 @@ function backendCanisterId(): string {
   return id;
 }
 
-/**
- * What the canister reports for a vault with no items: SHA-256 over nothing.
- *
- * Only the synthesised own-vault placeholder needs this — a real empty vault
- * gets the value from `get_vault_summaries` like any other. It has to *match*
- * that value rather than be an arbitrary sentinel: today the two paths are
- * disjoint, because an empty owned map is absent from the listing (#11), but
- * if that is fixed upstream the same vault would arrive by both routes and a
- * mismatch would report a spurious change on the first poll after the upgrade.
- */
-const EMPTY_FINGERPRINT = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 function hex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -346,24 +359,6 @@ export class VaultClient {
       return true;
     });
 
-    if (!vaults.some((vault) => vault.isOwned && vault.name === OWN_VAULT_NAME)) {
-      vaults.unshift({
-        owner: this.me,
-        name: OWN_VAULT_NAME,
-        displayName: displayNames.get(vaultId({ owner: this.me, name: OWN_VAULT_NAME })) ?? null,
-        isOwned: true,
-        rights: null,
-        // An empty vault is absent from the listing above but can still be
-        // shared, so its access list has to be asked for separately — otherwise
-        // sharing looks like it did not take effect until the first item is
-        // added. A query, and only reached while the own vault is empty.
-        sharedWith: await this.accessListFor(OWN_VAULT_NAME),
-        itemIds: [],
-        fingerprint: EMPTY_FINGERPRINT,
-        trashed: 0,
-        trashFingerprint: EMPTY_FINGERPRINT,
-      });
-    }
     return vaults;
   }
 
@@ -377,16 +372,7 @@ export class VaultClient {
   }
 
   /** Who an owned vault is shared with. Empty rather than throwing if unknown. */
-  private async accessListFor(name: string): Promise<[Principal, AccessRights][]> {
-    try {
-      const access = await this.encryptedMaps.getSharedUserAccessForMap(this.me, nameBytes(name));
-      return access.filter(([who]) => who.compareTo(this.me) !== "eq");
-    } catch {
-      // No map yet, or no access list to read. Absence of sharing, not an error
-      // worth failing a vault load over.
-      return [];
-    }
-  }
+
 
   async saveItem(vault: VaultSummary, item: VaultItem): Promise<void> {
     await this.encryptedMaps.setValue(
@@ -441,6 +427,38 @@ export class VaultClient {
         };
       }),
     );
+  }
+
+  /**
+   * Claim a new vault, and give it a display name.
+   *
+   * Two calls rather than one: the map name is opaque, so the readable name is
+   * a display name, and that lives in a different store with its own endpoint.
+   * A failure between them leaves a vault with no display name — which renders
+   * as its map name, a hex string, and is fixable by renaming. The other order
+   * would leave a name with no vault, which nothing would ever show.
+   */
+  async createVault(displayName: string): Promise<string> {
+    const name = newVaultName();
+    const created = await this.backend.create_vault({ inner: encoder.encode(name) });
+    if ("Err" in created) throw new Error(created.Err);
+    const trimmed = displayName.trim();
+    if (trimmed !== "") {
+      const named = await this.backend.set_vault_name({ inner: encoder.encode(name) }, trimmed);
+      if ("Err" in named) throw new Error(named.Err);
+    }
+    return name;
+  }
+
+  /**
+   * Delete a vault you own: contents, history, sharing and name.
+   *
+   * One call, so there is no half-deleted state to recover from. Not
+   * cryptographic erasure — see the canister's comment on `delete_vault`.
+   */
+  async deleteVault(vault: VaultSummary): Promise<void> {
+    const result = await this.backend.delete_vault({ inner: nameBytes(vault.name) });
+    if ("Err" in result) throw new Error(result.Err);
   }
 
   /**

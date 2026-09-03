@@ -107,6 +107,22 @@ export class FakeClient {
     return dropped;
   });
 
+  /** Names passed to `createVault`, so a test can assert the map name is opaque. */
+  created: { name: string; displayName: string }[] = [];
+
+  createVault = vi.fn(async (displayName: string) => {
+    // Mirrors the real one: an opaque map name, then the display name.
+    const name = Array.from({ length: 24 }, (_, i) => "0123456789abcdef"[(i * 7) % 16]).join("");
+    this.created.push({ name, displayName });
+    this.vaults = [...this.vaults, vault({ owner: this.me, name, displayName, itemIds: [] })];
+    return name;
+  });
+
+  deleteVault = vi.fn(async (summary: VaultSummary) => {
+    this.vaults = this.vaults.filter((v) => v.name !== summary.name || v.owner.compareTo(summary.owner) !== "eq");
+    this.items.delete(summary.name);
+  });
+
   saveItem = vi.fn(async () => this.guard("write"));
   deleteItem = vi.fn(async () => this.guard("write"));
   wipe = vi.fn(async () => this.guard("write"));

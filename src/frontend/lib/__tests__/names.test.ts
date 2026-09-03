@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { Principal } from "@icp-sdk/core/principal";
 import { isValidDisplayName, MAX_DISPLAY_NAME_BYTES } from "../backend";
-import { OWN_VAULT_NAME, vaultLabel, type VaultSummary } from "../vault";
+import { vaultLabel, type VaultSummary } from "../vault";
 
 const summary = (o: Partial<VaultSummary> = {}): VaultSummary => ({
   owner: Principal.fromText("2ibo7-dia"),
-  name: OWN_VAULT_NAME,
+  name: "Personal",
   displayName: null,
   isOwned: true,
   rights: null,
@@ -62,13 +62,13 @@ describe("what the UI shows", () => {
   });
 
   it("falls back to the map name when the vault was never renamed", () => {
-    expect(vaultLabel(summary())).toBe(OWN_VAULT_NAME);
+    expect(vaultLabel(summary())).toBe("Personal");
   });
 
   it("falls back rather than rendering a blank title", () => {
     // The canister removes the row rather than storing "", so this should not
     // arise — but a blank vault title would be a bad way to discover that it
     // had, so the fallback covers it too.
-    expect(vaultLabel(summary({ displayName: "" }))).toBe(OWN_VAULT_NAME);
+    expect(vaultLabel(summary({ displayName: "" }))).toBe("Personal");
   });
 });

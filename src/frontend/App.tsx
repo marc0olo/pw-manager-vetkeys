@@ -36,7 +36,9 @@ import { ItemList } from "./components/ItemList";
 import { LockScreen } from "./components/LockScreen";
 import { EmptyVaultDialog } from "./components/EmptyVaultDialog";
 import { RenameVaultDialog } from "./components/RenameVaultDialog";
+import { CreateVaultDialog } from "./components/CreateVaultDialog";
 import { DeleteItemDialog } from "./components/DeleteItemDialog";
+import { DeleteVaultDialog } from "./components/DeleteVaultDialog";
 import { TrashButton, TrashDialog } from "./components/TrashDialog";
 import { ShareDialog } from "./components/ShareDialog";
 import { Sidebar } from "./components/Sidebar";
@@ -54,7 +56,7 @@ export function App() {
   const [client, setClient] = useState<VaultClient | null>(null);
   // One object, cleared as a unit on lock — see lib/vault-session for why.
   const [vaultSession, setVaultSession] = useState<VaultSessionState>(NO_VAULT_SESSION);
-  const { vaults, openItems, selectedVaultId, selectedItemId, syncedAt, pane, query, sharing, wiping, renaming, trash, itemFacts, history, deleting, denials } =
+  const { vaults, openItems, selectedVaultId, selectedItemId, syncedAt, pane, query, sharing, wiping, renaming, trash, itemFacts, history, deleting, creating, deletingVault, denials } =
     vaultSession;
   // Updated synchronously by `patch` below. The poll reads state across an
   // await, and React state is not visible until the next commit — reading the
@@ -430,6 +432,50 @@ export function App() {
     return <LockScreen onSignIn={handleSignIn} busy={busy} error={error} lockReason={lockReason} />;
   }
 
+  // No vaults at all, which is now a real state rather than one the client
+  // papered over with a synthesised `Personal`. Reachable for a brand-new user
+  // and for anyone who deletes their last vault.
+  if (vaults !== null && vaults.length === 0) {
+    return (
+      <>
+        <main className="loading">
+          <div>
+            <p>You have no vaults yet.</p>
+            <p className="pane__hint">
+              A vault holds a set of secrets under its own key. You can create more later, and
+              share each one separately.
+            </p>
+            <button className="btn btn--primary" onClick={() => patch({ creating: true })}>
+              Create a vault
+            </button>
+            <button className="btn btn--ghost" onClick={() => void lock("manual")}>
+              Sign out
+            </button>
+          </div>
+        </main>
+        {creating && (
+          <CreateVaultDialog
+            busy={busy}
+            first
+            onClose={() => patch({ creating: false })}
+            onCreate={(displayName) =>
+              void run(async () => {
+                const name = await client!.createVault(displayName);
+                // Land on it. `run` refreshes, so the poll brings it into the
+                // listing and reconcile keeps this selection because the id
+                // matches — built the same way `vaultId` builds one.
+                patch({
+                  creating: false,
+                  selectedVaultId: vaultId({ owner: identity!.getPrincipal(), name }),
+                });
+              }, "Vault created")
+            }
+          />
+        )}
+      </>
+    );
+  }
+
   if (!vault) {
     return (
       <main className="loading">
@@ -476,6 +522,7 @@ export function App() {
         remainingMs={session ? session.remainingMs : null}
         sessionExpiresAt={expiresAt}
         onRefresh={() => void refresh()}
+        onNewVault={() => patch({ creating: true })}
         syncing={syncing}
         syncedAt={syncedAt}
       />
@@ -541,6 +588,16 @@ export function App() {
                 })
               }
             />
+            {vault.isOwned && (
+              <button
+                className="btn btn--danger btn--sm"
+                onClick={() => patch({ deletingVault: true })}
+                title="Delete this vault, everything in it, and its sharing"
+              >
+                <TrashIcon />
+                Delete vault
+              </button>
+            )}
             {writable && vault.itemIds.length > 0 && (
               <button
                 className="btn btn--danger btn--sm"
@@ -674,6 +731,56 @@ export function App() {
               undefined,
               { vault: vaultId(vault), capability: "write" },
             )
+          }
+        />
+      )}
+
+      {creating && (
+        <CreateVaultDialog
+          busy={busy}
+          first={false}
+          onClose={() => patch({ creating: false })}
+          onCreate={(displayName) =>
+            void run(async () => {
+              const name = await client!.createVault(displayName);
+              patch({
+                creating: false,
+                selectedVaultId: vaultId({ owner: identity!.getPrincipal(), name }),
+                selectedItemId: null,
+                openItems: null,
+                itemFacts: null,
+                history: null,
+                pane: { mode: "view" },
+                query: "",
+              });
+            }, "Vault created")
+          }
+        />
+      )}
+
+      {deletingVault && (
+        <DeleteVaultDialog
+          vault={vault}
+          busy={busy}
+          onClose={() => patch({ deletingVault: false })}
+          onConfirm={() =>
+            void run(async () => {
+              await client!.deleteVault(vault);
+              // Everything on screen belonged to it. The refresh inside `run`
+              // re-reads the listing and reconcile picks a surviving vault, or
+              // the zero-vault state renders if there is none.
+              patch({
+                deletingVault: false,
+                selectedVaultId: null,
+                selectedItemId: null,
+                openItems: null,
+                itemFacts: null,
+                history: null,
+                trash: null,
+                pane: { mode: "view" },
+                query: "",
+              });
+            }, "Vault deleted")
           }
         />
       )}

@@ -390,6 +390,27 @@ code,
   font-size: 11px;
 }
 
+/* Sits under the owned group, so it reads as "add one of these" rather than as
+   a global action. */
+.sidebar__new {
+  margin: 4px 0 18px;
+  padding: 6px 10px;
+  width: 100%;
+  text-align: left;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sidebar__new:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
 .sidebar__foot {
   padding: 12px;
   border-top: 1px solid var(--line);
