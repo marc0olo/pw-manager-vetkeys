@@ -974,10 +974,17 @@ actor PasswordManager {
       };
     };
 
-    // Clearing reverts to the map name, which is the same thing "unset" means.
+    // No clearing. It used to revert to the map name, which was reasonable while
+    // that was something a user had chosen — but vaults are created with a
+    // random id, so "reset" now renames the vault to `a3f1b2c4…`, which is
+    // strictly worse than any name they could type. Removing the option is
+    // simpler than explaining it.
+    //
+    // `vaultLabel`'s fallback to the map name stays, because a vault can still
+    // be unnamed transiently: creating one is two calls, and a failure between
+    // them leaves a vault whose label is its id until someone renames it.
     if (trimmed == "") {
-      store(mine.remove(Blob.compare, map_name.inner));
-      return #Ok();
+      return #Err("A vault needs a name.");
     };
 
     // Trimmed rather than rejected, unlike map names. A surrounding space in a

@@ -857,7 +857,7 @@ export function App() {
                 await client!.rename(vault, displayName);
                 patch({ renaming: false });
               },
-              displayName === "" ? "Name reset" : "Vault renamed",
+              "Vault renamed",
             )
           }
         />

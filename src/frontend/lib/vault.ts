@@ -465,11 +465,11 @@ export class VaultClient {
     const name = newVaultName();
     const created = await this.backend.create_vault({ inner: encoder.encode(name) });
     if ("Err" in created) throw new Error(created.Err);
-    const trimmed = displayName.trim();
-    if (trimmed !== "") {
-      const named = await this.backend.set_vault_name({ inner: encoder.encode(name) }, trimmed);
-      if ("Err" in named) throw new Error(named.Err);
-    }
+    // Always named, never conditionally: an unnamed vault renders as its random
+    // id, so a caller passing nothing should see an error rather than end up
+    // with a vault called `a3f1b2c4…`. The dialog enforces this too.
+    const named = await this.backend.set_vault_name({ inner: encoder.encode(name) }, displayName.trim());
+    if ("Err" in named) throw new Error(named.Err);
     return name;
   }
 

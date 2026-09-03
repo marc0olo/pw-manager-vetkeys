@@ -36,7 +36,7 @@ describe("display names", () => {
   it.each([
     ["empty", ""],
     ["only whitespace", "   "],
-  ])("rejects %s, which means clear the name rather than rename", (_label, name) => {
+  ])("rejects %s — a vault needs a name, and clearing one is not offered", (_label, name) => {
     expect(isValidDisplayName(name)).toBe(false);
   });
 

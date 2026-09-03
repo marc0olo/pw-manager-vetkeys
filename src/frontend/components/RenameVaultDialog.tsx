@@ -17,12 +17,13 @@ export function RenameVaultDialog({ vault, vaults, busy, onRename, onClose }: Pr
   const [name, setName] = useState(vaultLabel(vault));
   const trimmed = name.trim();
   const unchanged = trimmed === vaultLabel(vault);
-  const overLong = trimmed.length > 0 && !isValidDisplayName(trimmed);
+  const empty = trimmed.length === 0;
+  const overLong = !empty && !isValidDisplayName(trimmed);
   const taken = labelTaken(vaults, trimmed, vaultId(vault));
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    if (busy || unchanged || overLong || taken) return;
+    if (busy || unchanged || empty || overLong || taken) return;
     onRename(trimmed);
   };
 
@@ -67,23 +68,12 @@ export function RenameVaultDialog({ vault, vaults, busy, onRename, onClose }: Pr
             <button className="btn btn--ghost" type="button" onClick={onClose} disabled={busy}>
               Cancel
             </button>
-            {vault.displayName !== null && (
-              <button
-                className="btn btn--ghost"
-                type="button"
-                onClick={() => onRename("")}
-                disabled={busy}
-                title={`Go back to “${vault.name}”`}
-              >
-                Reset
-              </button>
-            )}
             {taken && (
               <p className="modal__error" role="alert">
                 You already have a vault called “{trimmed}”.
               </p>
             )}
-            <button className="btn btn--primary" type="submit" disabled={busy || unchanged || overLong || taken}>
+            <button className="btn btn--primary" type="submit" disabled={busy || unchanged || empty || overLong || taken}>
               {busy ? "Saving…" : "Rename"}
             </button>
           </div>

@@ -1287,3 +1287,34 @@ describe("dialogs can be got out of", () => {
     expect(await screen.findByRole("dialog", { name: /share/i })).toBeInTheDocument();
   });
 });
+
+describe("a vault's name cannot be cleared", () => {
+  // Clearing used to revert the label to the map name, which was reasonable
+  // while that was something the user chose. Vaults are created with a random
+  // id now, so "reset" would rename the vault to `a3f1b2c4…` — strictly worse
+  // than any name they could type.
+  it("offers no reset", async () => {
+    signedInAs(ALICE, new FakeClient(ALICE, [vault({ displayName: "Work", itemIds: ["a"] })], {
+      Personal: [item({ id: "a", title: "GitHub" })],
+    }));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /rename/i }));
+    const dialog = await screen.findByRole("dialog", { name: /rename/i });
+
+    expect(within(dialog).queryByRole("button", { name: /^reset$/i })).not.toBeInTheDocument();
+  });
+
+  it("will not submit an empty name", async () => {
+    const client = signedInAs(ALICE, new FakeClient(ALICE, [vault({ displayName: "Work", itemIds: ["a"] })], {
+      Personal: [item({ id: "a", title: "GitHub" })],
+    }));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /rename/i }));
+    const dialog = await screen.findByRole("dialog", { name: /rename/i });
+
+    fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "   " } });
+
+    expect(within(dialog).getByRole("button", { name: /^rename$/i })).toBeDisabled();
+    expect(client.rename).not.toHaveBeenCalled();
+  });
+});
