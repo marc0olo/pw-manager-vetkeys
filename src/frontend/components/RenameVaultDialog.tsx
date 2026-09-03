@@ -1,23 +1,26 @@
 import { useState } from "react";
 import { isValidDisplayName, MAX_DISPLAY_NAME_BYTES } from "../lib/backend";
-import { vaultLabel, type Vault } from "../lib/vault";
+import { labelTaken, vaultId, vaultLabel, type Vault, type VaultSummary } from "../lib/vault";
 
 interface Props {
   vault: Vault;
+  /** Every vault on screen, so a duplicate label can be caught before submitting. */
+  vaults: VaultSummary[];
   busy: boolean;
   onRename: (displayName: string) => void;
   onClose: () => void;
 }
 
-export function RenameVaultDialog({ vault, busy, onRename, onClose }: Props) {
+export function RenameVaultDialog({ vault, vaults, busy, onRename, onClose }: Props) {
   const [name, setName] = useState(vaultLabel(vault));
   const trimmed = name.trim();
   const unchanged = trimmed === vaultLabel(vault);
   const overLong = trimmed.length > 0 && !isValidDisplayName(trimmed);
+  const taken = labelTaken(vaults, trimmed, vaultId(vault));
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    if (busy || unchanged || overLong) return;
+    if (busy || unchanged || overLong || taken) return;
     onRename(trimmed);
   };
 
@@ -73,7 +76,12 @@ export function RenameVaultDialog({ vault, busy, onRename, onClose }: Props) {
                 Reset
               </button>
             )}
-            <button className="btn btn--primary" type="submit" disabled={busy || unchanged || overLong}>
+            {taken && (
+              <p className="modal__error" role="alert">
+                You already have a vault called “{trimmed}”.
+              </p>
+            )}
+            <button className="btn btn--primary" type="submit" disabled={busy || unchanged || overLong || taken}>
               {busy ? "Saving…" : "Rename"}
             </button>
           </div>

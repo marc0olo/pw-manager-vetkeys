@@ -1058,3 +1058,54 @@ describe("deleting a vault", () => {
     expect(await screen.findByText(/no vaults yet/i)).toBeInTheDocument();
   });
 });
+
+describe("two vaults may not show the same name", () => {
+  // The typed delete confirmation arms on the label, so duplicates make it
+  // confirm a name rather than a vault — and delete is irreversible.
+  const twoVaults = () =>
+    new FakeClient(
+      ALICE,
+      [vault({ name: "aaa", displayName: "Work", itemIds: ["a"] }), vault({ name: "bbb", displayName: "Home" })],
+      { aaa: [item({ id: "a", title: "GitHub" })] },
+    );
+
+  it("refuses a duplicate before submitting", async () => {
+    const client = twoVaults();
+    signedInAs(ALICE, client);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /new vault/i }));
+    fireEvent.change(await screen.findByLabelText(/name/i), { target: { value: "Home" } });
+
+    expect(screen.getByRole("button", { name: /create vault/i })).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/already have a vault called/i);
+    expect(client.createVault).not.toHaveBeenCalled();
+  });
+
+  it("allows one that is merely similar", async () => {
+    signedInAs(ALICE, twoVaults());
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /new vault/i }));
+    fireEvent.change(await screen.findByLabelText(/name/i), { target: { value: "home" } });
+
+    // Case-sensitive on purpose: refusing a name for a difference the user
+    // cannot see is its own problem.
+    expect(screen.getByRole("button", { name: /create vault/i })).not.toBeDisabled();
+  });
+
+  it("does not refuse renaming a vault to what it is already called", async () => {
+    signedInAs(ALICE, twoVaults());
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /rename/i }));
+    // Scoped: the sidebar's vault rows also match /name/i.
+    const dialog = await screen.findByRole("dialog", { name: /rename/i });
+
+    const field = within(dialog).getByRole("textbox");
+    fireEvent.change(field, { target: { value: "Home" } });
+    // Another vault holds it.
+    expect(within(dialog).getByRole("button", { name: /^rename$/i })).toBeDisabled();
+
+    fireEvent.change(field, { target: { value: "Work" } });
+    // Its own name — unchanged, so nothing to submit, but not reported as taken.
+    expect(screen.queryByText(/already have a vault called/i)).not.toBeInTheDocument();
+  });
+});

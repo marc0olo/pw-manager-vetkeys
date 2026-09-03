@@ -456,6 +456,7 @@ export function App() {
         {creating && (
           <CreateVaultDialog
             busy={busy}
+            vaults={vaults ?? []}
             first
             onClose={() => patch({ creating: false })}
             onCreate={(displayName) =>
@@ -738,6 +739,7 @@ export function App() {
       {creating && (
         <CreateVaultDialog
           busy={busy}
+          vaults={vaults ?? []}
           first={false}
           onClose={() => patch({ creating: false })}
           onCreate={(displayName) =>
@@ -788,6 +790,7 @@ export function App() {
       {renaming && (
         <RenameVaultDialog
           vault={vault}
+          vaults={vaults ?? []}
           busy={busy}
           onClose={() => patch({ renaming: false })}
           onRename={(displayName) =>

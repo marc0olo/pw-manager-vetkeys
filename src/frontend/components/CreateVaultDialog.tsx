@@ -1,19 +1,23 @@
 import { useState } from "react";
 import { isValidDisplayName, MAX_DISPLAY_NAME_BYTES } from "../lib/backend";
+import { labelTaken, type VaultSummary } from "../lib/vault";
 
 interface Props {
   busy: boolean;
+  /** Every vault on screen, so a duplicate label can be caught before submitting. */
+  vaults: VaultSummary[];
   /** True when this is the user's first vault, which changes what needs saying. */
   first: boolean;
   onCreate: (displayName: string) => void;
   onClose: () => void;
 }
 
-export function CreateVaultDialog({ busy, first, onCreate, onClose }: Props) {
+export function CreateVaultDialog({ busy, vaults, first, onCreate, onClose }: Props) {
   const [name, setName] = useState("");
   const trimmed = name.trim();
   const overLong = trimmed.length > 0 && !isValidDisplayName(trimmed);
-  const armed = trimmed.length > 0 && !overLong && !busy;
+  const taken = labelTaken(vaults, trimmed, null);
+  const armed = trimmed.length > 0 && !overLong && !taken && !busy;
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -57,6 +61,12 @@ export function CreateVaultDialog({ busy, first, onCreate, onClose }: Props) {
           {overLong && (
             <p className="modal__error" role="alert">
               Names are limited to {MAX_DISPLAY_NAME_BYTES} bytes.
+            </p>
+          )}
+          {taken && (
+            <p className="modal__error" role="alert">
+              You already have a vault called “{trimmed}”. Two vaults with one name would make the
+              delete confirmation ambiguous.
             </p>
           )}
           <button className="btn btn--primary" type="submit" disabled={!armed}>

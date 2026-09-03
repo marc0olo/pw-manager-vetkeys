@@ -177,6 +177,29 @@ export function newVaultName(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * Whether another vault of yours already shows this label.
+ *
+ * The canister is the authority — `set_vault_name` refuses a duplicate — but
+ * the client holds the whole list, so it can say so while the user is still
+ * typing instead of after they submit.
+ *
+ * Compares against what each vault *renders* as, which is the display name when
+ * it has one and the map name when it does not. Two vaults showing the same
+ * label make the typed delete confirmation meaningless: it arms on the label,
+ * so you would be confirming a name rather than a vault.
+ *
+ * Only your own vaults. A vault shared with you cannot collide confusingly —
+ * the sidebar separates owned from shared and names the sharer.
+ */
+export function labelTaken(vaults: VaultSummary[], label: string, exceptId: string | null): boolean {
+  const wanted = label.trim();
+  if (wanted === "") return false;
+  return vaults.some(
+    (vault) => vault.isOwned && vaultId(vault) !== exceptId && vaultLabel(vault) === wanted,
+  );
+}
+
 export function canWrite(vault: VaultSummary): boolean {
   return vault.isOwned || (vault.rights !== null && accessLevel(vault.rights) !== "Read");
 }

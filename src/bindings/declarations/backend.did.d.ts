@@ -298,14 +298,6 @@ export interface _SERVICE {
     [Principal, ByteBuf, Principal, AccessRights],
     Result_1
   >,
-  /**
-   * / Rename one of *your own* vaults, or clear the name by passing "".
-   * /
-   * / Owner-only by construction: the row is keyed on `msg.caller`, so there is
-   * / no way to address someone else's vault. A collaborator renaming a shared
-   * / vault for everyone would be a surprise, and this makes it unrepresentable
-   * / rather than merely checked.
-   */
   'set_vault_name' : ActorMethod<[ByteBuf, string], Result>,
 }
 export declare const idlFactory: IDL.InterfaceFactory;

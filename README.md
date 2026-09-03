@@ -37,7 +37,13 @@ password — the vault key is derived for your Internet Identity principal.
     read-only collaborator being shown Delete until it was refused. The
     adapt-on-refusal path remains as a fallback — the canister is still the only
     authority.
-- **Create, rename and delete vaults.** As many as you like. A new vault gets a
+- **Create, rename and delete vaults.** As many as you like, but **no two of
+  yours may show the same name** — the empty-vault and delete-vault
+  confirmations arm on the typed label, so duplicates would have you confirm a
+  name rather than a vault. Per owner, since the sidebar already separates your
+  vaults from ones shared with you and names the sharer. Exact match after
+  trimming, and deliberately case-sensitive: refusing a name for a difference
+  you cannot see is its own problem. A new vault gets a
   *random* map name and a display name beside it, because a vault **is**
   `(owner, mapName)` and its key derives from that pair — so the map name can
   never change, and a readable one would keep the original in plaintext however
