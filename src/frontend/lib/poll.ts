@@ -1,5 +1,5 @@
 import { reconcile } from "./reconcile";
-import { defaultVaultId, vaultId, type VaultSummary } from "./vault";
+import { accessLevel, defaultVaultId, vaultId, type VaultSummary } from "./vault";
 import type { VaultSessionState } from "./vault-session";
 
 export interface PollOutcome {
@@ -32,14 +32,40 @@ export interface PollOutcome {
 /**
  * What a vault looks like to a viewer, as one comparable string.
  *
- * Ids plus both digests: the content digest moves when items change, the trash
- * digest when deletions do, and the id set when a vault is added, removed or
- * renamed at the map level. Sorted, so the canister's ordering cannot register
- * as a change.
+ * Everything on screen that the poll can change, which is more than the
+ * digests:
+ *
+ * - **both digests** — contents and trash, each moving when their own changes
+ * - **the id set** — a vault added, removed, or renamed at the map level
+ * - **the display name**, which moves neither digest nor id
+ * - **the membership**, rendered as "Shared with N" and listed in the share
+ *   dialog. The members themselves, not the count: swapping one person for
+ *   another is visible and leaves the count alone.
+ * - **your rights**, which decide whether Rename, Delete and Empty appear at
+ *   all — so being downgraded from `ReadWrite` to `Read` changes the screen
+ *   without touching anything else here.
+ *
+ * The last two were missing, so a check run right after an owner shared the
+ * vault or changed your access reported "nothing changed" while the screen
+ * visibly had.
+ *
+ * Sorted, so the canister's ordering cannot register as a change.
  */
 function signature(vaults: VaultSummary[]): string {
   return vaults
-    .map((vault) => `${vaultId(vault)}:${vault.fingerprint}:${vault.trashFingerprint}:${vault.displayName ?? ""}`)
+    .map((vault) =>
+      [
+        vaultId(vault),
+        vault.fingerprint,
+        vault.trashFingerprint,
+        vault.displayName ?? "",
+        vault.rights === null ? "" : accessLevel(vault.rights),
+        vault.sharedWith
+          .map(([who, rights]) => `${who.toText()}=${accessLevel(rights)}`)
+          .sort()
+          .join(","),
+      ].join(":"),
+    )
     .sort()
     .join("|");
 }

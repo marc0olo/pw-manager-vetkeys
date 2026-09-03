@@ -130,3 +130,59 @@ describe("being moved off a vault", () => {
     expect(pollUpdate(before, [own], NOW).movedVault).toBe(false);
   });
 });
+
+describe("what counts as a change for a manual check", () => {
+  // `changed` decides whether a by-hand check says "Already up to date". It has
+  // to cover everything on screen the poll can move, not just the digests —
+  // otherwise a check right after an owner shares the vault or changes your
+  // access reports nothing while the screen visibly changed.
+  const state = (vaults: VaultSummary[]): VaultSessionState => ({
+    ...NO_VAULT_SESSION,
+    vaults,
+  });
+  const bob = Principal.fromText("aaaaa-aa");
+
+  it("reports nothing when nothing moved", () => {
+    const before = [summary()];
+    expect(pollUpdate(state(before), [summary()], 0).changed).toBe(false);
+  });
+
+  it("notices a new member, which moves no digest", () => {
+    const outcome = pollUpdate(
+      state([summary({ sharedWith: [] })]),
+      [summary({ sharedWith: [[bob, { ReadWrite: null }]] })],
+      0,
+    );
+    expect(outcome.changed).toBe(true);
+  });
+
+  it("notices one member swapped for another, which leaves the count alone", () => {
+    const other = Principal.fromText("2ibo7-dia");
+    const outcome = pollUpdate(
+      state([summary({ sharedWith: [[bob, { ReadWrite: null }]] })]),
+      [summary({ sharedWith: [[other, { ReadWrite: null }]] })],
+      0,
+    );
+    expect(outcome.changed).toBe(true);
+  });
+
+  it("notices being downgraded, which decides what controls exist", () => {
+    const outcome = pollUpdate(
+      state([summary({ isOwned: false, rights: { ReadWrite: null } })]),
+      [summary({ isOwned: false, rights: { Read: null } })],
+      0,
+    );
+    expect(outcome.changed).toBe(true);
+  });
+
+  it("notices a rename, which moves neither digest nor id", () => {
+    const outcome = pollUpdate(state([summary({ displayName: null })]), [summary({ displayName: "Work" })], 0);
+    expect(outcome.changed).toBe(true);
+  });
+
+  it("ignores the order the canister happened to list them in", () => {
+    const a = summary({ name: "a" });
+    const b = summary({ name: "b" });
+    expect(pollUpdate(state([a, b]), [b, a], 0).changed).toBe(false);
+  });
+});
