@@ -19,6 +19,10 @@ import { idlFactory } from "../src/bindings/declarations/backend.did.js";
 // below verify the canister agrees with it. Candid cannot carry a constant, so
 // this is the one value the generated binding leaves hand-synced with main.mo.
 import { MAX_DISPLAY_NAME_BYTES } from "../src/frontend/lib/backend.ts";
+import { reportCycles } from "./lib/cycles.mjs";
+
+// Running these checks is what drains the canister; see scripts/lib/cycles.mjs.
+const cycles = reportCycles();
 
 const status = JSON.parse(execSync("icp network status --json", { encoding: "utf-8" }));
 const backendId = execSync("icp canister status backend --id-only", { encoding: "utf-8" }).trim();
@@ -212,4 +216,5 @@ console.log(
     ? "\nRenaming moves no map, costs no derivation, and only the owner can do it."
     : `\n${failures.length} failure(s)`,
 );
+cycles.done();
 process.exit(failures.length === 0 ? 0 : 1);

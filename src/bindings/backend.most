@@ -54,5 +54,6 @@ actor {
     {
       root : Tree__430834836<Principal, Map__86905547<Blob, Text>>;
       size : Nat__58649523
-    }
+    };
+  stable var warnedLowCycles : Bool
 };
