@@ -166,7 +166,8 @@ password — the vault key is derived for your Internet Identity principal.
 ## Architecture
 
 ```
-src/backend/main.mo        The whole backend: the mixin, vault names, poll summaries
+src/backend/main.mo        The whole backend: the mixin, vault names, poll summaries,
+                           and the cycles watchdog every write runs
 src/backend/lib/Digest.mo  The vault content digest — pure, and unit-tested
 src/backend/lib/History.mo Every version of every secret — pure, and unit-tested
 test/Digest.test.mo        Motoko tests: `mops test`, no replica needed
@@ -195,6 +196,7 @@ scripts/check-history.mjs  Verifies a writer can add versions but destroy none
 scripts/check-owned-vaults.mjs  Verifies a vault can exist holding nothing, and stays visible
 scripts/check-bindings.mjs  Fails if the committed binding or stable signature is stale
 scripts/check-ii-metadata.mjs  Validates the II app-metadata document
+scripts/lib/cycles.mjs     What a replica check cost, and how much headroom is left
 ```
 
 `include EncryptedMapsControlPlaneCanister(state)` contributes the vetKD, access
@@ -364,15 +366,36 @@ npm run check-owned-vaults    # a vault exists once claimed, and survives being 
 The first four run in CI on every pull request; the replica ones do not, so
 run them locally before opening one.
 
-> **`IC0406 could not perform remote call`** from any of the replica checks
-> usually means the local canister is **out of cycles**, not that the network is
-> broken. Each `vetkd_derive_key` reserves ~26 B cycles, and these scripts derive
-> heavily — running them in sequence a few times drains a fresh canister. Check
-> with `icp canister status backend` and top up:
+**Running the replica checks is what drains the canister.** Each ends with what
+it cost and how much headroom is left, measured rather than assumed:
+
+```
+this run cost 20.2 B; 11.31 T left, about 559 more run(s)
+```
+
+A `vetkd_derive_key` reserves ~26 B cycles, and the checks derive heavily.
+Measured: `check-vault-names` 11 B, `smoke-test` 20 B, `check-owned-vaults`
+52 B, `check-poll-cost` 141 B, `check-history` 152 B, `check-capabilities`
+162 B, and a redeploy 3.4 B — so **one round of all six costs about 0.5 T**, and
+a canister topped up to 10 T affords roughly twenty. Mutation testing, which
+redeploys and re-runs them per mutant, is what actually empties one. Top up
+with:
+
+```bash
+icp canister top-up backend --amount 10000000000000
+```
+
+> **`IC0406 could not perform remote call`** means the canister's *outbound*
+> call failed, not why. Running out of cycles is the cause you will hit here;
+> a vetKD key missing from the subnet and queue pressure look identical from
+> outside. It is worth recognising because in this app it presents as data
+> loss — unlocking fails, so the secrets look gone, when nothing is gone and a
+> top-up restores everything.
 >
-> ```bash
-> icp canister top-up backend --amount 10000000000000
-> ```
+> The canister tries not to let you reach it: every write checks its own
+> balance and logs a warning while it still works, and the replica checks
+> surface that warning. Canister logs are controller-only
+> (`icp canister logs backend`).
 
 ### Internet Identity
 

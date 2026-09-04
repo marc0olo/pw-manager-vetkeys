@@ -12,6 +12,10 @@ import { Actor, HttpAgent } from "@icp-sdk/core/agent";
 import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
 import { DefaultEncryptedMapsClient, EncryptedMaps } from "@icp-sdk/vetkeys/encrypted_maps";
 import { idlFactory } from "../src/bindings/declarations/backend.did.js";
+import { reportCycles } from "./lib/cycles.mjs";
+
+// Running these checks is what drains the canister; see scripts/lib/cycles.mjs.
+const cycles = reportCycles();
 
 const status = JSON.parse(execSync("icp network status --json", { encoding: "utf-8" }));
 const backendId = execSync("icp canister status backend --id-only", { encoding: "utf-8" }).trim();
@@ -284,4 +288,5 @@ console.log(
     ? "\nAn owned vault exists once claimed, survives being emptied, and a map with no registry entry is still visible to its owner."
     : `\n${failures.length} failure(s)`,
 );
+cycles.done();
 process.exit(failures.length === 0 ? 0 : 1);

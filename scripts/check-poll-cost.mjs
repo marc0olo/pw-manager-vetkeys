@@ -17,6 +17,10 @@ import { DefaultEncryptedMapsClient, EncryptedMaps } from "@icp-sdk/vetkeys/encr
 // this measures the interface the frontend actually polls, not a restatement
 // of it that could drift from it silently.
 import { idlFactory } from "../src/bindings/declarations/backend.did.js";
+import { reportCycles } from "./lib/cycles.mjs";
+
+// Running these checks is what drains the canister; see scripts/lib/cycles.mjs.
+const cycles = reportCycles();
 
 const status = JSON.parse(execSync("icp network status --json", { encoding: "utf-8" }));
 const backendId = execSync("icp canister status backend --id-only", { encoding: "utf-8" }).trim();
@@ -180,4 +184,5 @@ console.log(
     ? `\n${SHARED + 1} vaults: a poll costs 0 derivations, carries no ciphertext, and opening one vault costs 1.`
     : `\n${failures.length} failure(s)`,
 );
+cycles.done();
 process.exit(failures.length === 0 ? 0 : 1);
