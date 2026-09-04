@@ -23,8 +23,6 @@ interface Props {
    * describes — opening the vault.
    */
   changed: readonly string[];
-  /** Select the first changed vault, for the summary note. */
-  onShowChanged: () => void;
   syncing: boolean;
   /** When the vault list was last read, in ms since the epoch. */
   syncedAt: number | null;
@@ -51,7 +49,6 @@ export function Sidebar({
   onRefresh,
   onNewVault,
   changed,
-  onShowChanged,
   syncing,
   syncedAt,
 }: Props) {
@@ -100,19 +97,6 @@ export function Sidebar({
           />
         )}
       </nav>
-
-      {/*
-        The summary. A line rather than a badge or a toast: it says what
-        happened, does nothing until clicked, and disappears on its own once
-        every changed vault has been opened. Only shown when a changed vault is
-        not the one on screen — otherwise it would be pointing at where the user
-        already is.
-      */}
-      {changed.length > 0 && !changed.includes(selectedId ?? "") && (
-        <button className="sidebar__changed" onClick={onShowChanged}>
-          {changed.length === 1 ? "1 vault changed" : `${changed.length} vaults changed`}
-        </button>
-      )}
 
       <div className="sidebar__foot">
         <div className="sidebar__who">

@@ -452,26 +452,6 @@ code,
   flex: none;
 }
 
-/* The summary, as a line of text rather than a badge. Sits above the identity
-   block so it reads as part of the vault list. */
-.sidebar__changed {
-  margin: 0 0 12px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.sidebar__changed:hover {
-  color: var(--text);
-}
-
 .sidebar__new {
   margin: 4px 0 18px;
   padding: 6px 10px;

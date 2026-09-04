@@ -46,9 +46,9 @@ password — the vault key is derived for your Internet Identity principal.
     adapt-on-refusal path remains as a fallback — the canister is still the only
     authority.
 - **You can see which vaults changed while you were away.** A dot on the
-  sidebar row, and one line of text — *"2 vaults changed"* — that takes you to
-  the first. Deliberately not a notification: it never interrupts, and it clears
-  by the action it describes, opening the vault.
+  sidebar row — deliberately not a notification: it never interrupts, and it
+  clears by the action it describes, opening the vault. No count, no banner, no
+  link; the dots are the whole signal.
   - Costs nothing on the wire. The poll already carries a content digest and a
     trash digest per vault; this is a second reader of data that was only being
     used to refresh the view.
@@ -65,6 +65,13 @@ password — the vault key is derived for your Internet Identity principal.
   - **A new *item* is flagged where a new *vault* is not.** The difference is
     deliberate: a vault appearing in the sidebar is visibly new, a row in a long
     list is not — so leaving it unmarked would answer nothing.
+  - **Your own writes are never marked.** You know what you just typed. The
+    exemption is per write rather than per item, so a colleague changing
+    something you once edited still shows.
+  - **If everything would be marked, nothing is.** Marks that no longer match
+    any item — after a reinstall, or a vault emptied and refilled — are
+    re-recorded rather than flagging every row, because "everything changed" is
+    never the useful answer.
   - Only contents and trash count. A rename or a new collaborator is visible in
     the row already, so flagging it would report something you can see.
   - The marks live in `localStorage`, per principal, and **survive a lock** —

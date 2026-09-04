@@ -110,6 +110,14 @@ export function App() {
    * how first sight is told apart from a vault with no items.
    */
   const [itemMarks, setItemMarks] = useState<seen.ItemMarks>({});
+  /**
+   * Items this client has written since the last facts read.
+   *
+   * You do not need telling about your own edit. Held in a ref rather than
+   * state because nothing renders from it — it is consumed by the reload that
+   * every write triggers, and cleared there.
+   */
+  const written = useRef<string[]>([]);
   // Guards every load that crosses an await. See lib/vault-session: a request
   // already on the wire when the vault locks must not write the previous
   // session's vault list back into the state the lock just cleared.
@@ -440,8 +448,10 @@ export function App() {
         // First sight of a vault records its items rather than flagging them.
         // Afterwards this only prunes, so the dots stay put while the list is
         // being read — they clear when an item is opened.
+        const mine = written.current;
+        written.current = [];
         setItemMarks((current) => {
-          const next = seen.afterReadingVault(vaultId(summary), facts, current);
+          const next = seen.afterReadingVault(vaultId(summary), facts, current, mine);
           seen.saveItems(client.me.toText(), next);
           return next;
         });
@@ -679,24 +689,6 @@ export function App() {
         onRefresh={() => void refresh({ manual: true })}
         onNewVault={() => patch({ creating: true })}
         changed={changedVaults}
-        onShowChanged={() => {
-          const first = changedVaults[0];
-          if (first === undefined) return;
-          setMarks((current) => {
-            const marked = seen.afterViewing(vaults ?? [], current, first);
-            if (client) seen.save(client.me.toText(), marked);
-            return marked;
-          });
-          patch({
-            selectedVaultId: first,
-            selectedItemId: null,
-            openItems: null,
-            itemFacts: null,
-            history: null,
-            pane: { mode: "view" },
-            query: "",
-          });
-        }}
         syncing={syncing}
         syncedAt={syncedAt}
       />
@@ -816,7 +808,8 @@ export function App() {
             onSave={(item) =>
               run(
                 async () => {
-                  await client!.saveItem(vault, item);
+                  written.current = [...written.current, item.id];
+                await client!.saveItem(vault, item);
                   patch({ selectedItemId: item.id, pane: { mode: "view" } });
                 },
                 pane.isNew ? "Item saved" : "Changes saved",
@@ -842,6 +835,7 @@ export function App() {
             onRestoreVersion={(seq) =>
               void run(
                 async () => {
+                  written.current = [...written.current, selectedItem.id];
                   await client!.restoreVersion(vault, seq);
                   // The restore replaced the live value, so the open items and
                   // the per-item facts are both stale.
@@ -888,6 +882,8 @@ export function App() {
           onRestore={(seq) =>
             void run(
               async () => {
+                const restored = trash?.find((row) => row.seq === seq)?.item.id;
+                if (restored !== undefined) written.current = [...written.current, restored];
                 await client!.restoreVersion(vault, seq);
                 patch({ trash: await client!.listTrash(vault), openItems: null });
               },
@@ -911,6 +907,7 @@ export function App() {
           onRestoreAll={() =>
             void run(
               async () => {
+                written.current = [...written.current, ...(trash ?? []).map((row) => row.item.id)];
                 const n = await client!.restoreAll(vault);
                 patch({ trash: null, openItems: null });
                 notify(`${n} item${n === 1 ? "" : "s"} restored`);

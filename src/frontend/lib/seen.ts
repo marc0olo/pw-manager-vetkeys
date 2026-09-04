@@ -231,16 +231,39 @@ export function changedItems(
  * item rather than on arrival. Prunes items that are gone, so a vault whose
  * contents churn does not accumulate rows.
  */
-export function afterReadingVault(vaultId: string, facts: ItemFacts, marks: ItemMarks): ItemMarks {
+export function afterReadingVault(
+  vaultId: string,
+  facts: ItemFacts,
+  marks: ItemMarks,
+  /** Ids this client has just written, which it should not be told about. */
+  mine: readonly string[] = [],
+): ItemMarks {
   const seen = marks[vaultId];
-  if (seen === undefined) {
+  const recordAll = () => {
     const fresh: Record<string, number> = {};
     for (const [id, fact] of Object.entries(facts)) fresh[id] = fact.updatedAt;
     return { ...marks, [vaultId]: fresh };
+  };
+
+  // Never opened.
+  if (seen === undefined) return recordAll();
+
+  // Or opened, but the marks describe items that no longer exist — no id in
+  // common with what is there now. A reinstall does this, and so does emptying
+  // a vault and refilling it: every id is different, so every row would be
+  // flagged. **If the honest answer is "everything changed", the useful answer
+  // is "I know nothing"** — the same reasoning as first sight, and it
+  // self-heals rather than staying wrong until each row is clicked.
+  const overlap = Object.keys(facts).some((id) => seen[id] !== undefined);
+  if (Object.keys(seen).length > 0 && Object.keys(facts).length > 0 && !overlap) {
+    return recordAll();
   }
+
   const kept: Record<string, number> = {};
   for (const id of Object.keys(facts)) {
-    if (seen[id] !== undefined) kept[id] = seen[id];
+    // A write this client made is not news to the person who made it.
+    if (mine.includes(id)) kept[id] = facts[id]!.updatedAt;
+    else if (seen[id] !== undefined) kept[id] = seen[id];
   }
   return { ...marks, [vaultId]: kept };
 }

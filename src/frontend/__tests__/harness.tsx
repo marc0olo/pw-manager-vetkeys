@@ -138,7 +138,7 @@ export class FakeClient {
     this.items.delete(summary.name);
   });
 
-  saveItem = vi.fn(async () => this.guard("write"));
+  saveItem = vi.fn(async (_vault: VaultSummary, _item: VaultItem) => this.guard("write"));
   deleteItem = vi.fn(async () => this.guard("write"));
   wipe = vi.fn(async () => this.guard("write"));
   rename = vi.fn(async () => this.guard("write"));
