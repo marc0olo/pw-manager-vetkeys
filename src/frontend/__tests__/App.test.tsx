@@ -1459,3 +1459,395 @@ describe("sharing with someone who already has access", () => {
     expect(client.share).not.toHaveBeenCalled();
   });
 });
+
+describe("noticing that someone else changed a vault", () => {
+  // Deliberately not a notification. The signal has to be findable while
+  // scanning the sidebar and must never demand attention, so it is a dot on the
+  // row plus one line of text — and it clears by the action it describes.
+  const twoVaults = () =>
+    new FakeClient(
+      ALICE,
+      [
+        vault({ name: "aaa", displayName: "Personal", itemIds: ["a"], fingerprint: "f-a" }),
+        vault({ name: "bbb", displayName: "Work", itemIds: ["b"], fingerprint: "f-b" }),
+      ],
+      { aaa: [item({ id: "a", title: "GitHub" })], bbb: [item({ id: "b", title: "Payroll" })] },
+    );
+  const dots = () => screen.queryAllByText(/changed since you last looked/i);
+
+  beforeEach(() => window.localStorage.clear());
+
+  it("says nothing on a first sign-in", async () =>
+    onFakeTimers(async () => {
+      // A new device has never looked at anything, so it has no basis to claim
+      // something changed. Flagging everything here is the noise this avoids.
+      signedInAs(ALICE, twoVaults());
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      expect(dots()).toHaveLength(0);
+    }));
+
+  it("marks the vault you were not looking at", async () =>
+    onFakeTimers(async () => {
+      const client = twoVaults();
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      // Someone edits the vault that is not on screen.
+      client.vaults = [
+        vault({ name: "aaa", displayName: "Personal", itemIds: ["a"], fingerprint: "f-a" }),
+        vault({ name: "bbb", displayName: "Work", itemIds: ["b", "c"], fingerprint: "f-b2" }),
+      ];
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+
+      expect(dots()).toHaveLength(1);
+    }));
+
+  it("does not mark the vault you are looking at", async () =>
+    onFakeTimers(async () => {
+      const client = twoVaults();
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      // The selected one changes under the user, who is watching it.
+      client.vaults = [
+        vault({ name: "aaa", displayName: "Personal", itemIds: ["a", "z"], fingerprint: "f-a2" }),
+        vault({ name: "bbb", displayName: "Work", itemIds: ["b"], fingerprint: "f-b" }),
+      ];
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+
+      expect(dots()).toHaveLength(0);
+    }));
+
+  it("clears the mark when the vault is opened", async () =>
+    onFakeTimers(async () => {
+      const client = twoVaults();
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      client.vaults = [
+        vault({ name: "aaa", displayName: "Personal", itemIds: ["a"], fingerprint: "f-a" }),
+        vault({ name: "bbb", displayName: "Work", itemIds: ["b", "c"], fingerprint: "f-b2" }),
+      ];
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+      expect(dots()).toHaveLength(1);
+
+      fireEvent.click(screen.getByText("Work"));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      expect(dots()).toHaveLength(0);
+    }));
+
+  it("survives a lock, unlike the rest of the session", async () =>
+    onFakeTimers(async () => {
+      const client = twoVaults();
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      client.vaults = [
+        vault({ name: "aaa", displayName: "Personal", itemIds: ["a"], fingerprint: "f-a" }),
+        vault({ name: "bbb", displayName: "Work", itemIds: ["b", "c"], fingerprint: "f-b2" }),
+      ];
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+      expect(dots()).toHaveLength(1);
+
+      fireEvent.click(screen.getByRole("button", { name: /lock vault/i }));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      h.signIn.mockResolvedValue(identityFor(ALICE));
+      h.createClient.mockResolvedValue(client);
+      fireEvent.click(screen.getByRole("button", { name: /unlock/i }));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      // "Changed since I last looked" is meaningless if locking resets it.
+      expect(dots()).toHaveLength(1);
+    }));
+
+  it("stays quiet when only the name changed", async () =>
+    onFakeTimers(async () => {
+      const client = twoVaults();
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      client.vaults = [
+        vault({ name: "aaa", displayName: "Personal", itemIds: ["a"], fingerprint: "f-a" }),
+        vault({ name: "bbb", displayName: "Renamed", itemIds: ["b"], fingerprint: "f-b" }),
+      ];
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+
+      // Visible in the row itself, so flagging it would report an event the
+      // user can already see.
+      expect(dots()).toHaveLength(0);
+    }));
+});
+
+describe("noticing which item changed, not just which vault", () => {
+  // "Work changed" in a two-hundred-item vault is a signal nobody can act on.
+  // The timestamps come from `itemFacts`, which the vault open already fetched
+  // for the detail pane — so this costs no request and nothing on the poll.
+  const T = Date.UTC(2026, 0, 3, 11, 15);
+  const twoItems = () =>
+    Object.assign(
+      new FakeClient(ALICE, [vault({ itemIds: ["a", "b"], fingerprint: "f0" })], {
+        Personal: [item({ id: "a", title: "GitHub" }), item({ id: "b", title: "Bank" })],
+      }),
+      { stamps: { a: T, b: T } },
+    );
+  const dots = () => screen.queryAllByText(/since you last looked/i);
+
+  beforeEach(() => window.localStorage.clear());
+
+  it("says nothing the first time the vault is opened", async () =>
+    onFakeTimers(async () => {
+      signedInAs(ALICE, twoItems());
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      expect(dots()).toHaveLength(0);
+    }));
+
+  it("marks the item someone else edited", async () =>
+    onFakeTimers(async () => {
+      const client = twoItems();
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      // Someone edits `a`. Its recorded write time moves and the vault digest
+      // changes, so the poll re-reads the items.
+      client.stamps = { a: T + 60_000, b: T };
+      client.vaults = [vault({ itemIds: ["a", "b"], fingerprint: "f1" })];
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+
+      expect(dots()).toHaveLength(1);
+      expect(screen.getByTitle(/changed since you last looked/i)).toBeInTheDocument();
+    }));
+
+  it("marks an added item as added, not merely changed", async () =>
+    onFakeTimers(async () => {
+      const client = twoItems();
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      client.items.set("Personal", [
+        item({ id: "a", title: "GitHub" }),
+        item({ id: "b", title: "Bank" }),
+        item({ id: "c", title: "New one" }),
+      ]);
+      client.stamps = { a: T, b: T, c: T + 60_000 };
+      client.vaults = [vault({ itemIds: ["a", "b", "c"], fingerprint: "f1" })];
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+
+      // A new *vault* is not flagged because it is visibly new. A new row in a
+      // long list is not visible at all, so it is.
+      expect(screen.getByTitle(/added since you last looked/i)).toBeInTheDocument();
+    }));
+
+  it("keeps the mark while the list is being read, and clears it on opening the item", async () =>
+    onFakeTimers(async () => {
+      const client = twoItems();
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      client.stamps = { a: T + 60_000, b: T };
+      client.vaults = [vault({ itemIds: ["a", "b"], fingerprint: "f1" })];
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+      expect(dots()).toHaveLength(1);
+
+      // Another poll must not clear it — clearing on arrival would flash the
+      // dot once and lose it.
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+      expect(dots()).toHaveLength(1);
+
+      fireEvent.click(screen.getByText("GitHub"));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      expect(dots()).toHaveLength(0);
+    }));
+
+  it("survives a lock, like the vault marks", async () =>
+    onFakeTimers(async () => {
+      const client = twoItems();
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      client.stamps = { a: T + 60_000, b: T };
+      client.vaults = [vault({ itemIds: ["a", "b"], fingerprint: "f1" })];
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+      expect(dots()).toHaveLength(1);
+
+      fireEvent.click(screen.getByRole("button", { name: /lock vault/i }));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      h.signIn.mockResolvedValue(identityFor(ALICE));
+      h.createClient.mockResolvedValue(client);
+      fireEvent.click(screen.getByRole("button", { name: /unlock/i }));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      expect(dots()).toHaveLength(1);
+    }));
+});
+
+describe("your own writes are not news to you", () => {
+  const T = Date.UTC(2026, 0, 3, 11, 15);
+  beforeEach(() => window.localStorage.clear());
+
+  const withTwo = () =>
+    Object.assign(
+      new FakeClient(ALICE, [vault({ itemIds: ["a", "b"], fingerprint: "f0" })], {
+        Personal: [item({ id: "a", title: "GitHub" }), item({ id: "b", title: "Bank" })],
+      }),
+      { stamps: { a: T, b: T } },
+    );
+  const dots = () => screen.queryAllByText(/since you last looked/i);
+
+  it("does not mark a secret you just added", async () =>
+    onFakeTimers(async () => {
+      const client = withTwo();
+      client.saveItem = vi.fn(async (_v: unknown, added: { id: string }) => {
+        client.items.set("Personal", [
+          item({ id: "a", title: "GitHub" }),
+          item({ id: "b", title: "Bank" }),
+          item({ id: added.id, title: "Mine" }),
+        ]);
+        client.stamps = { a: T, b: T, [added.id]: T + 60_000 };
+        client.vaults = [vault({ itemIds: ["a", "b", added.id], fingerprint: "f1" })];
+      });
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      fireEvent.click(screen.getByRole("button", { name: /new item/i }));
+      fireEvent.change(screen.getByLabelText(/^title$/i), { target: { value: "Mine" } });
+      fireEvent.click(screen.getByRole("button", { name: /save/i }));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      // You know what you just typed.
+      expect(dots()).toHaveLength(0);
+    }));
+
+  it("does not mark a secret you just edited", async () =>
+    onFakeTimers(async () => {
+      const client = withTwo();
+      client.saveItem = vi.fn(async () => {
+        client.stamps = { a: T + 60_000, b: T };
+        client.vaults = [vault({ itemIds: ["a", "b"], fingerprint: "f1" })];
+      });
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      fireEvent.click(screen.getByText("GitHub"));
+      fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+      fireEvent.click(screen.getByRole("button", { name: /save/i }));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      expect(dots()).toHaveLength(0);
+    }));
+
+  it("exempts the write, not the item — a later change by someone else still shows", async () =>
+    onFakeTimers(async () => {
+      // The exemption is consumed by the reload your write triggers. Leaving it
+      // set would make an item you once edited permanently silent.
+      const client = withTwo();
+      client.saveItem = vi.fn(async () => {
+        client.stamps = { a: T + 60_000, b: T };
+        client.vaults = [vault({ itemIds: ["a", "b"], fingerprint: "f1" })];
+      });
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      fireEvent.click(screen.getByText("GitHub"));
+      fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+      fireEvent.click(screen.getByRole("button", { name: /save/i }));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(dots()).toHaveLength(0);
+
+      // Now somebody else edits the same item.
+      client.stamps = { a: T + 120_000, b: T };
+      client.vaults = [vault({ itemIds: ["a", "b"], fingerprint: "f2" })];
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+
+      expect(dots()).toHaveLength(1);
+    }));
+
+  it("still marks what somebody else changed in the same read", async () =>
+    onFakeTimers(async () => {
+      // The exemption is per item, not a blanket "ignore this refresh" — your
+      // own save must not hide a collaborator's edit that lands with it.
+      const client = withTwo();
+      client.saveItem = vi.fn(async () => {
+        client.stamps = { a: T + 60_000, b: T + 90_000 };
+        client.vaults = [vault({ itemIds: ["a", "b"], fingerprint: "f1" })];
+      });
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      fireEvent.click(screen.getByText("GitHub"));
+      fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+      fireEvent.click(screen.getByRole("button", { name: /save/i }));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      // `a` was mine; `b` was not.
+      expect(dots()).toHaveLength(1);
+    }));
+});
+
+describe("when the marks describe items that no longer exist", () => {
+  // What a canister reinstall does, and what emptying a vault and refilling it
+  // does: every id is different, so every row would be flagged. If the honest
+  // answer is "everything changed", the useful answer is "I know nothing".
+  const T = Date.UTC(2026, 0, 3, 11, 15);
+  const dots = () => screen.queryAllByText(/since you last looked/i);
+
+  it("flags nothing, and re-records instead of staying wrong", async () =>
+    onFakeTimers(async () => {
+      window.localStorage.clear();
+      // Marks left over from items that are gone.
+      window.localStorage.setItem(
+        "vetvault:seen-items:2ibo7-dia",
+        JSON.stringify({ "2ibo7-dia/Personal": { old1: T, old2: T } }),
+      );
+      const client = Object.assign(
+        new FakeClient(ALICE, [vault({ itemIds: ["new1", "new2"] })], {
+          Personal: [item({ id: "new1", title: "One" }), item({ id: "new2", title: "Two" })],
+        }),
+        { stamps: { new1: T, new2: T } },
+      );
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      expect(dots()).toHaveLength(0);
+      // Re-recorded, so the stale ids are gone rather than lingering.
+      const stored = JSON.parse(window.localStorage.getItem("vetvault:seen-items:2ibo7-dia") ?? "{}");
+      expect(Object.keys(stored["2ibo7-dia/Personal"]).sort()).toEqual(["new1", "new2"]);
+    }));
+
+  it("but a partial overlap is a real change, not a reset", async () =>
+    onFakeTimers(async () => {
+      window.localStorage.clear();
+      window.localStorage.setItem(
+        "vetvault:seen-items:2ibo7-dia",
+        JSON.stringify({ "2ibo7-dia/Personal": { a: T } }),
+      );
+      const client = Object.assign(
+        new FakeClient(ALICE, [vault({ itemIds: ["a", "b"] })], {
+          Personal: [item({ id: "a", title: "One" }), item({ id: "b", title: "Two" })],
+        }),
+        { stamps: { a: T, b: T } },
+      );
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      // `a` is known and unchanged; `b` is genuinely new.
+      expect(dots()).toHaveLength(1);
+      expect(screen.getByTitle(/added since you last looked/i)).toBeInTheDocument();
+    }));
+});

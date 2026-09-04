@@ -10,6 +10,14 @@ interface Props {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
+  /**
+   * Item ids added or edited since this vault was last opened.
+   *
+   * A new *item* is flagged where a new *vault* is not: a vault appearing in
+   * the sidebar is visibly new, a row in a long list is not — so leaving it
+   * unmarked would answer nothing.
+   */
+  changed: Readonly<Record<string, "new" | "changed">>;
   canWrite: boolean;
   /** The vault's items are still being decrypted. */
   loading: boolean;
@@ -23,6 +31,7 @@ export function ItemList({
   selectedId,
   onSelect,
   onNew,
+  changed,
   canWrite,
   loading,
 }: Props) {
@@ -78,6 +87,19 @@ export function ItemList({
                     <span className="itemRow__title">{label}</span>
                     <span className="itemRow__sub">{item.username || host || "—"}</span>
                   </span>
+                  {changed[item.id] !== undefined && (
+                    // Same dot as the sidebar's, at item scale. Titled rather
+                    // than labelled with a word, so a long list does not turn
+                    // into a column of badges.
+                    <span
+                      className="itemRow__changed"
+                      title={changed[item.id] === "new" ? "Added since you last looked" : "Changed since you last looked"}
+                    >
+                      <span className="visuallyHidden">
+                        {changed[item.id] === "new" ? "added" : "changed"} since you last looked
+                      </span>
+                    </span>
+                  )}
                 </button>
               </li>
             );

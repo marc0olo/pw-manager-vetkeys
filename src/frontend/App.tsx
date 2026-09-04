@@ -41,6 +41,7 @@ import { DeleteItemDialog } from "./components/DeleteItemDialog";
 import { DeleteVaultDialog } from "./components/DeleteVaultDialog";
 import { TrashButton, TrashDialog } from "./components/TrashDialog";
 import { ShareDialog } from "./components/ShareDialog";
+import * as seen from "./lib/seen";
 import { Sidebar } from "./components/Sidebar";
 import { CheckIcon, CopyIcon, PencilIcon, ShareIcon, TrashIcon } from "./components/Icons";
 
@@ -93,6 +94,30 @@ export function App() {
     setVaultSession(vaultStateRef.current);
   }, []);
   const [syncing, setSyncing] = useState(false);
+  /**
+   * Per-vault "what it held when you last looked".
+   *
+   * Not in `VaultSessionState`: every field there is cleared on lock because it
+   * holds plaintext or an open dialog, and "since I last looked" is meaningless
+   * if locking resets it. Persisted per principal instead — see lib/seen.ts.
+   */
+  const [marks, setMarks] = useState<seen.Marks>({});
+  /**
+   * Per-item "when you last looked at this one".
+   *
+   * A separate map from the vault marks, and stored under its own key, because
+   * the absence of a *vault's* entry is what means "never opened" — which is
+   * how first sight is told apart from a vault with no items.
+   */
+  const [itemMarks, setItemMarks] = useState<seen.ItemMarks>({});
+  /**
+   * Items this client has written since the last facts read.
+   *
+   * You do not need telling about your own edit. Held in a ref rather than
+   * state because nothing renders from it — it is consumed by the reload that
+   * every write triggers, and cleared there.
+   */
+  const written = useRef<string[]>([]);
   // Guards every load that crosses an await. See lib/vault-session: a request
   // already on the wire when the vault locks must not write the previous
   // session's vault list back into the state the lock just cleared.
@@ -135,7 +160,20 @@ export function App() {
       // Chosen here rather than left to the render, so that the vault on screen
       // and the vault every other consumer reasons about are the same one. See
       // #16: an implicit selection meant the poll ignored the open vault.
-      patch({ vaults: listed, selectedVaultId: defaultVaultId(listed), syncedAt: Date.now() });
+      const landing = defaultVaultId(listed);
+      patch({ vaults: listed, selectedVaultId: landing, syncedAt: Date.now() });
+      // Marks are per principal and survive a lock, so they are read here
+      // rather than reset. First sight of a vault records it without flagging
+      // it — otherwise a new device would mark everything.
+      const principal = vaultClient.me.toText();
+      // Another identity's marks name the owners of vaults shared with *them*,
+      // so a shared device should not keep them. Swept here rather than on
+      // lock, which must leave the current principal's marks intact.
+      seen.sweep(principal);
+      const advanced = seen.afterPoll(listed, seen.load(principal), landing);
+      seen.save(principal, advanced);
+      setMarks(advanced);
+      setItemMarks(seen.loadItems(principal));
     } catch (caught) {
       // A failure that belongs to an ended session must not raise a banner on
       // the locked screen.
@@ -171,6 +209,20 @@ export function App() {
         if (!current()) return;
         const outcome = pollUpdate(vaultStateRef.current, next, Date.now());
         patch(outcome.patch);
+        // After the patch, so the vault the user is now on is the one whose
+        // mark advances — the poll can move the selection.
+        setMarks((current) => {
+          const advanced = seen.afterPoll(next, current, outcome.patch.selectedVaultId ?? null);
+          seen.save(client.me.toText(), advanced);
+          return advanced;
+        });
+        // Item marks are pruned but never advanced here: they clear per item,
+        // so that the dots survive while the user scans the list.
+        setItemMarks((current) => {
+          const pruned = seen.pruneItems(next.map(vaultId), current);
+          seen.saveItems(client.me.toText(), pruned);
+          return pruned;
+        });
         if (outcome.movedVault) {
           // Any banner was about the vault we just left. "You no longer have
           // access to this vault" is worse than useless once "this vault" is a
@@ -391,7 +443,18 @@ export function App() {
       .openVault(summary)
       .then(async (items) => {
         const facts = await client.itemSummaries(summary);
-        if (!cancelled) patch({ openItems: items, itemFacts: facts });
+        if (cancelled) return;
+        patch({ openItems: items, itemFacts: facts });
+        // First sight of a vault records its items rather than flagging them.
+        // Afterwards this only prunes, so the dots stay put while the list is
+        // being read — they clear when an item is opened.
+        const mine = written.current;
+        written.current = [];
+        setItemMarks((current) => {
+          const next = seen.afterReadingVault(vaultId(summary), facts, current, mine);
+          seen.saveItems(client.me.toText(), next);
+          return next;
+        });
       })
       .catch((caught) => {
         if (cancelled) return;
@@ -414,6 +477,18 @@ export function App() {
   const vault: Vault | null = useMemo(
     () => (summary ? { ...summary, items: openItems ?? [] } : null),
     [summary, openItems],
+  );
+
+  // Recomputed rather than stored: it is a comparison of two things already in
+  // state, and storing it would give it a second chance to disagree with them.
+  const changedVaults = useMemo(() => seen.changed(vaults ?? [], marks), [vaults, marks]);
+
+  // Read from `itemFacts`, which the vault open already fetched for the detail
+  // pane — every other item's timestamp was sitting there unused, so item-level
+  // marks need no request of their own.
+  const changedInVault = useMemo(
+    () => (summary && itemFacts ? seen.changedItems(vaultId(summary), itemFacts, itemMarks) : {}),
+    [summary, itemFacts, itemMarks],
   );
 
   const visibleItems = useMemo(
@@ -582,6 +657,13 @@ export function App() {
         vaults={vaults ?? []}
         selectedId={vaultId(vault)}
         onSelect={(id) => {
+          // Opening it is what "I looked" means, so the flag clears here rather
+          // than on the next poll.
+          setMarks((current) => {
+            const marked = seen.afterViewing(vaults ?? [], current, id);
+            if (client) seen.save(client.me.toText(), marked);
+            return marked;
+          });
           patch({
             selectedVaultId: id,
             selectedItemId: null,
@@ -606,6 +688,7 @@ export function App() {
         sessionExpiresAt={expiresAt}
         onRefresh={() => void refresh({ manual: true })}
         onNewVault={() => patch({ creating: true })}
+        changed={changedVaults}
         syncing={syncing}
         syncedAt={syncedAt}
       />
@@ -616,7 +699,16 @@ export function App() {
         query={query}
         onQueryChange={(next) => patch({ query: next })}
         selectedId={selectedItem?.id ?? null}
+        changed={changedInVault}
         onSelect={(id) => {
+          // Opening it is what "I looked" means, one level down from a vault.
+          if (summary && itemFacts) {
+            setItemMarks((current) => {
+              const next = seen.afterViewingItem(vaultId(summary), id, itemFacts, current);
+              if (client) seen.saveItems(client.me.toText(), next);
+              return next;
+            });
+          }
           // Drop the version list read for the item being left. The render is
           // keyed to `itemId` so a stale one is never shown; this just stops it
           // being held for longer than it is useful.
@@ -716,7 +808,8 @@ export function App() {
             onSave={(item) =>
               run(
                 async () => {
-                  await client!.saveItem(vault, item);
+                  written.current = [...written.current, item.id];
+                await client!.saveItem(vault, item);
                   patch({ selectedItemId: item.id, pane: { mode: "view" } });
                 },
                 pane.isNew ? "Item saved" : "Changes saved",
@@ -742,6 +835,7 @@ export function App() {
             onRestoreVersion={(seq) =>
               void run(
                 async () => {
+                  written.current = [...written.current, selectedItem.id];
                   await client!.restoreVersion(vault, seq);
                   // The restore replaced the live value, so the open items and
                   // the per-item facts are both stale.
@@ -788,6 +882,8 @@ export function App() {
           onRestore={(seq) =>
             void run(
               async () => {
+                const restored = trash?.find((row) => row.seq === seq)?.item.id;
+                if (restored !== undefined) written.current = [...written.current, restored];
                 await client!.restoreVersion(vault, seq);
                 patch({ trash: await client!.listTrash(vault), openItems: null });
               },
@@ -811,6 +907,7 @@ export function App() {
           onRestoreAll={() =>
             void run(
               async () => {
+                written.current = [...written.current, ...(trash ?? []).map((row) => row.item.id)];
                 const n = await client!.restoreAll(vault);
                 patch({ trash: null, openItems: null });
                 notify(`${n} item${n === 1 ? "" : "s"} restored`);

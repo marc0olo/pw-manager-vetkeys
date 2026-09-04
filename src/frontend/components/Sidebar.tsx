@@ -15,6 +15,14 @@ interface Props {
   sessionExpiresAt: number | null;
   onRefresh: () => void;
   onNewVault: () => void;
+  /**
+   * Vault ids whose contents moved since the user last looked at them.
+   *
+   * Rendered as a quiet marker on the row, not as a notification: the signal is
+   * worth having only if it never demands attention. It clears by the action it
+   * describes — opening the vault.
+   */
+  changed: readonly string[];
   syncing: boolean;
   /** When the vault list was last read, in ms since the epoch. */
   syncedAt: number | null;
@@ -40,6 +48,7 @@ export function Sidebar({
   sessionExpiresAt,
   onRefresh,
   onNewVault,
+  changed,
   syncing,
   syncedAt,
 }: Props) {
@@ -73,12 +82,19 @@ export function Sidebar({
           vaults={owned}
           selectedId={selectedId}
           onSelect={onSelect}
+          changed={changed}
         />
         <button className="sidebar__new" onClick={onNewVault}>
           + New vault
         </button>
         {shared.length > 0 && (
-          <VaultGroup title="Shared with me" vaults={shared} selectedId={selectedId} onSelect={onSelect} />
+          <VaultGroup
+            title="Shared with me"
+            vaults={shared}
+            selectedId={selectedId}
+            onSelect={onSelect}
+            changed={changed}
+          />
         )}
       </nav>
 
@@ -114,11 +130,13 @@ function VaultGroup({
   vaults,
   selectedId,
   onSelect,
+  changed,
 }: {
   title: string;
   vaults: VaultSummary[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  changed: readonly string[];
 }) {
   return (
     <div className="sidebar__group">
@@ -134,6 +152,13 @@ function VaultGroup({
                 onClick={() => onSelect(id)}
               >
                 <span className="vaultRow__name">{vaultLabel(vault)}</span>
+                {changed.includes(id) && (
+                  // A dot, and a name for screen readers. Nothing about it
+                  // asks to be dealt with.
+                  <span className="vaultRow__changed" title="Changed since you last looked">
+                    <span className="visuallyHidden">changed since you last looked</span>
+                  </span>
+                )}
                 <span className="vaultRow__count">{vault.itemIds.length}</span>
                 {vault.isOwned && sharedCount > 0 && (
                   <span

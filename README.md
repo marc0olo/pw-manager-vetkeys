@@ -45,6 +45,50 @@ password — the vault key is derived for your Internet Identity principal.
     read-only collaborator being shown Delete until it was refused. The
     adapt-on-refusal path remains as a fallback — the canister is still the only
     authority.
+- **You can see which vaults changed while you were away.** A dot on the
+  sidebar row — deliberately not a notification: it never interrupts, and it
+  clears by the action it describes, opening the vault. No count, no banner, no
+  link; the dots are the whole signal.
+  - Costs nothing on the wire. The poll already carries a content digest and a
+    trash digest per vault; this is a second reader of data that was only being
+    used to refresh the view.
+  - **And which item**, once you open that vault: a dot per row, saying whether
+    it was added or edited. Without it, "Work changed" in a two-hundred-item
+    vault is a signal you cannot act on. The timestamps come from the per-item
+    read the vault open already does, so this costs no request and nothing on
+    the poll — and from there, an item's **earlier versions** show what it used
+    to hold.
+  - **A vault seen for the first time is recorded, not flagged.** Otherwise a
+    new device, a fresh browser or cleared site data would mark everything,
+    which is the noise the feature exists to avoid. Same one level down: the
+    first time a vault is opened, its items are recorded rather than marked.
+  - **A new *item* is flagged where a new *vault* is not.** The difference is
+    deliberate: a vault appearing in the sidebar is visibly new, a row in a long
+    list is not — so leaving it unmarked would answer nothing.
+  - **Your own writes are never marked.** You know what you just typed. The
+    exemption is per write rather than per item, so a colleague changing
+    something you once edited still shows.
+  - **If everything would be marked, nothing is.** Marks that no longer match
+    any item — after a reinstall, or a vault emptied and refilled — are
+    re-recorded rather than flagging every row, because "everything changed" is
+    never the useful answer.
+  - Only contents and trash count. A rename or a new collaborator is visible in
+    the row already, so flagging it would report something you can see.
+  - The marks live in `localStorage`, per principal, and **survive a lock** —
+    unlike everything in the session state, because "since I last looked" is
+    meaningless if locking resets it.
+  - **What that puts on the device**, stated precisely because "vault names on
+    disk" would be wrong twice over. A mark is
+    `<owner principal>/<map id>` → `<digest>:<digest>`. The **display name is
+    not written**, so nothing on disk says `Divorce lawyer`; map ids are random
+    for vaults this app creates. What *is* new is that the keys carry the
+    **owner principals of vaults shared with you**, and how many vaults each
+    shares — the first time this app records other people's identifiers
+    locally. The item-level marks add random item ids and write times under
+    their own key, which grows with how much you store rather than with how
+    many vaults you have. Signing in sweeps every other principal's marks —
+    both kinds — for the same reason the key-store purge deletes stores left by
+    principals no longer recorded.
 - **Changes appear on their own.** The vault list is re-read every 15 seconds
   and immediately on returning to the tab, so a vault someone shares with you
   shows up without a reload. The **check-for-changes** button only cuts that
@@ -131,6 +175,7 @@ src/frontend/lib/vault.ts  Encrypt/decrypt and access control over EncryptedMaps
 src/frontend/lib/items.ts  The item model and its JSON encoding
 src/frontend/lib/reconcile.ts  What the UI does when the canister changes underneath
 src/frontend/lib/poll.ts     What a poll changes, as one patch
+src/frontend/lib/seen.ts     Which vaults changed since you last looked
 src/frontend/lib/auth.ts   Internet Identity, and the load-time session gate
 src/frontend/lib/session.ts  Idle timeout, activity mark, cross-tab lock, key purge
 src/frontend/lib/lock.ts     The lock sequence: ordering and failure safety

@@ -417,6 +417,41 @@ code,
   gap: 8px;
 }
 
+/* Announced but not drawn, for the change marker's meaning. */
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A dot, deliberately. The signal has to be findable while scanning the list
+   and must not read as something to deal with — so no count, no colour that
+   means "error", and nothing that moves. */
+/* The item-list counterpart of `.vaultRow__changed`. Same dot, same meaning,
+   one level down — pushed to the right so a long list reads as a column of
+   titles with occasional marks rather than as a list of badges. */
+.itemRow__changed {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--blue);
+  flex: none;
+  margin-left: auto;
+}
+
+.vaultRow__changed {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--blue);
+  flex: none;
+}
+
 .sidebar__new {
   margin: 4px 0 18px;
   padding: 6px 10px;
