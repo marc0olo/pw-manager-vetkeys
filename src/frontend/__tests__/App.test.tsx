@@ -1609,3 +1609,110 @@ describe("noticing that someone else changed a vault", () => {
       expect(dots()).toHaveLength(0);
     }));
 });
+
+describe("noticing which item changed, not just which vault", () => {
+  // "Work changed" in a two-hundred-item vault is a signal nobody can act on.
+  // The timestamps come from `itemFacts`, which the vault open already fetched
+  // for the detail pane — so this costs no request and nothing on the poll.
+  const T = Date.UTC(2026, 0, 3, 11, 15);
+  const twoItems = () =>
+    Object.assign(
+      new FakeClient(ALICE, [vault({ itemIds: ["a", "b"], fingerprint: "f0" })], {
+        Personal: [item({ id: "a", title: "GitHub" }), item({ id: "b", title: "Bank" })],
+      }),
+      { stamps: { a: T, b: T } },
+    );
+  const dots = () => screen.queryAllByText(/since you last looked/i);
+
+  beforeEach(() => window.localStorage.clear());
+
+  it("says nothing the first time the vault is opened", async () =>
+    onFakeTimers(async () => {
+      signedInAs(ALICE, twoItems());
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      expect(dots()).toHaveLength(0);
+    }));
+
+  it("marks the item someone else edited", async () =>
+    onFakeTimers(async () => {
+      const client = twoItems();
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      // Someone edits `a`. Its recorded write time moves and the vault digest
+      // changes, so the poll re-reads the items.
+      client.stamps = { a: T + 60_000, b: T };
+      client.vaults = [vault({ itemIds: ["a", "b"], fingerprint: "f1" })];
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+
+      expect(dots()).toHaveLength(1);
+      expect(screen.getByTitle(/changed since you last looked/i)).toBeInTheDocument();
+    }));
+
+  it("marks an added item as added, not merely changed", async () =>
+    onFakeTimers(async () => {
+      const client = twoItems();
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      client.items.set("Personal", [
+        item({ id: "a", title: "GitHub" }),
+        item({ id: "b", title: "Bank" }),
+        item({ id: "c", title: "New one" }),
+      ]);
+      client.stamps = { a: T, b: T, c: T + 60_000 };
+      client.vaults = [vault({ itemIds: ["a", "b", "c"], fingerprint: "f1" })];
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+
+      // A new *vault* is not flagged because it is visibly new. A new row in a
+      // long list is not visible at all, so it is.
+      expect(screen.getByTitle(/added since you last looked/i)).toBeInTheDocument();
+    }));
+
+  it("keeps the mark while the list is being read, and clears it on opening the item", async () =>
+    onFakeTimers(async () => {
+      const client = twoItems();
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      client.stamps = { a: T + 60_000, b: T };
+      client.vaults = [vault({ itemIds: ["a", "b"], fingerprint: "f1" })];
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+      expect(dots()).toHaveLength(1);
+
+      // Another poll must not clear it — clearing on arrival would flash the
+      // dot once and lose it.
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+      expect(dots()).toHaveLength(1);
+
+      fireEvent.click(screen.getByText("GitHub"));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      expect(dots()).toHaveLength(0);
+    }));
+
+  it("survives a lock, like the vault marks", async () =>
+    onFakeTimers(async () => {
+      const client = twoItems();
+      signedInAs(ALICE, client);
+      render(<App />);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      client.stamps = { a: T + 60_000, b: T };
+      client.vaults = [vault({ itemIds: ["a", "b"], fingerprint: "f1" })];
+      await act(() => vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS));
+      expect(dots()).toHaveLength(1);
+
+      fireEvent.click(screen.getByRole("button", { name: /lock vault/i }));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      h.signIn.mockResolvedValue(identityFor(ALICE));
+      h.createClient.mockResolvedValue(client);
+      fireEvent.click(screen.getByRole("button", { name: /unlock/i }));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      expect(dots()).toHaveLength(1);
+    }));
+});

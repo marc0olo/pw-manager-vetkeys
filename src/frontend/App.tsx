@@ -102,6 +102,14 @@ export function App() {
    * if locking resets it. Persisted per principal instead — see lib/seen.ts.
    */
   const [marks, setMarks] = useState<seen.Marks>({});
+  /**
+   * Per-item "when you last looked at this one".
+   *
+   * A separate map from the vault marks, and stored under its own key, because
+   * the absence of a *vault's* entry is what means "never opened" — which is
+   * how first sight is told apart from a vault with no items.
+   */
+  const [itemMarks, setItemMarks] = useState<seen.ItemMarks>({});
   // Guards every load that crosses an await. See lib/vault-session: a request
   // already on the wire when the vault locks must not write the previous
   // session's vault list back into the state the lock just cleared.
@@ -157,6 +165,7 @@ export function App() {
       const advanced = seen.afterPoll(listed, seen.load(principal), landing);
       seen.save(principal, advanced);
       setMarks(advanced);
+      setItemMarks(seen.loadItems(principal));
     } catch (caught) {
       // A failure that belongs to an ended session must not raise a banner on
       // the locked screen.
@@ -198,6 +207,13 @@ export function App() {
           const advanced = seen.afterPoll(next, current, outcome.patch.selectedVaultId ?? null);
           seen.save(client.me.toText(), advanced);
           return advanced;
+        });
+        // Item marks are pruned but never advanced here: they clear per item,
+        // so that the dots survive while the user scans the list.
+        setItemMarks((current) => {
+          const pruned = seen.pruneItems(next.map(vaultId), current);
+          seen.saveItems(client.me.toText(), pruned);
+          return pruned;
         });
         if (outcome.movedVault) {
           // Any banner was about the vault we just left. "You no longer have
@@ -419,7 +435,16 @@ export function App() {
       .openVault(summary)
       .then(async (items) => {
         const facts = await client.itemSummaries(summary);
-        if (!cancelled) patch({ openItems: items, itemFacts: facts });
+        if (cancelled) return;
+        patch({ openItems: items, itemFacts: facts });
+        // First sight of a vault records its items rather than flagging them.
+        // Afterwards this only prunes, so the dots stay put while the list is
+        // being read — they clear when an item is opened.
+        setItemMarks((current) => {
+          const next = seen.afterReadingVault(vaultId(summary), facts, current);
+          seen.saveItems(client.me.toText(), next);
+          return next;
+        });
       })
       .catch((caught) => {
         if (cancelled) return;
@@ -447,6 +472,14 @@ export function App() {
   // Recomputed rather than stored: it is a comparison of two things already in
   // state, and storing it would give it a second chance to disagree with them.
   const changedVaults = useMemo(() => seen.changed(vaults ?? [], marks), [vaults, marks]);
+
+  // Read from `itemFacts`, which the vault open already fetched for the detail
+  // pane — every other item's timestamp was sitting there unused, so item-level
+  // marks need no request of their own.
+  const changedInVault = useMemo(
+    () => (summary && itemFacts ? seen.changedItems(vaultId(summary), itemFacts, itemMarks) : {}),
+    [summary, itemFacts, itemMarks],
+  );
 
   const visibleItems = useMemo(
     () => (openItems ?? []).filter((item) => matchesQuery(item, query)).sort(compareItems),
@@ -674,7 +707,16 @@ export function App() {
         query={query}
         onQueryChange={(next) => patch({ query: next })}
         selectedId={selectedItem?.id ?? null}
+        changed={changedInVault}
         onSelect={(id) => {
+          // Opening it is what "I looked" means, one level down from a vault.
+          if (summary && itemFacts) {
+            setItemMarks((current) => {
+              const next = seen.afterViewingItem(vaultId(summary), id, itemFacts, current);
+              if (client) seen.saveItems(client.me.toText(), next);
+              return next;
+            });
+          }
           // Drop the version list read for the item being left. The render is
           // keyed to `itemId` so a stale one is never shown; this just stops it
           // being held for longer than it is useful.

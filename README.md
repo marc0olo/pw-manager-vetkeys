@@ -52,9 +52,19 @@ password — the vault key is derived for your Internet Identity principal.
   - Costs nothing on the wire. The poll already carries a content digest and a
     trash digest per vault; this is a second reader of data that was only being
     used to refresh the view.
+  - **And which item**, once you open that vault: a dot per row, saying whether
+    it was added or edited. Without it, "Work changed" in a two-hundred-item
+    vault is a signal you cannot act on. The timestamps come from the per-item
+    read the vault open already does, so this costs no request and nothing on
+    the poll — and from there, an item's **earlier versions** show what it used
+    to hold.
   - **A vault seen for the first time is recorded, not flagged.** Otherwise a
     new device, a fresh browser or cleared site data would mark everything,
-    which is the noise the feature exists to avoid.
+    which is the noise the feature exists to avoid. Same one level down: the
+    first time a vault is opened, its items are recorded rather than marked.
+  - **A new *item* is flagged where a new *vault* is not.** The difference is
+    deliberate: a vault appearing in the sidebar is visibly new, a row in a long
+    list is not — so leaving it unmarked would answer nothing.
   - Only contents and trash count. A rename or a new collaborator is visible in
     the row already, so flagging it would report something you can see.
   - The marks live in `localStorage`, per principal, and **survive a lock** —
@@ -67,9 +77,11 @@ password — the vault key is derived for your Internet Identity principal.
     for vaults this app creates. What *is* new is that the keys carry the
     **owner principals of vaults shared with you**, and how many vaults each
     shares — the first time this app records other people's identifiers
-    locally. Signing in sweeps every other principal's marks, for the same
-    reason the key-store purge deletes stores left by principals no longer
-    recorded.
+    locally. The item-level marks add random item ids and write times under
+    their own key, which grows with how much you store rather than with how
+    many vaults you have. Signing in sweeps every other principal's marks —
+    both kinds — for the same reason the key-store purge deletes stores left by
+    principals no longer recorded.
 - **Changes appear on their own.** The vault list is re-read every 15 seconds
   and immediately on returning to the tab, so a vault someone shares with you
   shows up without a reload. The **check-for-changes** button only cuts that

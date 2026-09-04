@@ -1,6 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Principal } from "@icp-sdk/core/principal";
-import { afterPoll, afterViewing, changed, forget, load, save, sweep } from "../seen";
+import {
+  afterPoll,
+  afterReadingVault,
+  afterViewing,
+  afterViewingItem,
+  changed,
+  changedItems,
+  load,
+  loadItems,
+  pruneItems,
+  save,
+  saveItems,
+  sweep,
+} from "../seen";
 import { vaultId, type VaultSummary } from "../vault";
 
 /**
@@ -130,12 +143,6 @@ describe("where the marks live", () => {
     expect(load("bob")).toEqual({});
   });
 
-  it("forgets on request", () => {
-    save("alice", { "a/b": "f0" });
-    forget("alice");
-    expect(load("alice")).toEqual({});
-  });
-
   it("treats corrupt storage as nothing seen, which flags nothing", () => {
     window.localStorage.setItem("vetvault:seen:alice", "not json");
     expect(load("alice")).toEqual({});
@@ -171,11 +178,10 @@ describe("where the marks live", () => {
     expect(load("alice")).toEqual({ "a/b": "f0" });
   });
 
-  it("leaves other storage alone — an outcome, not a guard", () => {
-    // Two things enforce the prefix: the filter in `sweep` and `forget`
-    // re-applying it. So this holds whichever is doing the work, and cannot
-    // distinguish them — which is worth stating rather than implying it pins
-    // the filter.
+  it("leaves other storage alone", () => {
+    // Now load-bearing: `sweep` removes by full key, so the prefix check is
+    // the only thing standing between it and every other key in storage.
+    // Removing that check fails this.
     window.localStorage.setItem("vetvault:last-active", "123");
     window.localStorage.setItem("something-else", "x");
     save("alice", { "a/b": "f0" });
@@ -206,5 +212,100 @@ describe("where the marks live", () => {
     });
     expect(() => save("alice", { "a/b": "f0" })).not.toThrow();
     setItem.mockRestore();
+  });
+});
+
+describe("which items in a vault changed", () => {
+  // The reason this exists: "Work changed" in a two-hundred-item vault is a
+  // signal nobody can act on. It reads `updatedAt` from the facts the vault
+  // open already fetched, so it costs no request.
+  const V = "2ibo7-dia/a3f1";
+  const facts = (o: Record<string, number>) =>
+    Object.fromEntries(Object.entries(o).map(([id, at]) => [id, { updatedAt: at }]));
+
+  it("says nothing the first time a vault is opened", () => {
+    // One level down from the vault rule, and for the same reason: a vault
+    // never opened has no basis to claim anything in it moved.
+    expect(changedItems(V, facts({ a: 1, b: 2 }), {})).toEqual({});
+  });
+
+  it("records that first sight rather than flagging it", () => {
+    const marks = afterReadingVault(V, facts({ a: 1, b: 2 }), {});
+    expect(changedItems(V, facts({ a: 1, b: 2 }), marks)).toEqual({});
+  });
+
+  it("flags an edited item", () => {
+    const marks = afterReadingVault(V, facts({ a: 1, b: 2 }), {});
+    expect(changedItems(V, facts({ a: 9, b: 2 }), marks)).toEqual({ a: "changed" });
+  });
+
+  it("flags an added item, unlike an added vault", () => {
+    // A vault appearing in the sidebar is visibly new; a row in a long list is
+    // not. So the rule differs by one level, deliberately.
+    const marks = afterReadingVault(V, facts({ a: 1 }), {});
+    expect(changedItems(V, facts({ a: 1, b: 2 }), marks)).toEqual({ b: "new" });
+  });
+
+  it("keeps flagging while the list is being read", () => {
+    // Clearing on arrival would flash the dots once and lose them, which is
+    // the opposite of useful in a long list.
+    let marks = afterReadingVault(V, facts({ a: 1 }), {});
+    marks = afterReadingVault(V, facts({ a: 9 }), marks);
+    expect(changedItems(V, facts({ a: 9 }), marks)).toEqual({ a: "changed" });
+  });
+
+  it("clears one item when that item is opened", () => {
+    let marks = afterReadingVault(V, facts({ a: 1, b: 1 }), {});
+    const moved = facts({ a: 9, b: 9 });
+    expect(Object.keys(changedItems(V, moved, marks))).toHaveLength(2);
+
+    marks = afterViewingItem(V, "a", moved, marks);
+    expect(changedItems(V, moved, marks)).toEqual({ b: "changed" });
+  });
+
+  it("forgets an item that is gone, rather than keeping a row forever", () => {
+    let marks = afterReadingVault(V, facts({ a: 1, b: 1 }), {});
+    marks = afterReadingVault(V, facts({ a: 1 }), marks);
+    expect(Object.keys(marks[V])).toEqual(["a"]);
+  });
+
+  it("does not resurrect a mark for an item that came back", () => {
+    // Deleted then restored is a first sight for that item: whatever it held
+    // while it was gone is not something you failed to look at.
+    let marks = afterReadingVault(V, facts({ a: 1 }), {});
+    marks = afterReadingVault(V, facts({}), marks);
+    marks = afterReadingVault(V, facts({ a: 5 }), marks);
+    expect(changedItems(V, facts({ a: 5 }), marks)).toEqual({ a: "new" });
+  });
+
+  it("forgets a vault that is gone", () => {
+    const marks = afterReadingVault(V, facts({ a: 1 }), {});
+    expect(pruneItems([], marks)).toEqual({});
+    expect(pruneItems([V], marks)).toEqual(marks);
+  });
+
+  it("is stored under its own key, so the vault marks keep their shape", () => {
+    window.localStorage.clear();
+    save("alice", { [V]: "d:d" });
+    saveItems("alice", afterReadingVault(V, facts({ a: 1 }), {}));
+
+    expect(load("alice")).toEqual({ [V]: "d:d" });
+    expect(loadItems("alice")[V]).toEqual({ a: 1 });
+  });
+
+  it("is swept with the vault marks when another identity signs in", () => {
+    window.localStorage.clear();
+    saveItems("alice", { [V]: { a: 1 } });
+    saveItems("bob", { [V]: { a: 1 } });
+
+    sweep("alice");
+
+    expect(loadItems("alice")[V]).toEqual({ a: 1 });
+    expect(loadItems("bob")).toEqual({});
+  });
+
+  it("treats corrupt item storage as nothing seen", () => {
+    window.localStorage.setItem("vetvault:seen-items:alice", '{"v":{"a":"not a number"}}');
+    expect(loadItems("alice")).toEqual({});
   });
 });

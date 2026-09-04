@@ -78,14 +78,29 @@ export class FakeClient {
   /** Versions per item id, for the history section. */
   itemVersions: Record<string, ItemVersion[]> = {};
 
-  itemSummaries = vi.fn(async () =>
-    Object.fromEntries(
-      Object.entries(this.itemVersions).map(([id, rows]) => [
+  /**
+   * Per-item write times, when a test needs them independently of versions.
+   * Falls back to deriving them from `itemVersions`, as before.
+   */
+  stamps: Record<string, number> = {};
+
+  itemSummaries = vi.fn(async (summary: VaultSummary) => {
+    const ids = new Set([
+      ...Object.keys(this.itemVersions),
+      ...Object.keys(this.stamps),
+      ...(this.items.get(summary.name) ?? []).map((entry) => entry.id),
+    ]);
+    return Object.fromEntries(
+      [...ids].map((id) => [
         id,
-        { versions: rows.length, updatedAt: rows[0]?.at ?? Date.UTC(2026, 0, 3, 11, 15) },
+        {
+          versions: (this.itemVersions[id] ?? []).length,
+          updatedAt:
+            this.stamps[id] ?? this.itemVersions[id]?.[0]?.at ?? Date.UTC(2026, 0, 3, 11, 15),
+        },
       ]),
-    ),
-  );
+    );
+  });
   versions = vi.fn(async (_vault: VaultSummary, itemId: string) => this.itemVersions[itemId] ?? []);
   dropHistory = vi.fn(async (_vault: VaultSummary, itemId: string) => {
     if (this.refuseDrop) throw new Error("unauthorized");

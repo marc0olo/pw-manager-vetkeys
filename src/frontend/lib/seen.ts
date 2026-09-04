@@ -54,9 +54,34 @@ import { vaultId, type VaultSummary } from "./vault";
  */
 
 const PREFIX = "vetvault:seen:";
+const ITEM_PREFIX = "vetvault:seen-items:";
 
 /** Vault id to the content it was last seen holding. */
 export type Marks = Readonly<Record<string, string>>;
+
+/**
+ * Vault id to each of its items' last-seen write time.
+ *
+ * Nested rather than flat, because **the absence of a vault's entry is the
+ * signal for first sight**. A flat `vaultId/itemId` map could not distinguish
+ * "this vault has never been opened" from "this vault has no items", and the
+ * first must record while the second has nothing to record.
+ *
+ * Stored under its own key so the vault marks already on disk keep their shape.
+ */
+export type ItemMarks = Readonly<Record<string, Readonly<Record<string, number>>>>;
+
+/** What a client needs to render a per-item marker. */
+export type ItemChange = "new" | "changed";
+
+/**
+ * When an item's write time was recorded by the canister.
+ *
+ * The shape `get_item_summaries` already returns, and which `App` already holds
+ * as `itemFacts` — this reads the entries for every item rather than only the
+ * selected one, so item-level marks need no request of their own.
+ */
+export type ItemFacts = Readonly<Record<string, { updatedAt: number }>>;
 
 /**
  * What a viewer has seen *inside* a vault.
@@ -97,13 +122,6 @@ export function save(principal: string, marks: Marks): void {
   }
 }
 
-export function forget(principal: string): void {
-  try {
-    window.localStorage.removeItem(PREFIX + principal);
-  } catch {
-    // Nothing to recover from.
-  }
-}
 
 /**
  * Drop the marks of every principal except this one.
@@ -121,21 +139,131 @@ export function sweep(keep: string): void {
     const stale: string[] = [];
     for (let index = 0; index < window.localStorage.length; index += 1) {
       const key = window.localStorage.key(index);
-      if (key !== null && key.startsWith(PREFIX) && key !== PREFIX + keep) {
-        stale.push(key.slice(PREFIX.length));
+      if (key === null) continue;
+      // Both prefixes. Missing one would leave an identity's item marks —
+      // which name its vaults and their item ids — behind indefinitely.
+      for (const prefix of [PREFIX, ITEM_PREFIX]) {
+        if (key.startsWith(prefix) && key !== prefix + keep) stale.push(key);
       }
     }
     // Collected before removing: deleting while iterating by index skips
     // entries, and half a sweep looks exactly like a whole one.
     //
-    // The prefix is checked here *and* re-applied by `forget`, so a key
-    // belonging to something else survives either way. Belt and braces rather
-    // than one guard doing the work — worth saying, because a test cannot tell
-    // which of the two saved it.
-    for (const principal of stale) forget(principal);
+    // Removed by full key rather than by re-deriving the principal, so the
+    // prefix check above is the only guard and a test can tell whether it
+    // works. An earlier version re-derived the principal and re-applied the
+    // prefix, which made an unrelated key survive for a second reason and left
+    // the check unfalsifiable.
+    for (const key of stale) window.localStorage.removeItem(key);
   } catch {
     // Storage unavailable. Nothing here is load-bearing.
   }
+}
+
+function readMap<T>(key: string, ok: (value: unknown) => boolean): Record<string, T> {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === null) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    const out: Record<string, T> = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      if (ok(value)) out[id] = value as T;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function loadItems(principal: string): ItemMarks {
+  return readMap<Readonly<Record<string, number>>>(
+    ITEM_PREFIX + principal,
+    (value) =>
+      typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      Object.values(value).every((at) => typeof at === "number"),
+  );
+}
+
+export function saveItems(principal: string, marks: ItemMarks): void {
+  try {
+    window.localStorage.setItem(ITEM_PREFIX + principal, JSON.stringify(marks));
+  } catch {
+    // See `save`. Losing a mark costs a stale flag, nothing more.
+  }
+}
+
+/**
+ * The items in one vault that were added or edited since it was last opened.
+ *
+ * **A new item is flagged, unlike a new vault** — and the difference is the
+ * point rather than an inconsistency. A newly shared vault is visibly new: it
+ * was not in the sidebar before. A new row in a two-hundred-item list is not
+ * visible at all, so not flagging it would leave the question this exists to
+ * answer unanswered.
+ *
+ * First sight is still recorded rather than flagged, one level down: a vault
+ * with no entry has never been opened, so every item in it is unremarkable.
+ */
+export function changedItems(
+  vaultId: string,
+  facts: ItemFacts,
+  marks: ItemMarks,
+): Readonly<Record<string, ItemChange>> {
+  const seen = marks[vaultId];
+  if (seen === undefined) return {};
+  const out: Record<string, ItemChange> = {};
+  for (const [id, fact] of Object.entries(facts)) {
+    const mark = seen[id];
+    if (mark === undefined) out[id] = "new";
+    else if (mark !== fact.updatedAt) out[id] = "changed";
+  }
+  return out;
+}
+
+/**
+ * Marks after a vault's items have been read.
+ *
+ * Records the whole vault on first sight and **changes nothing afterwards** —
+ * the dots have to survive while the user scans the list, so they clear per
+ * item rather than on arrival. Prunes items that are gone, so a vault whose
+ * contents churn does not accumulate rows.
+ */
+export function afterReadingVault(vaultId: string, facts: ItemFacts, marks: ItemMarks): ItemMarks {
+  const seen = marks[vaultId];
+  if (seen === undefined) {
+    const fresh: Record<string, number> = {};
+    for (const [id, fact] of Object.entries(facts)) fresh[id] = fact.updatedAt;
+    return { ...marks, [vaultId]: fresh };
+  }
+  const kept: Record<string, number> = {};
+  for (const id of Object.keys(facts)) {
+    if (seen[id] !== undefined) kept[id] = seen[id];
+  }
+  return { ...marks, [vaultId]: kept };
+}
+
+/** Marks after the user opens one item: that one is now up to date. */
+export function afterViewingItem(
+  vaultId: string,
+  itemId: string,
+  facts: ItemFacts,
+  marks: ItemMarks,
+): ItemMarks {
+  const fact = facts[itemId];
+  if (fact === undefined) return marks;
+  return { ...marks, [vaultId]: { ...(marks[vaultId] ?? {}), [itemId]: fact.updatedAt } };
+}
+
+/** Drop the item marks of vaults that are gone. */
+export function pruneItems(vaultIds: readonly string[], marks: ItemMarks): ItemMarks {
+  const kept: Record<string, Readonly<Record<string, number>>> = {};
+  for (const id of vaultIds) {
+    if (marks[id] !== undefined) kept[id] = marks[id];
+  }
+  return kept;
 }
 
 /**
