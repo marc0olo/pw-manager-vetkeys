@@ -107,6 +107,24 @@ actor PasswordManager {
   /// Printed on the transition rather than on every write: the log holds 4 KiB
   /// by default, so a line repeated per write would leave a buffer containing
   /// nothing but copies of itself.
+  func watchdog() {
+    let balance = Cycles.balance();
+    if (balance < LOW_CYCLES_THRESHOLD) {
+      if (not warnedLowCycles) {
+        warnedLowCycles := true;
+        Debug.print(
+          "WARN cycles balance is low (" # Nat.toText(balance)
+          # "). Vault key derivation fails once the canister cannot afford"
+          # " vetkd_derive_key, which surfaces to users as IC0406 and looks"
+          # " like data loss. Top up."
+        );
+      };
+    } else if (warnedLowCycles) {
+      warnedLowCycles := false;
+      Debug.print("INFO cycles balance recovered (" # Nat.toText(balance) # ")");
+    };
+  };
+
   /// What the canister can say about its own ability to derive vault keys.
   ///
   /// A state, never a number: the balance itself is the operator's business.
@@ -152,24 +170,6 @@ actor PasswordManager {
   func seesAnyVault(who : Principal) : Bool {
     if (Map.size(vaultsOwnedBy(who)) > 0) return true;
     encryptedMaps.getAccessibleSharedMapNames(who).size() > 0;
-  };
-
-  func watchdog() {
-    let balance = Cycles.balance();
-    if (balance < WARN_OPERATOR_BELOW) {
-      if (not warnedLowCycles) {
-        warnedLowCycles := true;
-        Debug.print(
-          "WARN cycles balance is low (" # Nat.toText(balance)
-          # "). Vault key derivation fails once the canister cannot afford"
-          # " vetkd_derive_key, which surfaces to users as IC0406 and looks"
-          # " like data loss. Top up."
-        );
-      };
-    } else if (warnedLowCycles) {
-      warnedLowCycles := false;
-      Debug.print("INFO cycles balance recovered (" # Nat.toText(balance) # ")");
-    };
   };
 
   // ---------------------------------------------------------------------------

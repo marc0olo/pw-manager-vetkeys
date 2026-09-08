@@ -36,14 +36,17 @@ export function isOutboundCallFailure(error: unknown): boolean {
  *
  * `ask` is a function so the wording is testable without a canister, and so a
  * refusal — the canister answers this only for callers who can already see a
- * vault — is just another way of not knowing.
+ * vault — is just another way of not knowing. It is also called defensively:
+ * `VaultClient.health` promises not to throw, but that promise lives in its
+ * implementation rather than here, and a rejection escaping this would replace
+ * the very error it was called to explain with no message at all.
  */
 export async function outageMessage(
   error: unknown,
   ask: () => Promise<Health>,
 ): Promise<string | null> {
   if (!isOutboundCallFailure(error)) return null;
-  const health = await ask();
+  const health = await ask().catch((): Health => "unknown");
   if (health === "low-cycles") {
     return (
       "This deployment has run out of cycles. Your secrets are intact and still" +

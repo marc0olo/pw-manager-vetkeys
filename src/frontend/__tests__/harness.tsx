@@ -1,7 +1,9 @@
 import { vi } from "vitest";
 import { Principal } from "@icp-sdk/core/principal";
 import type { VaultItem } from "../lib/items";
+import type { Health } from "../lib/health";
 import type { ItemVersion, TrashedItem, VaultSummary } from "../lib/vault";
+import { rejection } from "../lib/__tests__/rejection";
 
 export const ALICE = Principal.fromText("2ibo7-dia");
 export const BOB = Principal.fromText("aaaaa-aa");
@@ -48,6 +50,14 @@ export class FakeClient {
    * the UI discovers by attempting.
    */
   refuseDiscard = false;
+  /**
+   * Make derivation fail the way a canister out of cycles does, rather than
+   * with a refusal. A separate flag because it is not a refusal: nothing about
+   * the user's rights has changed, and the app must not record a denial for it.
+   */
+  outage = false;
+  /** What {@link health} answers while `outage` is set. */
+  healthState: Health = "low-cycles";
 
   constructor(me: Principal, vaults: VaultSummary[], items: Record<string, VaultItem[]> = {}) {
     this.me = me;
@@ -58,11 +68,13 @@ export class FakeClient {
   listVaults = vi.fn(async () => this.vaults);
 
   openVault = vi.fn(async (summary: VaultSummary) => {
+    if (this.outage) throw rejection();
     if (this.refuse === "open") throw new Error("unauthorized");
     return this.items.get(summary.name) ?? [];
   });
 
   private guard(kind: "write" | "manage") {
+    if (this.outage) throw rejection();
     if (this.refuse === kind) throw new Error("unauthorized");
   }
 
@@ -144,6 +156,7 @@ export class FakeClient {
   rename = vi.fn(async () => this.guard("write"));
   share = vi.fn(async () => this.guard("manage"));
   revoke = vi.fn(async () => this.guard("manage"));
+  health = vi.fn(async (): Promise<Health> => this.healthState);
   lock = vi.fn(async () => {});
 }
 

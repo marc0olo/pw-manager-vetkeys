@@ -158,6 +158,73 @@ describe("an error banner", () => {
   });
 });
 
+describe("a canister that cannot derive vault keys", () => {
+  // The whole point of #53: `IC0406 could not perform remote call` is what an
+  // unfunded canister returns, and in a password manager it reads as data loss
+  // — unlocking fails, so the secrets look gone. They are not.
+  const REASSURANCE = /Your secrets are intact and still encrypted/;
+
+  it("says the secrets are intact when opening a vault fails", async () => {
+    const client = signedInAs(ALICE, new FakeClient(ALICE, [personal], {}));
+    client.outage = true;
+    render(<App />);
+
+    expect(await screen.findByText(REASSURANCE)).toBeInTheDocument();
+  });
+
+  it("says it when a save fails too, not only on open", async () => {
+    // Writing derives as much as reading does, and this is the path the bug was
+    // first reported on: adding a secret, not opening one.
+    const client = signedInAs(ALICE, new FakeClient(ALICE, [personal], {
+      Personal: [item({ id: "a", title: "GitHub" })],
+    }));
+    render(<App />);
+    fireEvent.click(await screen.findByText("GitHub"));
+    const edit = await screen.findByRole("button", { name: /^edit$/i });
+
+    client.outage = true;
+    fireEvent.click(edit);
+    fireEvent.click(await screen.findByRole("button", { name: /save/i }));
+
+    expect(await screen.findByText(REASSURANCE)).toBeInTheDocument();
+  });
+
+  it("does not blame cycles when the canister says it is funded", async () => {
+    // `IC0406` says the outbound call failed, not why. A vetKD key missing from
+    // the subnet looks identical from here, so a funded canister must not be
+    // reported as an outage.
+    const client = signedInAs(ALICE, new FakeClient(ALICE, [personal], {}));
+    client.outage = true;
+    client.healthState = "funded";
+    render(<App />);
+
+    expect(await screen.findByText(/did not report why/)).toBeInTheDocument();
+    expect(screen.queryByText(REASSURANCE)).not.toBeInTheDocument();
+  });
+
+  it("records no loss of rights, because nothing about access changed", async () => {
+    // A denial filed here would withdraw a control the user still has — the
+    // same defect that disabled adding items after a failed trash empty.
+    const client = signedInAs(ALICE, new FakeClient(ALICE, [personal], {
+      Personal: [item({ id: "a", title: "GitHub" })],
+    }));
+    render(<App />);
+    fireEvent.click(await screen.findByText("GitHub"));
+    const edit = await screen.findByRole("button", { name: /^edit$/i });
+
+    client.outage = true;
+    fireEvent.click(edit);
+    fireEvent.click(await screen.findByRole("button", { name: /save/i }));
+    await screen.findByText(REASSURANCE);
+
+    // A write refusal withdraws this control. An outage must not: the user's
+    // rights are untouched, and the same save works once the canister is
+    // funded again.
+    client.outage = false;
+    expect(await screen.findByRole("button", { name: /save/i })).toBeInTheDocument();
+  });
+});
+
 describe("landing", () => {
   it("opens your own vault, not whichever the canister listed first", async () => {
     // The canister chains shared maps before owned ones, so the old

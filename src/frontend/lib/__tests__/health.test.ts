@@ -1,14 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
 import { isOutboundCallFailure, outageMessage, type Health } from "../health";
+import { rejection } from "./rejection";
 
-/** What the agent actually throws when the canister cannot afford its own call. */
-const IC0406 = new Error(
-  "Call failed:\n  Canister: 4caro-hl777-77775-aaaba-cai\n  Method: get_encrypted_vetkey (query)\n" +
-    '  "Request ID": "1f2e"\n  "Reject code": "4"\n  "Reject message": "could not perform remote call"\n' +
-    '  "Error code": "IC0406"',
-);
+const IC0406 = rejection();
 
 const asking = (health: Health) => vi.fn<() => Promise<Health>>().mockResolvedValue(health);
+
+describe("the fixture", () => {
+  it("is the shape the SDK really produces, so the rest of this file means something", () => {
+    // Pinned rather than printed: this is the codebase's only record of what a
+    // cycles-exhausted derivation looks like from the client, and an SDK
+    // upgrade that reshapes it should fail here rather than quietly leave the
+    // suite testing a string nothing throws any more.
+    expect(IC0406.message).toContain("The replica returned a rejection error:");
+    expect(IC0406.message).toContain("Reject text: could not perform remote call");
+    expect(IC0406.message).toContain("Error code: IC0406");
+    // An update, not a query — it makes the inter-canister call that fails.
+    expect(IC0406.message).toContain("Method name: get_encrypted_vetkey");
+  });
+});
 
 describe("isOutboundCallFailure", () => {
   it("recognises the canister failing its own call", () => {
@@ -55,5 +65,17 @@ describe("outageMessage", () => {
 
   it("carries the underlying error, so an unexplained failure stays diagnosable", async () => {
     expect(await outageMessage(IC0406, asking("funded"))).toContain("IC0406");
+  });
+});
+
+describe("when asking itself fails", () => {
+  it("still explains the original error rather than replacing it with nothing", async () => {
+    // `VaultClient.health` promises not to throw, but this must not depend on
+    // a promise made somewhere else: a rejection escaping here would reach
+    // `run`'s catch and leave the user with no banner at all.
+    const ask = vi.fn<() => Promise<Health>>().mockRejectedValue(new Error("Failed to fetch"));
+    const text = await outageMessage(IC0406, ask);
+    expect(text).toContain("did not report why");
+    expect(text).toContain("IC0406");
   });
 });
