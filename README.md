@@ -380,13 +380,12 @@ it cost and how much headroom is left, measured rather than assumed:
 this run cost 20.2 B; 11.31 T left, about 559 more run(s)
 ```
 
-A `vetkd_derive_key` reserves ~26 B cycles, and the checks derive heavily.
-Measured: `check-vault-names` 11 B, `smoke-test` 20 B, `check-owned-vaults`
-52 B, `check-poll-cost` 141 B, `check-history` 152 B, `check-capabilities`
-162 B, and a redeploy 3.4 B — so **one round of all six costs about 0.5 T**, and
-a canister topped up to 10 T affords roughly twenty. Mutation testing, which
-redeploys and re-runs them per mutant, is what actually empties one. Top up
-with:
+A `vetkd_derive_key` reserves ~26 B cycles and the checks derive heavily, so a
+round of all six costs **roughly half a trillion** and a canister topped up to
+10 T affords something like twenty. Mutation testing, which redeploys and
+re-runs them per mutant, is what actually empties one. Exact figures are not
+listed here because each check prints its own, measured on the run you just
+did — they drift every time a check gains a case. Top up with:
 
 ```bash
 icp canister top-up backend --amount 10000000000000
@@ -401,8 +400,8 @@ icp canister top-up backend --amount 10000000000000
 >
 > Measured on a local replica: derivation still worked at **482 B** and failed
 > at **472 B**. So a derive needs a few hundred billion cycles of room, well
-> beyond the ~26 B it reserves — and one round of the six replica checks costs
-> 538 B, which is why the watchdog's threshold is counted in rounds above that
+> beyond the ~26 B it reserves — and a round of the checks costs about as much
+> again, which is why the watchdog's threshold is counted in rounds above that
 > cliff rather than as a multiple of it.
 >
 > Worth recognising because in this app it presents as data loss — unlocking
