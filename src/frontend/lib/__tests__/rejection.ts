@@ -30,6 +30,22 @@ export function rejection(): Error {
   code.callContext = {
     canisterId: Principal.fromText("aaaaa-aa"),
     methodName: "get_encrypted_vetkey",
+    // The SDK appends the whole HTTP response, every header included, so a
+    // real message runs to hundreds of characters of CBOR plumbing. Omitting
+    // this is what let an unreadable banner ship: the fixture was short, so
+    // nothing tested what a user would actually read.
+    httpDetails: {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: [
+        ["access-control-allow-origin", "*"],
+        ["content-length", "1293"],
+        ["content-type", "application/cbor"],
+        ["x-ic-canister-id", "4fbx2-kt777-77775-aaabq-cai"],
+        ["x-request-id", "01a08139-f0e0-7c70-a4bc-8d2cb7d09ea7"],
+      ],
+    },
   };
   return RejectError.fromCode(code);
 }

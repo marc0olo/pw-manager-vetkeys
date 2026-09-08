@@ -64,7 +64,34 @@ describe("outageMessage", () => {
   });
 
   it("carries the underlying error, so an unexplained failure stays diagnosable", async () => {
-    expect(await outageMessage(IC0406, asking("funded"))).toContain("IC0406");
+    const text = await outageMessage(IC0406, asking("funded"));
+    expect(text).toContain("IC0406");
+    // The three things a bug report needs, and nothing that needs scrolling.
+    // Matched loosely on the reject text because it varies with the cause:
+    // an empty balance says "remote call", a freezing threshold reserving the
+    // balance says "self call". Both are IC0406.
+    expect(text).toMatch(/Reject text: could not perform \w+ call/);
+    expect(text).toContain("get_encrypted_vetkey");
+  });
+
+  it("says something even when the error is not shaped like a rejection", async () => {
+    // The summariser keeps named lines. An error with none — a reshaped SDK, a
+    // wrapper, a bare string — must fall back to the whole text rather than to
+    // an empty explanation.
+    const odd = new Error("the gateway mangled this, but it mentions IC0406");
+    expect(await outageMessage(odd, asking("funded"))).toContain("the gateway mangled this");
+  });
+
+  it("stays readable, because a banner is not a place to dump a CBOR response", async () => {
+    // What shipped first pasted `error.message` verbatim. The SDK appends the
+    // entire HTTP response, so the one useful line arrived after every
+    // response header — reported from a real run.
+    const text = (await outageMessage(IC0406, asking("funded"))) ?? "";
+    expect(IC0406.message).toContain("content-type");
+    expect(text).not.toContain("content-type");
+    expect(text).not.toContain("HTTP details");
+    expect(text).not.toContain("Request ID");
+    expect(text.length).toBeLessThan(240);
   });
 });
 

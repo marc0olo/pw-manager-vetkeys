@@ -54,6 +54,26 @@ export async function outageMessage(
       " topped up. Contact whoever operates it."
     );
   }
-  const detail = error instanceof Error ? error.message : String(error);
-  return `The canister could not complete an outbound call, and did not report why. ${detail}`;
+  return `The canister could not complete an outbound call, and did not report why. ${salient(error)}`;
+}
+
+/**
+ * The part of an agent error worth putting in front of a user.
+ *
+ * `@icp-sdk/core` composes `.message` from the rejection and then appends the
+ * request context and the entire HTTP response, every header included. Pasted
+ * whole it runs to hundreds of characters and pushes the one useful line out of
+ * sight — which is what shipped first, and what a real run reported.
+ *
+ * Kept: the reject text, the error code, and the failing method. That is what a
+ * bug report needs. Falls back to the whole message rather than to nothing, so
+ * an error shaped differently still says something.
+ */
+function salient(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^(Reject text|Error code|Method name):/.test(line));
+  return lines.length > 0 ? lines.join(" · ") : text;
 }
