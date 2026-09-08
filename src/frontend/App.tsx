@@ -44,6 +44,8 @@ import { ShareDialog } from "./components/ShareDialog";
 import * as seen from "./lib/seen";
 import { Sidebar } from "./components/Sidebar";
 import { CheckIcon, CopyIcon, PencilIcon, ShareIcon, TrashIcon } from "./components/Icons";
+import { AgentError } from "@icp-sdk/core/agent";
+import { describe } from "./lib/errors";
 import { outageMessage } from "./lib/health";
 
 /** How often to re-read the vault list. Queries only, so this is cheap. */
@@ -74,8 +76,21 @@ function Toast({ message }: { message: string | null }) {
   );
 }
 
+/**
+ * What the banner says, and what the console keeps.
+ *
+ * An agent error's own message is written for whoever debugs the agent — see
+ * lib/errors — so the banner gets a classified sentence and the full error goes
+ * where someone can still read it.
+ */
 function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  logDetail(error);
+  return describe(error);
+}
+
+/** Keeps the plumbing one console away, since the banner drops it. */
+function logDetail(error: unknown): void {
+  if (error instanceof AgentError) console.error(error);
 }
 
 /**
@@ -85,10 +100,9 @@ function message(error: unknown): string {
  */
 async function reported(client: VaultClient, error: unknown): Promise<string> {
   const outage = await outageMessage(error, () => client.health());
-  // That wording deliberately drops the reject, which is plumbing the user
-  // cannot act on. Kept here so it is still one console away for whoever can.
-  if (outage) console.error(error);
-  return outage ?? message(error);
+  if (!outage) return message(error);
+  logDetail(error);
+  return outage;
 }
 
 export function App() {

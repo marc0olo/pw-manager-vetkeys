@@ -58,6 +58,12 @@ export class FakeClient {
   outage = false;
   /** What {@link health} answers while `outage` is set. */
   healthState: Health = "low-cycles";
+  /**
+   * An arbitrary failure for the next call — an agent error, so the banner's
+   * classification is exercised rather than the pass-through for the app's own
+   * messages.
+   */
+  nextError: Error | null = null;
 
   constructor(me: Principal, vaults: VaultSummary[], items: Record<string, VaultItem[]> = {}) {
     this.me = me;
@@ -68,12 +74,14 @@ export class FakeClient {
   listVaults = vi.fn(async () => this.vaults);
 
   openVault = vi.fn(async (summary: VaultSummary) => {
+    if (this.nextError) throw this.nextError;
     if (this.outage) throw rejection();
     if (this.refuse === "open") throw new Error("unauthorized");
     return this.items.get(summary.name) ?? [];
   });
 
   private guard(kind: "write" | "manage") {
+    if (this.nextError) throw this.nextError;
     if (this.outage) throw rejection();
     if (this.refuse === kind) throw new Error("unauthorized");
   }

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ALICE, BOB, FakeClient, fakeClipboard, identityFor, item, trashed, vault, version } from "./harness";
+import { HttpFetchErrorCode, TransportError } from "@icp-sdk/core/agent";
 import { toAccessRights, type AccessLevel } from "../lib/vault";
 
 /**
@@ -224,6 +225,20 @@ describe("a canister that cannot derive vault keys", () => {
     // funded again.
     client.outage = false;
     expect(await screen.findByRole("button", { name: /save/i })).toBeInTheDocument();
+  });
+});
+
+describe("any other failure the canister or network produces", () => {
+  it("is classified, never pasted — an agent error's message is not for users", async () => {
+    // `@icp-sdk/core` builds `.message` for whoever debugs the agent: the
+    // request context and the whole HTTP response, every header. It used to go
+    // straight into the banner.
+    const client = signedInAs(ALICE, new FakeClient(ALICE, [personal], {}));
+    client.nextError = TransportError.fromCode(new HttpFetchErrorCode(new Error("Failed to fetch")));
+    render(<App />);
+
+    expect(await screen.findByText(/Could not reach this deployment/)).toBeInTheDocument();
+    expect(screen.queryByText(/content-type/)).not.toBeInTheDocument();
   });
 });
 
