@@ -142,20 +142,14 @@ actor PasswordManager {
   ///
   /// A state, never a number: the balance itself is the operator's business.
   ///
-  /// `#funded` means derivation should work, so a call that still failed did so
-  /// for a cause this canister cannot name. `#low_cycles` means the balance is
-  /// near the point where `vetkd_derive_key` is refused — see
-  /// {@link BLAME_CYCLES_BELOW}, which is not the threshold the operator's
-  /// warning uses, because naming a cause to a user demands more than warning
-  /// early does.
-  ///
-  /// Documented here rather than on the alternatives themselves: `icp-bindgen`
-  /// carries `///` comments into the generated binding, and one written against
-  /// a variant alternative lands on the *next method* in the Candid — putting a
-  /// sentence about derivation on `set_user_rights`, which has nothing to do
-  /// with it. Measured, not guessed at: `check-bindings` caught it.
+  /// The threshold for `#low_cycles` is {@link BLAME_CYCLES_BELOW}, which is not
+  /// the one the operator's warning uses: naming a cause to a user demands more
+  /// than warning early does.
   public type ServiceHealth = {
+    /// Derivation should work. If a call still failed, the cause is not one
+    /// this canister can name.
     #funded;
+    /// Near the point where `vetkd_derive_key` is refused.
     #low_cycles;
   };
 
