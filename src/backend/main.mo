@@ -71,6 +71,19 @@ actor PasswordManager {
   /// replica's. Warning early costs one log line.
   transient let WARN_OPERATOR_BELOW = 3_000_000_000_000;
 
+  /// The balance under which cycles may be named to a **user** as the cause.
+  ///
+  /// Far below {@link WARN_OPERATOR_BELOW}, because the two answer different
+  /// questions and want opposite answers. The warning asks "is there still
+  /// time to act?" and should fire early. This one becomes a sentence somebody
+  /// reads — *this deployment has run out of cycles* — which is only true near
+  /// the cliff. Said at three trillion it would be a guess dressed as a
+  /// diagnosis, and `get_service_health` exists to avoid exactly that.
+  ///
+  /// About twice the measured cliff: margin for a boundary that moves with the
+  /// subnet's vetKD price, not a claim to know where it is.
+  transient let BLAME_CYCLES_BELOW = 1_000_000_000_000;
+
   /// Whether the low-balance warning is currently standing.
   ///
   /// Stable, and that is load-bearing rather than incidental: it makes **the
@@ -109,7 +122,7 @@ actor PasswordManager {
   /// nothing but copies of itself.
   func watchdog() {
     let balance = Cycles.balance();
-    if (balance < LOW_CYCLES_THRESHOLD) {
+    if (balance < WARN_OPERATOR_BELOW) {
       if (not warnedLowCycles) {
         warnedLowCycles := true;
         Debug.print(
@@ -131,7 +144,10 @@ actor PasswordManager {
   ///
   /// `#funded` means derivation should work, so a call that still failed did so
   /// for a cause this canister cannot name. `#low_cycles` means the balance is
-  /// low enough that `vetkd_derive_key` is at risk or already refused.
+  /// near the point where `vetkd_derive_key` is refused — see
+  /// {@link BLAME_CYCLES_BELOW}, which is not the threshold the operator's
+  /// warning uses, because naming a cause to a user demands more than warning
+  /// early does.
   ///
   /// Documented here rather than on the alternatives themselves: `icp-bindgen`
   /// carries `///` comments into the generated binding, and one written against
@@ -166,7 +182,7 @@ actor PasswordManager {
   /// funding is left, or for how long.
   public query (msg) func get_service_health() : async Result<ServiceHealth, Text> {
     if (not seesAnyVault(msg.caller)) return #Err("unauthorized");
-    #Ok(if (Cycles.balance() < LOW_CYCLES_THRESHOLD) #low_cycles else #funded);
+    #Ok(if (Cycles.balance() < BLAME_CYCLES_BELOW) #low_cycles else #funded);
   };
 
   /// Whether this caller has any vault at all — owned or shared with them.
