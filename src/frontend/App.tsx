@@ -84,7 +84,11 @@ function message(error: unknown): string {
  * looks like the secrets are gone. Asks the canister and says what is true.
  */
 async function reported(client: VaultClient, error: unknown): Promise<string> {
-  return (await outageMessage(error, () => client.health())) ?? message(error);
+  const outage = await outageMessage(error, () => client.health());
+  // That wording deliberately drops the reject, which is plumbing the user
+  // cannot act on. Kept here so it is still one console away for whoever can.
+  if (outage) console.error(error);
+  return outage ?? message(error);
 }
 
 export function App() {

@@ -162,7 +162,7 @@ describe("a canister that cannot derive vault keys", () => {
   // The whole point of #53: `IC0406 could not perform remote call` is what an
   // unfunded canister returns, and in a password manager it reads as data loss
   // — unlocking fails, so the secrets look gone. They are not.
-  const REASSURANCE = /Your secrets are intact and still encrypted/;
+  const REASSURANCE = /Your passwords are still there, encrypted and unchanged/;
 
   it("says the secrets are intact when opening a vault fails", async () => {
     const client = signedInAs(ALICE, new FakeClient(ALICE, [personal], {}));
@@ -198,8 +198,10 @@ describe("a canister that cannot derive vault keys", () => {
     client.healthState = "funded";
     render(<App />);
 
-    expect(await screen.findByText(/did not report why/)).toBeInTheDocument();
-    expect(screen.queryByText(REASSURANCE)).not.toBeInTheDocument();
+    // Still reassuring — that part does not depend on knowing the cause — but
+    // it must not say the deployment is out of cycles when it is not.
+    expect(await screen.findByText(REASSURANCE)).toBeInTheDocument();
+    expect(screen.queryByText(/run out of cycles/)).not.toBeInTheDocument();
   });
 
   it("records no loss of rights, because nothing about access changed", async () => {
