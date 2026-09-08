@@ -71,6 +71,19 @@ actor PasswordManager {
   /// replica's. Warning early costs one log line.
   transient let WARN_OPERATOR_BELOW = 3_000_000_000_000;
 
+  /// The balance under which cycles may be named to a **user** as the cause.
+  ///
+  /// Far below {@link WARN_OPERATOR_BELOW}, because the two answer different
+  /// questions and want opposite answers. The warning asks "is there still
+  /// time to act?" and should fire early. This one becomes a sentence somebody
+  /// reads — *this deployment has run out of cycles* — which is only true near
+  /// the cliff. Said at three trillion it would be a guess dressed as a
+  /// diagnosis, and `get_service_health` exists to avoid exactly that.
+  ///
+  /// About twice the measured cliff: margin for a boundary that moves with the
+  /// subnet's vetKD price, not a claim to know where it is.
+  transient let BLAME_CYCLES_BELOW = 1_000_000_000_000;
+
   /// Whether the low-balance warning is currently standing.
   ///
   /// Stable, and that is load-bearing rather than incidental: it makes **the
@@ -123,6 +136,63 @@ actor PasswordManager {
       warnedLowCycles := false;
       Debug.print("INFO cycles balance recovered (" # Nat.toText(balance) # ")");
     };
+  };
+
+  /// What the canister can say about its own ability to derive vault keys.
+  ///
+  /// A state, never a number: the balance itself is the operator's business.
+  ///
+  /// `#funded` means derivation should work, so a call that still failed did so
+  /// for a cause this canister cannot name. `#low_cycles` means the balance is
+  /// near the point where `vetkd_derive_key` is refused — see
+  /// {@link BLAME_CYCLES_BELOW}, which is not the threshold the operator's
+  /// warning uses, because naming a cause to a user demands more than warning
+  /// early does.
+  ///
+  /// Documented here rather than on the alternatives themselves: `icp-bindgen`
+  /// carries `///` comments into the generated binding, and one written against
+  /// a variant alternative lands on the *next method* in the Candid — putting a
+  /// sentence about derivation on `set_user_rights`, which has nothing to do
+  /// with it. Measured, not guessed at: `check-bindings` caught it.
+  public type ServiceHealth = {
+    #funded;
+    #low_cycles;
+  };
+
+  /// Why a `vetkd_derive_key` call might have just failed, for a client that
+  /// has one to explain.
+  ///
+  /// The canister cannot classify the failure itself. `get_encrypted_vetkey`
+  /// belongs to the control-plane mixin, and a mixin's methods cannot be
+  /// wrapped, so there is no server-side place to catch it — owning that one
+  /// endpoint would mean dropping the mixin and re-declaring everything it
+  /// contributes (dfinity/vetkeys#443). So the client has to ask, and this is
+  /// the answer.
+  ///
+  /// **Restricted to callers who can already see a vault.** By the time a
+  /// derive can fail for you, you have one: `create_vault` makes no
+  /// inter-canister call, so it succeeds on an unfunded canister, and opening
+  /// what you just created is the first thing that derives. Someone with no
+  /// vault therefore has no failure to explain, and learns nothing here.
+  ///
+  /// Being honest about that gate: it stops passive scraping, not a determined
+  /// prober, who can make an identity and a vault. It is a speed bump plus a
+  /// "you are affected anyway" filter, not a boundary. What keeps it cheap to
+  /// be wrong is that the answer is one bit and says nothing about how much
+  /// funding is left, or for how long.
+  public query (msg) func get_service_health() : async Result<ServiceHealth, Text> {
+    if (not seesAnyVault(msg.caller)) return #Err("unauthorized");
+    #Ok(if (Cycles.balance() < BLAME_CYCLES_BELOW) #low_cycles else #funded);
+  };
+
+  /// Whether this caller has any vault at all — owned or shared with them.
+  ///
+  /// Read from the registry and the access control list rather than from
+  /// `getAllAccessibleEncryptedMaps`, which would carry every vault's
+  /// ciphertext to answer a yes/no question.
+  func seesAnyVault(who : Principal) : Bool {
+    if (Map.size(vaultsOwnedBy(who)) > 0) return true;
+    encryptedMaps.getAccessibleSharedMapNames(who).size() > 0;
   };
 
   // ---------------------------------------------------------------------------

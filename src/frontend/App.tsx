@@ -44,6 +44,9 @@ import { ShareDialog } from "./components/ShareDialog";
 import * as seen from "./lib/seen";
 import { Sidebar } from "./components/Sidebar";
 import { CheckIcon, CopyIcon, PencilIcon, ShareIcon, TrashIcon } from "./components/Icons";
+import { AgentError } from "@icp-sdk/core/agent";
+import { describe } from "./lib/errors";
+import { outageMessage } from "./lib/health";
 
 /** How often to re-read the vault list. Queries only, so this is cheap. */
 export const POLL_INTERVAL_MS = 15_000;
@@ -73,8 +76,33 @@ function Toast({ message }: { message: string | null }) {
   );
 }
 
+/**
+ * What the banner says, and what the console keeps.
+ *
+ * An agent error's own message is written for whoever debugs the agent — see
+ * lib/errors — so the banner gets a classified sentence and the full error goes
+ * where someone can still read it.
+ */
 function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  logDetail(error);
+  return describe(error);
+}
+
+/** Keeps the plumbing one console away, since the banner drops it. */
+function logDetail(error: unknown): void {
+  if (error instanceof AgentError) console.error(error);
+}
+
+/**
+ * The same, except for the one failure the user cannot read: the canister
+ * unable to make its own `vetkd_derive_key` call, which arrives as `IC0406` and
+ * looks like the secrets are gone. Asks the canister and says what is true.
+ */
+async function reported(client: VaultClient, error: unknown): Promise<string> {
+  const outage = await outageMessage(error, () => client.health());
+  if (!outage) return message(error);
+  logDetail(error);
+  return outage;
 }
 
 export function App() {
@@ -311,7 +339,11 @@ export function App() {
           notify(refusal);
           return;
         }
-        setError(message(caught));
+        // Asking the canister is a round trip, so re-check that the session is
+        // still open before raising anything.
+        const text = client ? await reported(client, caught) : message(caught);
+        if (!open()) return;
+        setError(text);
       } finally {
         // Unguarded: `busy` gates the sign-in button, so leaving it set would
         // strand the lock screen. The lock clears it too, to close the window
@@ -319,7 +351,7 @@ export function App() {
         setBusy(false);
       }
     },
-    [refresh, notify, loads, patch],
+    [client, refresh, notify, loads, patch],
   );
 
   const handleSignIn = async () => {
@@ -466,7 +498,10 @@ export function App() {
         // Deliberately does not call refresh() here. `summary` is a reference
         // into the vaults array, so a refresh would give it a new identity,
         // re-run this effect, and fail again — a tight loop, not a retry.
-        setError(refusalMessage(caught, "open") ?? message(caught));
+        void (async () => {
+          const text = refusalMessage(caught, "open") ?? (await reported(client, caught));
+          if (!cancelled) setError(text);
+        })();
       });
 
     return () => {

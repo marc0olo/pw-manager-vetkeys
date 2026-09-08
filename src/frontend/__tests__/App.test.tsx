@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ALICE, BOB, FakeClient, fakeClipboard, identityFor, item, trashed, vault, version } from "./harness";
+import { HttpFetchErrorCode, TransportError } from "@icp-sdk/core/agent";
 import { toAccessRights, type AccessLevel } from "../lib/vault";
 
 /**
@@ -155,6 +156,89 @@ describe("an error banner", () => {
     await waitFor(() =>
       expect(screen.queryByText("You no longer have access to this vault.")).not.toBeInTheDocument(),
     );
+  });
+});
+
+describe("a canister that cannot derive vault keys", () => {
+  // The whole point of #53: `IC0406 could not perform remote call` is what an
+  // unfunded canister returns, and in a password manager it reads as data loss
+  // — unlocking fails, so the secrets look gone. They are not.
+  const REASSURANCE = /Your passwords are still there, encrypted and unchanged/;
+
+  it("says the secrets are intact when opening a vault fails", async () => {
+    const client = signedInAs(ALICE, new FakeClient(ALICE, [personal], {}));
+    client.outage = true;
+    render(<App />);
+
+    expect(await screen.findByText(REASSURANCE)).toBeInTheDocument();
+  });
+
+  it("says it when a save fails too, not only on open", async () => {
+    // Writing derives as much as reading does, and this is the path the bug was
+    // first reported on: adding a secret, not opening one.
+    const client = signedInAs(ALICE, new FakeClient(ALICE, [personal], {
+      Personal: [item({ id: "a", title: "GitHub" })],
+    }));
+    render(<App />);
+    fireEvent.click(await screen.findByText("GitHub"));
+    const edit = await screen.findByRole("button", { name: /^edit$/i });
+
+    client.outage = true;
+    fireEvent.click(edit);
+    fireEvent.click(await screen.findByRole("button", { name: /save/i }));
+
+    expect(await screen.findByText(REASSURANCE)).toBeInTheDocument();
+  });
+
+  it("does not blame cycles when the canister says it is funded", async () => {
+    // `IC0406` says the outbound call failed, not why. A vetKD key missing from
+    // the subnet looks identical from here, so a funded canister must not be
+    // reported as an outage.
+    const client = signedInAs(ALICE, new FakeClient(ALICE, [personal], {}));
+    client.outage = true;
+    client.healthState = "funded";
+    render(<App />);
+
+    // Still reassuring — that part does not depend on knowing the cause — but
+    // it must not say the deployment is out of cycles when it is not.
+    expect(await screen.findByText(REASSURANCE)).toBeInTheDocument();
+    expect(screen.queryByText(/run out of cycles/)).not.toBeInTheDocument();
+  });
+
+  it("records no loss of rights, because nothing about access changed", async () => {
+    // A denial filed here would withdraw a control the user still has — the
+    // same defect that disabled adding items after a failed trash empty.
+    const client = signedInAs(ALICE, new FakeClient(ALICE, [personal], {
+      Personal: [item({ id: "a", title: "GitHub" })],
+    }));
+    render(<App />);
+    fireEvent.click(await screen.findByText("GitHub"));
+    const edit = await screen.findByRole("button", { name: /^edit$/i });
+
+    client.outage = true;
+    fireEvent.click(edit);
+    fireEvent.click(await screen.findByRole("button", { name: /save/i }));
+    await screen.findByText(REASSURANCE);
+
+    // A write refusal withdraws this control. An outage must not: the user's
+    // rights are untouched, and the same save works once the canister is
+    // funded again.
+    client.outage = false;
+    expect(await screen.findByRole("button", { name: /save/i })).toBeInTheDocument();
+  });
+});
+
+describe("any other failure the canister or network produces", () => {
+  it("is classified, never pasted — an agent error's message is not for users", async () => {
+    // `@icp-sdk/core` builds `.message` for whoever debugs the agent: the
+    // request context and the whole HTTP response, every header. It used to go
+    // straight into the banner.
+    const client = signedInAs(ALICE, new FakeClient(ALICE, [personal], {}));
+    client.nextError = TransportError.fromCode(new HttpFetchErrorCode(new Error("Failed to fetch")));
+    render(<App />);
+
+    expect(await screen.findByText(/Could not reach this deployment/)).toBeInTheDocument();
+    expect(screen.queryByText(/content-type/)).not.toBeInTheDocument();
   });
 });
 

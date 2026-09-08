@@ -181,6 +181,8 @@ src/frontend/lib/auth.ts   Internet Identity, and the load-time session gate
 src/frontend/lib/session.ts  Idle timeout, activity mark, cross-tab lock, key purge
 src/frontend/lib/lock.ts     The lock sequence: ordering and failure safety
 src/frontend/lib/capabilities.ts  What we may do on a vault, and learning from a refusal
+src/frontend/lib/health.ts   Why a key derivation failed, in words a user can act on
+src/frontend/lib/errors.ts   How any other failure reads to a user, classified not pasted
 src/frontend/lib/backend.ts  This app's own endpoints, over the generated binding
 src/bindings/declarations  Generated from the canister's Candid — `npm run bindings`
 src/bindings/backend.most  The backend's stable signature, so stable-type changes show in a diff
@@ -412,6 +414,15 @@ icp canister top-up backend --amount 10000000000000
 > balance and logs a warning while it still works, and the replica checks
 > surface that warning. Canister logs are controller-only
 > (`icp canister logs backend`).
+>
+> If a user does reach it, the app asks `get_service_health` and leads with
+> the answer to the only question they have — the passwords are still there,
+> encrypted and unchanged — then names the cause if the canister knows one. The
+> reject goes to the console rather than the banner: a method name and an error
+> code under a heading about a canister is what made this read as data loss in
+> the first place. That answer is a state and never a balance, and only callers
+> who already have a vault get one — by the time a derive can fail for you, you
+> have one.
 
 ### Internet Identity
 

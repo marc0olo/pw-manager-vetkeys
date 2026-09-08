@@ -29,7 +29,9 @@ export type Result = { 'Ok' : null } |
   { 'Err' : string };
 export type Result_1 = { 'Ok' : [] | [AccessRights] } |
   { 'Err' : string };
-export type Result_10 = { 'Ok' : Array<[ByteBuf, ByteBuf]> } |
+export type Result_10 = { 'Ok' : ByteBuf } |
+  { 'Err' : string };
+export type Result_11 = { 'Ok' : Array<[ByteBuf, ByteBuf]> } |
   { 'Err' : string };
 export type Result_2 = { 'Ok' : bigint } |
   { 'Err' : string };
@@ -41,12 +43,14 @@ export type Result_5 = { 'Ok' : Array<TrashedItem> } |
   { 'Err' : string };
 export type Result_6 = { 'Ok' : Array<[Principal, AccessRights]> } |
   { 'Err' : string };
-export type Result_7 = { 'Ok' : Array<ItemSummary> } |
+export type Result_7 = { 'Ok' : ServiceHealth } |
   { 'Err' : string };
-export type Result_8 = { 'Ok' : Array<Version> } |
+export type Result_8 = { 'Ok' : Array<ItemSummary> } |
   { 'Err' : string };
-export type Result_9 = { 'Ok' : ByteBuf } |
+export type Result_9 = { 'Ok' : Array<Version> } |
   { 'Err' : string };
+export type ServiceHealth = { 'low_cycles' : null } |
+  { 'funded' : null };
 export interface TrashedItem {
   'seq' : bigint,
   'value' : ByteBuf,
@@ -173,8 +177,11 @@ export interface _SERVICE {
     Array<[[Principal, ByteBuf], Array<[ByteBuf, ByteBuf]>]>
   >,
   'get_encrypted_value' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_4>,
-  'get_encrypted_values_for_map' : ActorMethod<[Principal, ByteBuf], Result_10>,
-  'get_encrypted_vetkey' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_9>,
+  'get_encrypted_values_for_map' : ActorMethod<[Principal, ByteBuf], Result_11>,
+  'get_encrypted_vetkey' : ActorMethod<
+    [Principal, ByteBuf, ByteBuf],
+    Result_10
+  >,
   /**
    * / Every recorded version of one secret, oldest first.
    * /
@@ -187,7 +194,7 @@ export interface _SERVICE {
    * / Not on the poll. Values ride this because it is user-initiated and scoped
    * / to one secret; #14's rule is that nothing automatic carries ciphertext.
    */
-  'get_history' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_8>,
+  'get_history' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_9>,
   /**
    * / Per-item history facts for one vault: how much is restorable, and when the
    * / current value was actually written.
@@ -199,7 +206,7 @@ export interface _SERVICE {
    * /
    * / No ciphertext, so it costs no key derivation.
    */
-  'get_item_summaries' : ActorMethod<[Principal, ByteBuf], Result_7>,
+  'get_item_summaries' : ActorMethod<[Principal, ByteBuf], Result_8>,
   'get_owned_non_empty_map_names' : ActorMethod<[], Array<ByteBuf>>,
   /**
    * / Every vault this caller owns, whether or not it holds anything.
@@ -208,6 +215,30 @@ export interface _SERVICE {
    * / without inferring it from a listing that also carries shared vaults.
    */
   'get_owned_vaults' : ActorMethod<[], Array<ByteBuf>>,
+  /**
+   * / Why a `vetkd_derive_key` call might have just failed, for a client that
+   * / has one to explain.
+   * /
+   * / The canister cannot classify the failure itself. `get_encrypted_vetkey`
+   * / belongs to the control-plane mixin, and a mixin's methods cannot be
+   * / wrapped, so there is no server-side place to catch it — owning that one
+   * / endpoint would mean dropping the mixin and re-declaring everything it
+   * / contributes (dfinity/vetkeys#443). So the client has to ask, and this is
+   * / the answer.
+   * /
+   * / **Restricted to callers who can already see a vault.** By the time a
+   * / derive can fail for you, you have one: `create_vault` makes no
+   * / inter-canister call, so it succeeds on an unfunded canister, and opening
+   * / what you just created is the first thing that derives. Someone with no
+   * / vault therefore has no failure to explain, and learns nothing here.
+   * /
+   * / Being honest about that gate: it stops passive scraping, not a determined
+   * / prober, who can make an identity and a vault. It is a speed bump plus a
+   * / "you are affected anyway" filter, not a boundary. What keeps it cheap to
+   * / be wrong is that the answer is one bit and says nothing about how much
+   * / funding is left, or for how long.
+   */
+  'get_service_health' : ActorMethod<[], Result_7>,
   'get_shared_user_access_for_map' : ActorMethod<
     [Principal, ByteBuf],
     Result_6

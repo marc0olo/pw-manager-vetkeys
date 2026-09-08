@@ -142,6 +142,45 @@ for (const level of ["Read", "ReadWrite", "ReadWriteManage"]) {
   check("someone with no access is told nothing", listed.length === 0, `${listed.length} vaults`);
 }
 
+// ---- who may ask why a derivation failed ----------------------------------
+//
+// `get_service_health` exists so a client can explain `IC0406` instead of
+// letting it read as data loss. It answers a state, never a balance, and only
+// for callers who already have a vault — by the time a derive can fail for
+// you, you have one, because `create_vault` makes no inter-canister call and
+// opening what you just created is the first thing that derives.
+{
+  const stranger = await connect(Ed25519KeyIdentity.generate());
+  const refused = await stranger.api.get_service_health();
+  check("someone with no vault is refused", "Err" in refused, JSON.stringify(refused));
+  check(
+    "and the refusal says exactly `unauthorized`, like every other",
+    refused.Err === "unauthorized",
+    refused.Err,
+  );
+
+  const asOwner = await O.api.get_service_health();
+  check("an owner gets an answer", "Ok" in asOwner, JSON.stringify(asOwner));
+  check(
+    "and on a funded canister it is `funded`, not a number",
+    "funded" in (asOwner.Ok ?? {}),
+    JSON.stringify(asOwner.Ok),
+  );
+
+  // A grantee owns nothing, so this is the arm the registry cannot answer.
+  const { G } = await vaultSharedAt("Read", "Vault Health Grantee");
+  const asGrantee = await G.api.get_service_health();
+  check(
+    "a grantee who owns no vault still gets an answer",
+    "Ok" in asGrantee && "funded" in asGrantee.Ok,
+    JSON.stringify(asGrantee),
+  );
+
+  derivations = 0;
+  await O.api.get_service_health();
+  check("asking derives no keys", derivations === 0, `${derivations} derivations`);
+}
+
 // ---- what a wipe leaves behind, which the dialog promises ------------------
 //
 // "The vault itself stays, and so does everyone's access to it." Both halves
