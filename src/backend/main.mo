@@ -93,11 +93,15 @@ actor PasswordManager {
   /// well funded the deployment is and help only the operator, who has
   /// `icp canister status` already.
   ///
-  /// **Only update calls can do this.** Query output is not written to the
-  /// canister log, and the derive that actually fails is reached by *reading* a
-  /// vault — so a user who only reads gets no warning from here. Writes are the
-  /// earliest thing this canister can observe, which is why the call belongs on
-  /// every update endpoint below rather than on the interesting ones.
+  /// **Called from every update endpoint this canister owns**, rather than from
+  /// the interesting ones, because any of them is a chance to notice.
+  ///
+  /// That is ten endpoints, and not the four the mixin contributes:
+  /// `get_encrypted_vetkey` — the call that actually fails — plus
+  /// `get_vetkey_verification_key`, `set_user_rights` and `remove_user`. A
+  /// mixin's methods cannot be wrapped (dfinity/vetkeys#443), so a session that
+  /// only opens vaults and manages sharing never ticks this. Storing a secret
+  /// is the earliest thing the canister can observe for itself.
   ///
   /// Printed on the transition rather than on every write: the log holds 4 KiB
   /// by default, so a line repeated per write would leave a buffer containing
