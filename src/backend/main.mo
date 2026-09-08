@@ -1,4 +1,9 @@
-import EncryptedMapsControlPlaneCanister "mo:ic-vetkeys/encrypted_maps/ControlPlaneCanister";
+import Shared "lib/vetkeys/Types";
+import VetKdEndpoints "lib/vetkeys/VetKdEndpoints";
+import EnumerationEndpoints "lib/vetkeys/EnumerationEndpoints";
+import AccessControlReadEndpoints "lib/vetkeys/AccessControlReadEndpoints";
+import AccessControlWriteEndpoints "lib/vetkeys/AccessControlWriteEndpoints";
+import ValueReadEndpoints "lib/vetkeys/ValueReadEndpoints";
 import EncryptedMaps "mo:ic-vetkeys/encrypted_maps/EncryptedMaps";
 import Types "mo:ic-vetkeys/Types";
 import Runtime "mo:core/Runtime";
@@ -49,7 +54,22 @@ actor PasswordManager {
   // `DefaultEncryptedMapsClient` cannot tell the difference. `npm run
   // check-bindings` is what holds that claim to account — a drifted signature
   // shows up as a diff in the generated Candid.
-  include EncryptedMapsControlPlaneCanister(encryptedMapsState);
+  // The endpoint groups dfinity/vetkeys#443 proposes, built locally to test the
+  // boundaries before the library commits to them (#58). Five are included as
+  // the library would provide them; `ValueWrites` is the one this application
+  // owns, and lives below.
+  //
+  // The instance is constructed here and passed to each group rather than each
+  // group building its own from the state: sibling mixins cannot both declare
+  // `encryptedMaps`, because M0051 rejects a duplicate binding exactly as it
+  // rejects a duplicate type.
+  transient let encryptedMaps = EncryptedMaps.EncryptedMaps(encryptedMapsState, Types.accessRightsOperations());
+
+  include VetKdEndpoints(encryptedMaps);
+  include EnumerationEndpoints(encryptedMaps);
+  include AccessControlReadEndpoints(encryptedMaps);
+  include AccessControlWriteEndpoints(encryptedMaps);
+  include ValueReadEndpoints(encryptedMaps);
 
   // ---------------------------------------------------------------------------
   // Cycles watchdog
@@ -174,7 +194,7 @@ actor PasswordManager {
   /// "you are affected anyway" filter, not a boundary. What keeps it cheap to
   /// be wrong is that the answer is one bit and says nothing about how much
   /// funding is left, or for how long.
-  public query (msg) func get_service_health() : async Result<ServiceHealth, Text> {
+  public query (msg) func get_service_health() : async Shared.Result<ServiceHealth, Text> {
     if (not seesAnyVault(msg.caller)) return #Err("unauthorized");
     #Ok(if (Cycles.balance() < BLAME_CYCLES_BELOW) #low_cycles else #funded);
   };
@@ -198,81 +218,12 @@ actor PasswordManager {
   // which change did it.
   // ---------------------------------------------------------------------------
 
-  public type EncryptedMapData = {
-    map_owner : Principal;
-    map_name : ByteBuf;
-    keyvals : [(ByteBuf, ByteBuf)];
-    access_control : [(Principal, Types.AccessRights)];
-  };
-
-  // Written as the mixin writes it, with the mapping inline.
-  //
-  // A named helper declared `... : (ByteBuf, ByteBuf)` cannot be passed to
-  // `Array.map`, and the reason is the *return* type rather than the parameter:
-  //
-  //     expression of type   ((Blob, Blob)) -> (ByteBuf, ByteBuf)
-  //     cannot produce type  ((Blob, Blob)) -> ((ByteBuf, ByteBuf))
-  //
-  // Motoko reads `-> (A, B)` as returning two values, where `Array.map` wants
-  // one value that is a tuple. Writing the return type as `((ByteBuf, ByteBuf))`
-  // does compile — verified — but a stray pair of parentheses carrying that much
-  // meaning is the kind of thing a later tidy-up removes, so the lambda stays.
-  func bufs(pairs : [(Blob, Blob)]) : [(ByteBuf, ByteBuf)] {
-    Array.map<(Blob, Blob), (ByteBuf, ByteBuf)>(
-      pairs,
-      func((a, b) : (Blob, Blob)) { ({ inner = a }, { inner = b }) },
-    );
-  };
-
-  public query (msg) func get_encrypted_values_for_map(
-    map_owner : Principal,
-    map_name : ByteBuf,
-  ) : async Result<[(ByteBuf, ByteBuf)], Text> {
-    switch (encryptedMaps.getEncryptedValuesForMap(msg.caller, (map_owner, map_name.inner))) {
-      case (#err(e)) { #Err(e) };
-      case (#ok(values)) { #Ok(bufs(values)) };
-    };
-  };
-
-  public query (msg) func get_all_accessible_encrypted_values() : async [((Principal, ByteBuf), [(ByteBuf, ByteBuf)])] {
-    Array.map<((Principal, Blob), [(Blob, Blob)]), ((Principal, ByteBuf), [(ByteBuf, ByteBuf)])>(
-      encryptedMaps.getAllAccessibleEncryptedValues(msg.caller),
-      func(((owner, name), values)) { ((owner, { inner = name }), bufs(values)) },
-    );
-  };
-
-  public query (msg) func get_all_accessible_encrypted_maps() : async [EncryptedMapData] {
-    Array.map<EncryptedMaps.EncryptedMapData<Types.AccessRights>, EncryptedMapData>(
-      encryptedMaps.getAllAccessibleEncryptedMaps(msg.caller),
-      func(map) {
-        {
-          map_owner = map.map_owner;
-          map_name = { inner = map.map_name };
-          keyvals = bufs(map.keyvals);
-          access_control = map.access_control;
-        };
-      },
-    );
-  };
-
-  public query (msg) func get_encrypted_value(
-    map_owner : Principal,
-    map_name : ByteBuf,
-    map_key : ByteBuf,
-  ) : async Result<?ByteBuf, Text> {
-    switch (encryptedMaps.getEncryptedValue(msg.caller, (map_owner, map_name.inner), map_key.inner)) {
-      case (#err(e)) { #Err(e) };
-      case (#ok(null)) { #Ok(null) };
-      case (#ok(?blob)) { #Ok(?{ inner = blob }) };
-    };
-  };
-
   public shared (msg) func insert_encrypted_value(
     map_owner : Principal,
-    map_name : ByteBuf,
-    map_key : ByteBuf,
-    value : ByteBuf,
-  ) : async Result<?ByteBuf, Text> {
+    map_name : Shared.ByteBuf,
+    map_key : Shared.ByteBuf,
+    value : Shared.ByteBuf,
+  ) : async Shared.Result<?Shared.ByteBuf, Text> {
     watchdog();
     switch (encryptedMaps.insertEncryptedValue(msg.caller, (map_owner, map_name.inner), map_key.inner, value.inner)) {
       case (#err(e)) { #Err(e) };
@@ -314,9 +265,9 @@ actor PasswordManager {
 
   public shared (msg) func remove_encrypted_value(
     map_owner : Principal,
-    map_name : ByteBuf,
-    map_key : ByteBuf,
-  ) : async Result<?ByteBuf, Text> {
+    map_name : Shared.ByteBuf,
+    map_key : Shared.ByteBuf,
+  ) : async Shared.Result<?Shared.ByteBuf, Text> {
     watchdog();
     // The library call first: it performs the access check, and hands back the
     // value it removed. Only then is our store touched, so a caller without
@@ -339,8 +290,8 @@ actor PasswordManager {
 
   public shared (msg) func remove_map_values(
     map_owner : Principal,
-    map_name : ByteBuf,
-  ) : async Result<[ByteBuf], Text> {
+    map_name : Shared.ByteBuf,
+  ) : async Shared.Result<[Shared.ByteBuf], Text> {
     watchdog();
     // `removeMapValues` returns only the *keys* it removed, so the values have
     // to be read before the call — after it they are gone, and a wipe would
@@ -364,7 +315,7 @@ actor PasswordManager {
           // the library would say the same, at the cost of a second pass.
           func(_ : Blob) : Bool { false },
         );
-        #Ok(Array.map<Blob, ByteBuf>(keys, func(b : Blob) : ByteBuf { { inner = b } }));
+        #Ok(Array.map<Blob, Shared.ByteBuf>(keys, func(b : Blob) : Shared.ByteBuf { { inner = b } }));
       };
     };
   };
@@ -498,7 +449,7 @@ actor PasswordManager {
     /// and deleted again, so several events share it. Addressing a restore by
     /// map key would be ambiguous the moment that happens.
     seq : Nat64;
-    map_key : ByteBuf;
+    map_key : Shared.ByteBuf;
     /// The ciphertext, so the client can show what an item actually was.
     ///
     /// #14 removed values from the *poll* — automatic, every 15 s, every
@@ -511,7 +462,7 @@ actor PasswordManager {
     /// Costs the client nothing extra to read: the value was never
     /// re-encrypted, so the key material cached from opening the vault
     /// decrypts it.
-    value : ByteBuf;
+    value : Shared.ByteBuf;
     deleted_at : Nat64;
     deleted_by : Principal;
   };
@@ -542,7 +493,7 @@ actor PasswordManager {
   /// `deletedBy` into authorization data rather than display, and because it
   /// denies a team the case a shared vault exists for: recovering what a
   /// colleague who has since left deleted.
-  public query (msg) func get_trash(map_owner : Principal, map_name : ByteBuf) : async Result<[TrashedItem], Text> {
+  public query (msg) func get_trash(map_owner : Principal, map_name : Shared.ByteBuf) : async Shared.Result<[TrashedItem], Text> {
     if (not canRead(msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
     #Ok(
       Array.filterMap<(Blob, Nat64, History.Entry), TrashedItem>(
@@ -576,7 +527,7 @@ actor PasswordManager {
     /// nothing, and for a version whose ciphertext the owner has dropped —
     /// the event is still here, which is the point of dropping rather than
     /// deleting.
-    value : ?ByteBuf;
+    value : ?Shared.ByteBuf;
     at : Nat64;
     by : Principal;
     kind : VersionKind;
@@ -594,9 +545,9 @@ actor PasswordManager {
   /// to one secret; #14's rule is that nothing automatic carries ciphertext.
   public query (msg) func get_history(
     map_owner : Principal,
-    map_name : ByteBuf,
-    map_key : ByteBuf,
-  ) : async Result<[Version], Text> {
+    map_name : Shared.ByteBuf,
+    map_key : Shared.ByteBuf,
+  ) : async Shared.Result<[Version], Text> {
     if (not canRead(msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
     let isLive = liveness(msg.caller, map_owner, map_name.inner);
     let rows = History.forKey(history, map_owner, map_name.inner, map_key.inner);
@@ -634,9 +585,9 @@ actor PasswordManager {
   /// anything, and what lets a recovered secret keep its history.
   public shared (msg) func restore_version(
     map_owner : Principal,
-    map_name : ByteBuf,
+    map_name : Shared.ByteBuf,
     seq : Nat64,
-  ) : async Result<(), Text> {
+  ) : async Shared.Result<(), Text> {
     watchdog();
     let at = now();
     // The map key is part of the event key, so the row has to be found by
@@ -675,7 +626,7 @@ actor PasswordManager {
   };
 
   public type ItemSummary = {
-    map_key : ByteBuf;
+    map_key : Shared.ByteBuf;
     /// Restorable versions: value-carrying events only. A `#Created` marker and
     /// a version the owner has pruned are both on the record, but neither is
     /// something a client can offer to put back.
@@ -703,8 +654,8 @@ actor PasswordManager {
   /// No ciphertext, so it costs no key derivation.
   public query (msg) func get_item_summaries(
     map_owner : Principal,
-    map_name : ByteBuf,
-  ) : async Result<[ItemSummary], Text> {
+    map_name : Shared.ByteBuf,
+  ) : async Shared.Result<[ItemSummary], Text> {
     if (not canRead(msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
     let isLive = liveness(msg.caller, map_owner, map_name.inner);
     let at = now();
@@ -737,7 +688,7 @@ actor PasswordManager {
   /// several events for one map key, and replaying them all would mean each
   /// insert overwriting the last — silent loss inside a recovery operation.
   /// `History.trash` already yields one row per key, which is that row.
-  public shared (msg) func restore_trashed_values(map_owner : Principal, map_name : ByteBuf) : async Result<Nat, Text> {
+  public shared (msg) func restore_trashed_values(map_owner : Principal, map_name : Shared.ByteBuf) : async Shared.Result<Nat, Text> {
     watchdog();
     let at = now();
     let isLive = liveness(msg.caller, map_owner, map_name.inner);
@@ -780,7 +731,7 @@ actor PasswordManager {
   ///
   /// Scoped to secrets with no live value, so it empties the trash without
   /// touching the version history of secrets that are still there.
-  public shared (msg) func discard_trash(map_owner : Principal, map_name : ByteBuf) : async Result<Nat, Text> {
+  public shared (msg) func discard_trash(map_owner : Principal, map_name : Shared.ByteBuf) : async Shared.Result<Nat, Text> {
     watchdog();
     if (Principal.compare(msg.caller, map_owner) != #equal) return #Err("unauthorized");
     let (next, dropped) = History.discardTrash(
@@ -809,9 +760,9 @@ actor PasswordManager {
   /// it is a destruction, not housekeeping.
   public shared (msg) func drop_history(
     map_owner : Principal,
-    map_name : ByteBuf,
-    map_key : ByteBuf,
-  ) : async Result<Nat, Text> {
+    map_name : Shared.ByteBuf,
+    map_key : Shared.ByteBuf,
+  ) : async Shared.Result<Nat, Text> {
     watchdog();
     if (Principal.compare(msg.caller, map_owner) != #equal) return #Err("unauthorized");
     let (next, cleared) = History.dropHistory(history, map_owner, map_name.inner, map_key.inner);
@@ -835,7 +786,7 @@ actor PasswordManager {
   /// so that renaming a vault does not leave the original in plaintext forever;
   /// that is a client concern, the same as item ids, and not something this can
   /// enforce.
-  public shared (msg) func create_vault(map_name : ByteBuf) : async Result<(), Text> {
+  public shared (msg) func create_vault(map_name : Shared.ByteBuf) : async Shared.Result<(), Text> {
     watchdog();
     if (Principal.isAnonymous(msg.caller)) {
       return #Err("Sign in to create a vault.");
@@ -876,7 +827,7 @@ actor PasswordManager {
   /// from the canister; it does not revoke the key. Vaults created through the
   /// app get a random name for exactly this reason (#13), which makes reuse
   /// effectively impossible — but the copy must not promise erasure.
-  public shared (msg) func delete_vault(map_name : ByteBuf) : async Result<(), Text> {
+  public shared (msg) func delete_vault(map_name : Shared.ByteBuf) : async Shared.Result<(), Text> {
     watchdog();
     if (Principal.isAnonymous(msg.caller)) return #Err("unauthorized");
     let mapName = map_name.inner;
@@ -937,8 +888,8 @@ actor PasswordManager {
   ///
   /// The registry read on its own, for a client that wants to know what it owns
   /// without inferring it from a listing that also carries shared vaults.
-  public query (msg) func get_owned_vaults() : async [ByteBuf] {
-    var out : [ByteBuf] = [];
+  public query (msg) func get_owned_vaults() : async [Shared.ByteBuf] {
+    var out : [Shared.ByteBuf] = [];
     for ((mapName, _) in Map.entries(vaultsOwnedBy(msg.caller))) {
       out := Array.concat(out, [{ inner = mapName }]);
     };
@@ -1067,7 +1018,7 @@ actor PasswordManager {
 
   public type VaultName = {
     owner : Principal;
-    map_name : ByteBuf;
+    map_name : Shared.ByteBuf;
     display_name : Text;
   };
 
@@ -1104,7 +1055,7 @@ actor PasswordManager {
     false;
   };
 
-  public shared (msg) func set_vault_name(map_name : ByteBuf, display_name : Text) : async Result<(), Text> {
+  public shared (msg) func set_vault_name(map_name : Shared.ByteBuf, display_name : Text) : async Shared.Result<(), Text> {
     watchdog();
     // Nothing an anonymous caller stores can ever be read back — every row is
     // keyed on its author and only surfaces for them or for someone they shared
@@ -1240,11 +1191,11 @@ actor PasswordManager {
 
   public type VaultSummary = {
     owner : Principal;
-    map_name : ByteBuf;
+    map_name : Shared.ByteBuf;
     access_control : [(Principal, Types.AccessRights)];
-    item_keys : [ByteBuf];
+    item_keys : [Shared.ByteBuf];
     /// SHA-256 over the vault's contents. Changes iff the contents change.
-    digest : ByteBuf;
+    digest : Shared.ByteBuf;
     /// Recoverable deletions the caller may see. Lets the UI offer restoring
     /// without a second round trip, and without hinting at entries it may not.
     trashed : Nat;
@@ -1259,7 +1210,7 @@ actor PasswordManager {
     /// so a second viewer would keep a stale list. #14's rule is that the poll
     /// carries no ciphertext, and this is how it stays true — the digest says
     /// whether to re-read, and only then does anything fetch values.
-    trash_digest : ByteBuf;
+    trash_digest : Shared.ByteBuf;
   };
 
   /// Owned vaults the library's enumeration leaves out.
@@ -1344,7 +1295,7 @@ actor PasswordManager {
           owner = map.map_owner;
           map_name = { inner = map.map_name };
           access_control = map.access_control;
-          item_keys = Array.map<(Blob, Blob), ByteBuf>(sorted, func((key, _)) { { inner = key } });
+          item_keys = Array.map<(Blob, Blob), Shared.ByteBuf>(sorted, func((key, _)) { { inner = key } });
           digest = { inner = Digest.ofKeyvals(map.keyvals) };
           trashed = inTrash.size();
           my_rights = rightsOf(msg.caller, map.map_owner, map.map_name);
