@@ -298,6 +298,7 @@ Two limits worth knowing:
 ## Run it
 
 ```bash
+nvm use                       # or fnm use — reads .nvmrc
 npm install
 
 icp network start -d          # gateway pinned to port 8100 (see below)
@@ -305,6 +306,12 @@ icp deploy                    # builds the canister and the frontend, then syncs
 ```
 
 `icp deploy` prints the frontend URL: `http://frontend.local.localhost:8100/`.
+
+`.nvmrc` names the Node line CI runs and the Motoko dev image ships, so
+`nvm use` puts local development on the same one. Skipping it mostly works —
+`engines` in `package.json` states a lower floor and the code holds to it — but
+a Node your bundled `npm` does not support prints a warning on every command,
+and a warning you always see is a warning you stop reading.
 
 > A **reinstall is sometimes wanted even when an upgrade would work.** The
 > owned-vault registry is the example: the stable signature is compatible, but

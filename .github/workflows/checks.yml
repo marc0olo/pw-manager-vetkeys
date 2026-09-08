@@ -22,10 +22,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          # 24 to match the backend job's dev image and local development.
-          # `engines` in package.json states the supported floor, which is
-          # lower; this is what the code is actually exercised on.
-          node-version: 24
+          # From `.nvmrc`, so local development and this job cannot drift.
+          # It resolves to the latest 24.x, matching the backend job's dev
+          # image. `engines` in package.json states the supported floor, which
+          # is lower; this is what the code is actually exercised on.
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - run: npx tsc --noEmit
