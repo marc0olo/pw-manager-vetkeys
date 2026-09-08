@@ -128,11 +128,18 @@ actor PasswordManager {
   /// What the canister can say about its own ability to derive vault keys.
   ///
   /// A state, never a number: the balance itself is the operator's business.
+  ///
+  /// `#funded` means derivation should work, so a call that still failed did so
+  /// for a cause this canister cannot name. `#low_cycles` means the balance is
+  /// low enough that `vetkd_derive_key` is at risk or already refused.
+  ///
+  /// Documented here rather than on the alternatives themselves: `icp-bindgen`
+  /// carries `///` comments into the generated binding, and one written against
+  /// a variant alternative lands on the *next method* in the Candid — putting a
+  /// sentence about derivation on `set_user_rights`, which has nothing to do
+  /// with it. Measured, not guessed at: `check-bindings` caught it.
   public type ServiceHealth = {
-    /// Derivation should work. If a call still failed, the cause is not one
-    /// this canister can name.
     #funded;
-    /// Low enough that `vetkd_derive_key` is at risk or already refused.
     #low_cycles;
   };
 
