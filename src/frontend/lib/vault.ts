@@ -10,6 +10,7 @@ import {
 import { compareItems, decodeItem, encodeItem, type VaultItem } from "./items";
 import { backendActor } from "./backend";
 import { keyCacheName } from "./session";
+import type { Health } from "./health";
 
 export type { AccessRights };
 
@@ -613,6 +614,24 @@ export class VaultClient {
 
   async revoke(vault: VaultSummary, user: Principal): Promise<void> {
     await this.encryptedMaps.removeUser(vault.owner, nameBytes(vault.name), user);
+  }
+
+  /**
+   * What the canister says about its own ability to derive vault keys.
+   *
+   * `"unknown"` for a refusal as much as for a network failure: the canister
+   * answers this only for callers who can already see a vault, and either way
+   * we have nothing to tell the user. Never throws — it exists to explain a
+   * failure, so failing itself must not replace the error it was explaining.
+   */
+  async health(): Promise<Health> {
+    try {
+      const result = await this.backend.get_service_health();
+      if ("Err" in result) return "unknown";
+      return "low_cycles" in result.Ok ? "low-cycles" : "funded";
+    } catch {
+      return "unknown";
+    }
   }
 
   /** Drops the cached vault keys, including the persisted ones. */

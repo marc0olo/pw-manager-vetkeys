@@ -24,11 +24,11 @@ export const idlFactory = ({ IDL }) => {
     'map_owner' : IDL.Principal,
   });
   const Result_4 = IDL.Variant({ 'Ok' : IDL.Opt(ByteBuf), 'Err' : IDL.Text });
-  const Result_10 = IDL.Variant({
+  const Result_11 = IDL.Variant({
     'Ok' : IDL.Vec(IDL.Tuple(ByteBuf, ByteBuf)),
     'Err' : IDL.Text,
   });
-  const Result_9 = IDL.Variant({ 'Ok' : ByteBuf, 'Err' : IDL.Text });
+  const Result_10 = IDL.Variant({ 'Ok' : ByteBuf, 'Err' : IDL.Text });
   const VersionKind = IDL.Variant({
     'Edited' : IDL.Null,
     'Restored' : IDL.Null,
@@ -42,16 +42,21 @@ export const idlFactory = ({ IDL }) => {
     'value' : IDL.Opt(ByteBuf),
     'kind' : VersionKind,
   });
-  const Result_8 = IDL.Variant({ 'Ok' : IDL.Vec(Version), 'Err' : IDL.Text });
+  const Result_9 = IDL.Variant({ 'Ok' : IDL.Vec(Version), 'Err' : IDL.Text });
   const ItemSummary = IDL.Record({
     'updated_at' : IDL.Nat64,
     'map_key' : ByteBuf,
     'versions' : IDL.Nat,
   });
-  const Result_7 = IDL.Variant({
+  const Result_8 = IDL.Variant({
     'Ok' : IDL.Vec(ItemSummary),
     'Err' : IDL.Text,
   });
+  const ServiceHealth = IDL.Variant({
+    'low_cycles' : IDL.Null,
+    'funded' : IDL.Null,
+  });
+  const Result_7 = IDL.Variant({ 'Ok' : ServiceHealth, 'Err' : IDL.Text });
   const Result_6 = IDL.Variant({
     'Ok' : IDL.Vec(IDL.Tuple(IDL.Principal, AccessRights)),
     'Err' : IDL.Text,
@@ -126,22 +131,22 @@ export const idlFactory = ({ IDL }) => {
       ),
     'get_encrypted_values_for_map' : IDL.Func(
         [IDL.Principal, ByteBuf],
-        [Result_10],
+        [Result_11],
         ['query'],
       ),
     'get_encrypted_vetkey' : IDL.Func(
         [IDL.Principal, ByteBuf, ByteBuf],
-        [Result_9],
+        [Result_10],
         [],
       ),
     'get_history' : IDL.Func(
         [IDL.Principal, ByteBuf, ByteBuf],
-        [Result_8],
+        [Result_9],
         ['query'],
       ),
     'get_item_summaries' : IDL.Func(
         [IDL.Principal, ByteBuf],
-        [Result_7],
+        [Result_8],
         ['query'],
       ),
     'get_owned_non_empty_map_names' : IDL.Func(
@@ -150,6 +155,7 @@ export const idlFactory = ({ IDL }) => {
         ['query'],
       ),
     'get_owned_vaults' : IDL.Func([], [IDL.Vec(ByteBuf)], ['query']),
+    'get_service_health' : IDL.Func([], [Result_7], ['query']),
     'get_shared_user_access_for_map' : IDL.Func(
         [IDL.Principal, ByteBuf],
         [Result_6],
