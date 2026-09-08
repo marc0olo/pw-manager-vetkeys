@@ -392,10 +392,16 @@ with:
 icp canister top-up backend --amount 10000000000000
 ```
 
-> **`IC0406 could not perform remote call`** means the canister's *outbound*
-> call failed, not why. Running out of cycles is the cause you will hit here;
-> a vetKD key missing from the subnet and queue pressure look identical from
-> outside. It is worth recognising because in this app it presents as data
+> **`IC0406`** means the canister's *outbound* call failed, not why. Running
+> out of cycles is the cause you will hit here; a vetKD key missing from the
+> subnet, a freezing threshold reserving the balance, and queue pressure look
+> identical from outside — the reject text even varies (`could not perform
+> remote call`, `could not perform self call`), which is why the code is what
+> the app matches on.
+>
+> Measured on a local replica: derivation still worked at **482 B** and failed
+> at **472 B**. So a derive needs a few hundred billion cycles of room, well
+> beyond the ~26 B it reserves. It is worth recognising because in this app it presents as data
 > loss — unlocking fails, so the secrets look gone, when nothing is gone and a
 > top-up restores everything.
 >

@@ -57,17 +57,23 @@ actor PasswordManager {
 
   /// The balance under which this canister warns about itself.
   ///
-  /// A **heuristic**, not a measured boundary. What is measured: derivation
-  /// failed at 481 B and 464 B, and works in the low trillions; a
-  /// `vetkd_derive_key` reserves roughly 26 B, and the freezing threshold
-  /// reserves another ~30 B at the current idle burn. The real boundary also
-  /// moves with the subnet's vetKD price, so this sits far above every
-  /// observation rather than close to any of them — the cost of warning early
-  /// is a log line, and the cost of warning late is an app that looks like it
-  /// lost your secrets.
+  /// **Deliberately three orders of magnitude above the cliff.** The cliff
+  /// itself is measured: on a local replica, deriving from a canister draining
+  /// 10 B at a time, the last success was at 482.0 B and the next attempt
+  /// failed at 471.9 B with `IC0406`. So a derive needs a few hundred billion
+  /// cycles of room, not the ~26 B it reserves — most of what it wants is
+  /// never spent.
   ///
-  /// For scale: one round of the replica checks costs about 0.5 T, so this
-  /// fires with roughly two rounds of headroom left.
+  /// This is not set near that boundary, because a warning is only useful
+  /// while there is time to act on it. One round of the replica checks costs
+  /// about 0.5 T, so 1 T is roughly two rounds of headroom — which is the unit
+  /// the balance actually disappears in. The cost of warning early is a log
+  /// line; the cost of warning late is an app that looks like it lost your
+  /// secrets.
+  ///
+  /// The cliff also moves with the subnet's vetKD price and with the freezing
+  /// threshold, which reserves against the same balance, so the measurement
+  /// above bounds it rather than fixing it.
   transient let LOW_CYCLES_THRESHOLD = 1_000_000_000_000;
 
   /// Whether the low-balance warning is currently standing.
