@@ -401,9 +401,13 @@ icp canister top-up backend --amount 10000000000000
 >
 > Measured on a local replica: derivation still worked at **482 B** and failed
 > at **472 B**. So a derive needs a few hundred billion cycles of room, well
-> beyond the ~26 B it reserves. It is worth recognising because in this app it presents as data
-> loss — unlocking fails, so the secrets look gone, when nothing is gone and a
-> top-up restores everything.
+> beyond the ~26 B it reserves — and one round of the six replica checks costs
+> 538 B, which is why the watchdog's threshold is counted in rounds above that
+> cliff rather than as a multiple of it.
+>
+> Worth recognising because in this app it presents as data loss — unlocking
+> fails, so the secrets look gone, when nothing is gone and a top-up restores
+> everything.
 >
 > The canister tries not to let you reach it: every write checks its own
 > balance and logs a warning while it still works, and the replica checks

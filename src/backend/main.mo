@@ -57,24 +57,31 @@ actor PasswordManager {
 
   /// The balance under which this canister warns about itself.
   ///
-  /// **Deliberately three orders of magnitude above the cliff.** The cliff
-  /// itself is measured: on a local replica, deriving from a canister draining
-  /// 10 B at a time, the last success was at 482.0 B and the next attempt
+  /// **Derived from the cliff and from what a round of work costs**, so that a
+  /// warning leaves room to act rather than only room to fall.
+  ///
+  /// The cliff is measured: draining a canister 10 B at a time on a local
+  /// replica, the last successful derive was at 482.0 B and the next attempt
   /// failed at 471.9 B with `IC0406`. So a derive needs a few hundred billion
-  /// cycles of room, not the ~26 B it reserves — most of what it wants is
+  /// cycles of *room*, not the ~26 B it reserves — most of what it wants is
   /// never spent.
   ///
-  /// This is not set near that boundary, because a warning is only useful
-  /// while there is time to act on it. One round of the replica checks costs
-  /// about 0.5 T, so 1 T is roughly two rounds of headroom — which is the unit
-  /// the balance actually disappears in. The cost of warning early is a log
-  /// line; the cost of warning late is an app that looks like it lost your
-  /// secrets.
+  /// The unit the balance disappears in is also measured: one round of the six
+  /// replica checks costs 538 B, and mutation testing runs many. Headroom is
+  /// therefore counted in rounds, and counted **to the cliff rather than to
+  /// zero** — the two are 482 B apart, which is most of a round on its own.
   ///
-  /// The cliff also moves with the subnet's vetKD price and with the freezing
-  /// threshold, which reserves against the same balance, so the measurement
-  /// above bounds it rather than fixing it.
-  transient let LOW_CYCLES_THRESHOLD = 1_000_000_000_000;
+  ///     3 T − 482 B cliff = 2.5 T ÷ 538 B ≈ 4.7 rounds of headroom
+  ///
+  /// At 1 T it was 0.96 rounds: a single run of the checks after seeing the
+  /// warning landed at 462 B, past the failure point. The cost of warning early
+  /// is one log line, so the margin is set where a warning is still worth
+  /// having.
+  ///
+  /// The cliff moves with the subnet's vetKD price, and the freezing threshold
+  /// reserves against the same balance without being visible from in here, so
+  /// the measurement bounds the cliff rather than fixing it.
+  transient let LOW_CYCLES_THRESHOLD = 3_000_000_000_000;
 
   /// Whether the low-balance warning is currently standing.
   ///
