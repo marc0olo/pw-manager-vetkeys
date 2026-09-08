@@ -14,6 +14,19 @@ mixin (encryptedMaps : EncryptedMaps.EncryptedMaps<Types.AccessRights>) {
     access_control : [(Principal, Types.AccessRights)];
   };
 
+  /// Written with the mapping inline, because a named helper declared
+  /// `... : (ByteBuf, ByteBuf)` cannot be passed to `Array.map`:
+  ///
+  ///     expression of type   ((Blob, Blob)) -> (ByteBuf, ByteBuf)
+  ///     cannot produce type  ((Blob, Blob)) -> ((ByteBuf, ByteBuf))
+  ///
+  /// Motoko reads `-> (A, B)` as returning two values, where `Array.map` wants
+  /// one value that is a tuple. Writing the return type as `((A, B))` does
+  /// compile — verified — but a stray pair of parentheses carrying that much
+  /// meaning is what a later tidy-up removes, so the lambda stays.
+  ///
+  /// Any endpoint group that maps pairs hits this, which is why the note lives
+  /// with the code rather than in the application that used to hold it.
   func bufs(pairs : [(Blob, Blob)]) : [(Shared.ByteBuf, Shared.ByteBuf)] {
     Array.map<(Blob, Blob), (Shared.ByteBuf, Shared.ByteBuf)>(
       pairs,

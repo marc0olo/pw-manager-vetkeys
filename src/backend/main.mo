@@ -39,30 +39,34 @@ actor PasswordManager {
     "pw_manager_vetkeys",
   );
 
-  // The control-plane mixin: vetKD key derivation, access control and map-name
-  // enumeration, but *not* the value endpoints. Those are below.
+  // The endpoint groups dfinity/vetkeys#443 proposes, built under
+  // `lib/vetkeys/` to test its boundaries before the library commits to them
+  // (#58). Five are included exactly as the library would provide them; the
+  // value **writes** are this application's own and appear further down,
+  // because recording the value each write replaced is only possible from
+  // inside them.
   //
-  // The full `EncryptedMapsCanister` mixin contributes them, and would be a
-  // couple of lines — but a mixin's methods cannot be wrapped, so owning them
-  // is the only way to keep app state moving with value writes. The
-  // `encrypted-maps` skill is explicit that exposing both the library's value
-  // mutators and our own desynchronises the two stores, which is why this is
-  // an either/or rather than an addition.
+  // Owning them is an either/or rather than an addition: the `encrypted-maps`
+  // skill is explicit that exposing both the library's value mutators and ours
+  // desynchronises the two stores.
   //
-  // Nothing about the interface changes: each endpoint below delegates to the
-  // same `encryptedMaps.*` call the mixin made, with the same signature, so
-  // `DefaultEncryptedMapsClient` cannot tell the difference. `npm run
-  // check-bindings` is what holds that claim to account — a drifted signature
-  // shows up as a diff in the generated Candid.
-  // The endpoint groups dfinity/vetkeys#443 proposes, built locally to test the
-  // boundaries before the library commits to them (#58). Five are included as
-  // the library would provide them; `ValueWrites` is the one this application
-  // owns, and lives below.
+  // Nothing about the interface changes. Every group delegates to the same
+  // `encryptedMaps.*` call the mixin made, with the same signature, so
+  // `DefaultEncryptedMapsClient` cannot tell the difference — and
+  // `npm run check-bindings` holds that to account, byte-for-byte, against the
+  // binding generated before the split.
   //
   // The instance is constructed here and passed to each group rather than each
-  // group building its own from the state: sibling mixins cannot both declare
-  // `encryptedMaps`, because M0051 rejects a duplicate binding exactly as it
-  // rejects a duplicate type.
+  // group building its own from the state. Sibling mixins cannot both declare
+  // `encryptedMaps`: M0051 rejects a duplicate binding exactly as it rejects a
+  // duplicate type, and a `transient let` is no exception — mixin-local
+  // implementation details share one namespace with their siblings.
+  //
+  // For the same reason `ByteBuf` and `Result` come from `lib/vetkeys/Types`
+  // and are referenced through it rather than aliased here. A local
+  // `public type Result<Ok, Err> = Shared.Result<Ok, Err>` leaves the service
+  // correct but makes the generated binding churn its `Result_N` names,
+  // because the type is then declared twice.
   transient let encryptedMaps = EncryptedMaps.EncryptedMaps(encryptedMapsState, Types.accessRightsOperations());
 
   include VetKdEndpoints(encryptedMaps);
