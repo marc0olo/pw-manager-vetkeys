@@ -166,13 +166,18 @@ password — the vault key is derived for your Internet Identity principal.
 ## Architecture
 
 ```
-src/backend/main.mo        The whole backend: the mixin, vault names, poll summaries,
-                           and the cycles watchdog every write runs
+src/backend/main.mo        Composition root: state, and the includes. No endpoints
+src/backend/types.mo       Every type the canister exposes, plus the state records
+src/backend/mixins/        This application's own endpoint groups — value writes,
+                           vaults, history, trash, health
+src/backend/lib/Access.mo  Who may read a vault, and what a caller may do in it
+src/backend/lib/Cycles.mo  The balance thresholds and the watchdog every write runs
+src/backend/lib/Recording.mo  Appending events, and the liveness a write needs
+src/backend/lib/Vaults.mo  The owned-vault registry and the display-name rules
 src/backend/lib/Digest.mo  The vault content digest — pure, and unit-tested
 src/backend/lib/History.mo Every version of every secret — pure, and unit-tested
-src/backend/lib/vetkeys/  The endpoint groups dfinity/vetkeys#443 proposes, built
-                          locally to test its boundaries (#58) — five included as
-                          the library would provide them, value writes owned here
+src/backend/lib/vetkeys/  The five endpoint groups dfinity/vetkeys#443 proposes
+                          that this app inherits unchanged (#58)
 test/Digest.test.mo        Motoko tests: `mops test`, no replica needed
 test/History.test.mo       Append-only, per-secret expiry, liveness, pruning
 src/frontend/lib/vault.ts  Encrypt/decrypt and access control over EncryptedMaps
