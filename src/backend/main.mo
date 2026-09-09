@@ -5,7 +5,8 @@ import AccessControlReadEndpoints "lib/vetkeys/AccessControlReadEndpoints";
 import AccessControlWriteEndpoints "lib/vetkeys/AccessControlWriteEndpoints";
 import ValueReadEndpoints "lib/vetkeys/ValueReadEndpoints";
 import EncryptedMaps "mo:ic-vetkeys/encrypted_maps/EncryptedMaps";
-import Types "mo:ic-vetkeys/Types";
+import VetKeys "mo:ic-vetkeys/Types";
+import Types "types";
 import Runtime "mo:core/Runtime";
 import Map "mo:core/pure/Map";
 import Blob "mo:core/Blob";
@@ -34,7 +35,7 @@ actor PasswordManager {
   // The domain separator isolates this app's derived keys. Like the key name it
   // must stay stable for the life of the canister — changing either makes every
   // stored secret undecryptable.
-  let encryptedMapsState = EncryptedMaps.newEncryptedMapsState<Types.AccessRights>(
+  let encryptedMapsState = EncryptedMaps.newEncryptedMapsState<VetKeys.AccessRights>(
     { curve = #bls12_381_g2; name = keyName },
     "pw_manager_vetkeys",
   );
@@ -69,7 +70,7 @@ actor PasswordManager {
   // leaves the service correct, but declares the type twice, and the generated
   // binding then churns its `Result_N` names. Silent where M0051 above is
   // loud, which is what makes it worth writing down.
-  transient let encryptedMaps = EncryptedMaps.EncryptedMaps(encryptedMapsState, Types.accessRightsOperations());
+  transient let encryptedMaps = EncryptedMaps.EncryptedMaps(encryptedMapsState, VetKeys.accessRightsOperations());
 
   include VetKdEndpoints(encryptedMaps);
   include EnumerationEndpoints(encryptedMaps);
@@ -164,20 +165,6 @@ actor PasswordManager {
     };
   };
 
-  /// What the canister can say about its own ability to derive vault keys.
-  ///
-  /// A state, never a number: the balance itself is the operator's business.
-  ///
-  /// The threshold for `#low_cycles` is {@link BLAME_CYCLES_BELOW}, which is not
-  /// the one the operator's warning uses: naming a cause to a user demands more
-  /// than warning early does.
-  public type ServiceHealth = {
-    /// Derivation should work. If a call still failed, the cause is not one
-    /// this canister can name.
-    #funded;
-    /// Near the point where `vetkd_derive_key` is refused.
-    #low_cycles;
-  };
 
   /// Why a `vetkd_derive_key` call might have just failed, for a client that
   /// has one to explain.
@@ -200,7 +187,7 @@ actor PasswordManager {
   /// "you are affected anyway" filter, not a boundary. What keeps it cheap to
   /// be wrong is that the answer is one bit and says nothing about how much
   /// funding is left, or for how long.
-  public query (msg) func get_service_health() : async Shared.Result<ServiceHealth, Text> {
+  public query (msg) func get_service_health() : async Shared.Result<Types.ServiceHealth, Text> {
     if (not seesAnyVault(msg.caller)) return #Err("unauthorized");
     #Ok(if (Cycles.balance() < BLAME_CYCLES_BELOW) #low_cycles else #funded);
   };
@@ -345,7 +332,7 @@ actor PasswordManager {
   /// We can answer it because we hold the state the library reads: the ACL is a
   /// plain field of `KeyManagerState`. Telling callers their *own* rights
   /// discloses nothing about anyone else, which is the whole of #438's request.
-  func rightsOf(caller : Principal, map_owner : Principal, mapName : Blob) : ?Types.AccessRights {
+  func rightsOf(caller : Principal, map_owner : Principal, mapName : Blob) : ?VetKeys.AccessRights {
     // Ownership is identity-derived rather than an ACL entry, so it is not in
     // the map to look up.
     if (Principal.compare(caller, map_owner) == #equal) return ?(#ReadWriteManage);
@@ -448,30 +435,6 @@ actor PasswordManager {
     false;
   };
 
-  public type TrashedItem = {
-    /// Which event this row is, and what `restore_version` takes.
-    ///
-    /// The map key is not an identity here: a secret can be deleted, restored
-    /// and deleted again, so several events share it. Addressing a restore by
-    /// map key would be ambiguous the moment that happens.
-    seq : Nat64;
-    map_key : Shared.ByteBuf;
-    /// The ciphertext, so the client can show what an item actually was.
-    ///
-    /// #14 removed values from the *poll* — automatic, every 15 s, every
-    /// accessible vault. This is none of those: user-initiated, one vault, off
-    /// the poll path. That is the same profile as opening a vault, which
-    /// returns every value in it, and trash is a subset of one vault. The rule
-    /// #14 established is that values never ride the poll, not that they never
-    /// cross the wire.
-    ///
-    /// Costs the client nothing extra to read: the value was never
-    /// re-encrypted, so the key material cached from opening the vault
-    /// decrypts it.
-    value : Shared.ByteBuf;
-    deleted_at : Nat64;
-    deleted_by : Principal;
-  };
 
   /// What is recoverable in one vault, with each item's ciphertext so a client
   /// can show what it was rather than only when it went. See `TrashedItem` for
@@ -499,10 +462,10 @@ actor PasswordManager {
   /// `deletedBy` into authorization data rather than display, and because it
   /// denies a team the case a shared vault exists for: recovering what a
   /// colleague who has since left deleted.
-  public query (msg) func get_trash(map_owner : Principal, map_name : Shared.ByteBuf) : async Shared.Result<[TrashedItem], Text> {
+  public query (msg) func get_trash(map_owner : Principal, map_name : Shared.ByteBuf) : async Shared.Result<[Types.TrashedItem], Text> {
     if (not canRead(msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
     #Ok(
-      Array.filterMap<(Blob, Nat64, History.Entry), TrashedItem>(
+      Array.filterMap<(Blob, Nat64, History.Entry), Types.TrashedItem>(
         History.trash(history, map_owner, map_name.inner, liveness(msg.caller, map_owner, map_name.inner), now()),
         func((mapKey, seq, entry)) {
           // `History.trash` only yields value-carrying rows, so this cannot be
@@ -525,19 +488,7 @@ actor PasswordManager {
     );
   };
 
-  public type VersionKind = { #Created; #Edited; #Deleted; #Restored };
 
-  public type Version = {
-    seq : Nat64;
-    /// The value this event superseded. Absent for a restore, which superseded
-    /// nothing, and for a version whose ciphertext the owner has dropped —
-    /// the event is still here, which is the point of dropping rather than
-    /// deleting.
-    value : ?Shared.ByteBuf;
-    at : Nat64;
-    by : Principal;
-    kind : VersionKind;
-  };
 
   /// Every recorded version of one secret, oldest first.
   ///
@@ -553,7 +504,7 @@ actor PasswordManager {
     map_owner : Principal,
     map_name : Shared.ByteBuf,
     map_key : Shared.ByteBuf,
-  ) : async Shared.Result<[Version], Text> {
+  ) : async Shared.Result<[Types.Version], Text> {
     if (not canRead(msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
     let isLive = liveness(msg.caller, map_owner, map_name.inner);
     let rows = History.forKey(history, map_owner, map_name.inner, map_key.inner);
@@ -561,7 +512,7 @@ actor PasswordManager {
     // group answers empty rather than leaking what it used to hold.
     if (History.groupExpired(rows, isLive(map_key.inner), now())) return #Ok([]);
     #Ok(
-      Array.map<(Nat64, History.Entry), Version>(
+      Array.map<(Nat64, History.Entry), Types.Version>(
         Array.sort<(Nat64, History.Entry)>(rows, func(a, b) { Nat64.compare(a.0, b.0) }),
         func((seq, entry)) {
           {
@@ -631,23 +582,6 @@ actor PasswordManager {
     };
   };
 
-  public type ItemSummary = {
-    map_key : Shared.ByteBuf;
-    /// Restorable versions: value-carrying events only. A `#Created` marker and
-    /// a version the owner has pruned are both on the record, but neither is
-    /// something a client can offer to put back.
-    versions : Nat;
-    /// When the canister recorded the write that produced the current value.
-    ///
-    /// The newest event's timestamp, which is exactly that: an event stores the
-    /// value it *replaced*, so the newest one is stamped when the replacement
-    /// landed. For a secret nobody has edited it is the `#Created` event.
-    ///
-    /// Authoritative in the way the item's own `updatedAt` is not — that field
-    /// lives inside the plaintext and is set by whoever last saved it, so it is
-    /// the writer's to choose.
-    updated_at : Nat64;
-  };
 
   /// Per-item history facts for one vault: how much is restorable, and when the
   /// current value was actually written.
@@ -661,11 +595,11 @@ actor PasswordManager {
   public query (msg) func get_item_summaries(
     map_owner : Principal,
     map_name : Shared.ByteBuf,
-  ) : async Shared.Result<[ItemSummary], Text> {
+  ) : async Shared.Result<[Types.ItemSummary], Text> {
     if (not canRead(msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
     let isLive = liveness(msg.caller, map_owner, map_name.inner);
     let at = now();
-    var out : [ItemSummary] = [];
+    var out : [Types.ItemSummary] = [];
     for (mapKey in History.keysIn(history, map_owner, map_name.inner).values()) {
       let rows = History.forKey(history, map_owner, map_name.inner, mapKey);
       if (not History.groupExpired(rows, isLive(mapKey), at)) {
@@ -1022,11 +956,6 @@ actor PasswordManager {
     };
   };
 
-  public type VaultName = {
-    owner : Principal;
-    map_name : Shared.ByteBuf;
-    display_name : Text;
-  };
 
   /// Rename one of *your own* vaults, or clear the name by passing "".
   ///
@@ -1139,8 +1068,8 @@ actor PasswordManager {
   /// must render names without opening a vault, or lazy loading is undone. Rows
   /// for vaults the caller cannot see are never returned, so a stray row is
   /// invisible as well as harmless.
-  public query (msg) func get_vault_names() : async [VaultName] {
-    let found = List.empty<VaultName>();
+  public query (msg) func get_vault_names() : async [Types.VaultName] {
+    let found = List.empty<Types.VaultName>();
 
     // Your own rows, straight from the store.
     //
@@ -1195,29 +1124,6 @@ actor PasswordManager {
   // variant, #8), or the library maintaining a per-map version itself.
   // ---------------------------------------------------------------------------
 
-  public type VaultSummary = {
-    owner : Principal;
-    map_name : Shared.ByteBuf;
-    access_control : [(Principal, Types.AccessRights)];
-    item_keys : [Shared.ByteBuf];
-    /// SHA-256 over the vault's contents. Changes iff the contents change.
-    digest : Shared.ByteBuf;
-    /// Recoverable deletions the caller may see. Lets the UI offer restoring
-    /// without a second round trip, and without hinting at entries it may not.
-    trashed : Nat;
-    /// What *this caller* may do here. See `rightsOf` — the library will not
-    /// answer this, so a grantee otherwise has to discover their permissions by
-    /// being refused.
-    my_rights : ?Types.AccessRights;
-    /// Fingerprint of what the trash listing would return.
-    ///
-    /// `trashed` alone cannot drive an open dialog: restoring one item and
-    /// deleting another leaves the count unchanged while the contents differ,
-    /// so a second viewer would keep a stale list. #14's rule is that the poll
-    /// carries no ciphertext, and this is how it stays true — the digest says
-    /// whether to re-read, and only then does anything fetch values.
-    trash_digest : Shared.ByteBuf;
-  };
 
   /// Owned vaults the library's enumeration leaves out.
   ///
@@ -1236,8 +1142,8 @@ actor PasswordManager {
   /// It does not cover a vault emptied *before* this existed — no entry, no
   /// values, trash stranded. Nothing here can reconstruct that, which is why
   /// this ships with a reinstall rather than an upgrade.
-  func ownedVaultsNotListed(caller : Principal, listed : [VaultSummary], at : Nat64) : [VaultSummary] {
-    let extra = List.empty<VaultSummary>();
+  func ownedVaultsNotListed(caller : Principal, listed : [Types.VaultSummary], at : Nat64) : [Types.VaultSummary] {
+    let extra = List.empty<Types.VaultSummary>();
     let seen = func(name : Blob) : Bool {
       for (summary in listed.values()) {
         if (Principal.compare(summary.owner, caller) == #equal and Blob.compare(summary.map_name.inner, name) == #equal) {
@@ -1282,9 +1188,9 @@ actor PasswordManager {
     Digest.ofTrash(Array.map<(Blob, Nat64, History.Entry), (Blob, Nat64)>(rows, func((mapKey, seq, _)) { (mapKey, seq) }));
   };
 
-  public query (msg) func get_vault_summaries() : async [VaultSummary] {
+  public query (msg) func get_vault_summaries() : async [Types.VaultSummary] {
     let at = now();
-    let listed = Array.map<EncryptedMaps.EncryptedMapData<Types.AccessRights>, VaultSummary>(
+    let listed = Array.map<EncryptedMaps.EncryptedMapData<VetKeys.AccessRights>, Types.VaultSummary>(
       encryptedMaps.getAllAccessibleEncryptedMaps(msg.caller),
       func(map) {
         // Sorted so `item_keys` does not depend on the store's iteration
