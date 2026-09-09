@@ -20,8 +20,8 @@ import History "lib/History";
 import Time "mo:core/Time";
 import Nat64 "mo:core/Nat64";
 import Nat "mo:core/Nat";
-import Cycles "mo:core/Cycles";
-import Debug "mo:core/Debug";
+import Cycles "lib/Cycles";
+import HealthMixin "mixins/Health";
 
 // The whole vault backend (persistent by default via --default-persistent-actors). Every secret is encrypted in the browser under a
 // vetKey; this canister only ever sees ciphertext and enforces who may read or
@@ -70,6 +70,14 @@ actor PasswordManager {
   // leaves the service correct, but declares the type twice, and the generated
   // binding then churns its `Result_N` names. Silent where M0051 above is
   // loud, which is what makes it worth writing down.
+  /// Vault ownership and display names, as one record so the groups that need
+  /// them can receive them — a mixin takes a `var` by value, so its writes
+  /// would not propagate back.
+  let vaults : Types.VaultsState = {
+    var owned = Map.empty<Principal, Map.Map<Blob, ()>>();
+    var names = Map.empty<Principal, Map.Map<Blob, Text>>();
+  };
+
   transient let encryptedMaps = EncryptedMaps.EncryptedMaps(encryptedMapsState, VetKeys.accessRightsOperations());
 
   include VetKdEndpoints(encryptedMaps);
@@ -79,128 +87,24 @@ actor PasswordManager {
   include ValueReadEndpoints(encryptedMaps);
 
   // ---------------------------------------------------------------------------
+  // This application's own groups
+  // ---------------------------------------------------------------------------
+
+  /// Whether the low-balance warning is standing. See lib/Cycles.
+  let health : Types.HealthState = { var warnedLowCycles = false };
+
+  include HealthMixin(encryptedMaps, vaults);
+
+  // ---------------------------------------------------------------------------
   // Cycles watchdog
   // ---------------------------------------------------------------------------
 
-  /// The balance under which the watchdog warns the operator.
-  ///
-  /// Two measurements set it, rather than a ratio. Derivation fails somewhere
-  /// near 480 B: on a local replica the last success was at 482.0 B and the
-  /// next attempt failed at 471.9 B, so a derive needs a few hundred billion
-  /// cycles of *room*, not the ~26 B it reserves. And the replica checks —
-  /// which are what drains this canister — cost a few hundred billion per
-  /// round. Headroom is therefore counted **to the cliff rather than to zero**;
-  /// the two are most of a round apart.
-  ///
-  /// 3 T leaves several rounds of it. The quotient is deliberately not written
-  /// down: both inputs move, `scripts/lib/cycles.mjs` already measures the
-  /// round cost on every run, and mainnet's vetKD price is not the local
-  /// replica's. Warning early costs one log line.
-  transient let WARN_OPERATOR_BELOW = 3_000_000_000_000;
-
-  /// The balance under which cycles may be named to a **user** as the cause.
-  ///
-  /// Far below {@link WARN_OPERATOR_BELOW}, because the two answer different
-  /// questions and want opposite answers. The warning asks "is there still
-  /// time to act?" and should fire early. This one becomes a sentence somebody
-  /// reads — *this deployment has run out of cycles* — which is only true near
-  /// the cliff. Said at three trillion it would be a guess dressed as a
-  /// diagnosis, and `get_service_health` exists to avoid exactly that.
-  ///
-  /// About twice the measured cliff: margin for a boundary that moves with the
-  /// subnet's vetKD price, not a claim to know where it is.
-  transient let BLAME_CYCLES_BELOW = 1_000_000_000_000;
-
-  /// Whether the low-balance warning is currently standing.
-  ///
-  /// Stable, and that is load-bearing rather than incidental: it makes **the
-  /// newest watchdog line in the log the current state**, which is the contract
-  /// `scripts/lib/cycles.mjs` reads it under. Transient would reset on every
-  /// deploy, and since a healthy deploy prints nothing, a warning from before
-  /// it would stand as the newest line long after a top-up cleared it.
-  var warnedLowCycles = false;
-
-  /// Say so, in the canister's own log, while everything still works.
-  ///
-  /// This exists because the failure it anticipates is unreadable: a canister
-  /// too low to afford its own `vetkd_derive_key` call rejects with `IC0406
-  /// could not perform remote call`, the client cannot tell that cause from a
-  /// key missing on the subnet or from queue pressure, and in a password
-  /// manager the result reads as **data loss** — unlocking fails, so the
-  /// secrets look gone. Nothing is gone.
-  ///
-  /// `Log visibility: Controllers` is the default, so this is maintainer-only
-  /// and discloses nothing; a public balance endpoint would tell everyone how
-  /// well funded the deployment is and help only the operator, who has
-  /// `icp canister status` already.
-  ///
-  /// **Called from every update endpoint this canister owns**, rather than from
-  /// the interesting ones, because any of them is a chance to notice.
-  ///
-  /// That is ten endpoints, and not the four the mixin contributes:
-  /// `get_encrypted_vetkey` — the call that actually fails — plus
-  /// `get_vetkey_verification_key`, `set_user_rights` and `remove_user`. A
-  /// mixin's methods cannot be wrapped (dfinity/vetkeys#443), so a session that
-  /// only opens vaults and manages sharing never ticks this. Storing a secret
-  /// is the earliest thing the canister can observe for itself.
-  ///
-  /// Printed on the transition rather than on every write: the log holds 4 KiB
-  /// by default, so a line repeated per write would leave a buffer containing
-  /// nothing but copies of itself.
-  func watchdog() {
-    let balance = Cycles.balance();
-    if (balance < WARN_OPERATOR_BELOW) {
-      if (not warnedLowCycles) {
-        warnedLowCycles := true;
-        Debug.print(
-          "WARN cycles balance is low (" # Nat.toText(balance)
-          # "). Vault key derivation fails once the canister cannot afford"
-          # " vetkd_derive_key, which surfaces to users as IC0406 and looks"
-          # " like data loss. Top up."
-        );
-      };
-    } else if (warnedLowCycles) {
-      warnedLowCycles := false;
-      Debug.print("INFO cycles balance recovered (" # Nat.toText(balance) # ")");
-    };
-  };
 
 
-  /// Why a `vetkd_derive_key` call might have just failed, for a client that
-  /// has one to explain.
-  ///
-  /// The canister cannot classify the failure itself. `get_encrypted_vetkey`
-  /// belongs to the control-plane mixin, and a mixin's methods cannot be
-  /// wrapped, so there is no server-side place to catch it — owning that one
-  /// endpoint would mean dropping the mixin and re-declaring everything it
-  /// contributes (dfinity/vetkeys#443). So the client has to ask, and this is
-  /// the answer.
-  ///
-  /// **Restricted to callers who can already see a vault.** By the time a
-  /// derive can fail for you, you have one: `create_vault` makes no
-  /// inter-canister call, so it succeeds on an unfunded canister, and opening
-  /// what you just created is the first thing that derives. Someone with no
-  /// vault therefore has no failure to explain, and learns nothing here.
-  ///
-  /// Being honest about that gate: it stops passive scraping, not a determined
-  /// prober, who can make an identity and a vault. It is a speed bump plus a
-  /// "you are affected anyway" filter, not a boundary. What keeps it cheap to
-  /// be wrong is that the answer is one bit and says nothing about how much
-  /// funding is left, or for how long.
-  public query (msg) func get_service_health() : async Shared.Result<Types.ServiceHealth, Text> {
-    if (not seesAnyVault(msg.caller)) return #Err("unauthorized");
-    #Ok(if (Cycles.balance() < BLAME_CYCLES_BELOW) #low_cycles else #funded);
-  };
 
-  /// Whether this caller has any vault at all — owned or shared with them.
-  ///
-  /// Read from the registry and the access control list rather than from
-  /// `getAllAccessibleEncryptedMaps`, which would carry every vault's
-  /// ciphertext to answer a yes/no question.
-  func seesAnyVault(who : Principal) : Bool {
-    if (Map.size(vaultsOwnedBy(who)) > 0) return true;
-    encryptedMaps.getAccessibleSharedMapNames(who).size() > 0;
-  };
+
+
+
 
   // ---------------------------------------------------------------------------
   // Value endpoints, taken over from the mixin
@@ -217,7 +121,7 @@ actor PasswordManager {
     map_key : Shared.ByteBuf,
     value : Shared.ByteBuf,
   ) : async Shared.Result<?Shared.ByteBuf, Text> {
-    watchdog();
+    Cycles.watchdog(health);
     switch (encryptedMaps.insertEncryptedValue(msg.caller, (map_owner, map_name.inner), map_key.inner, value.inner)) {
       case (#err(e)) { #Err(e) };
       // Nothing was superseded, so there is no version to keep — but the write
@@ -261,7 +165,7 @@ actor PasswordManager {
     map_name : Shared.ByteBuf,
     map_key : Shared.ByteBuf,
   ) : async Shared.Result<?Shared.ByteBuf, Text> {
-    watchdog();
+    Cycles.watchdog(health);
     // The library call first: it performs the access check, and hands back the
     // value it removed. Only then is our store touched, so a caller without
     // rights leaves no trace.
@@ -285,7 +189,7 @@ actor PasswordManager {
     map_owner : Principal,
     map_name : Shared.ByteBuf,
   ) : async Shared.Result<[Shared.ByteBuf], Text> {
-    watchdog();
+    Cycles.watchdog(health);
     // `removeMapValues` returns only the *keys* it removed, so the values have
     // to be read before the call — after it they are gone, and a wipe would
     // trash nothing.
@@ -545,7 +449,7 @@ actor PasswordManager {
     map_name : Shared.ByteBuf,
     seq : Nat64,
   ) : async Shared.Result<(), Text> {
-    watchdog();
+    Cycles.watchdog(health);
     let at = now();
     // The map key is part of the event key, so the row has to be found by
     // scanning this vault's events rather than by direct lookup. One vault's
@@ -629,7 +533,7 @@ actor PasswordManager {
   /// insert overwriting the last — silent loss inside a recovery operation.
   /// `History.trash` already yields one row per key, which is that row.
   public shared (msg) func restore_trashed_values(map_owner : Principal, map_name : Shared.ByteBuf) : async Shared.Result<Nat, Text> {
-    watchdog();
+    Cycles.watchdog(health);
     let at = now();
     let isLive = liveness(msg.caller, map_owner, map_name.inner);
     var restored = 0;
@@ -672,7 +576,7 @@ actor PasswordManager {
   /// Scoped to secrets with no live value, so it empties the trash without
   /// touching the version history of secrets that are still there.
   public shared (msg) func discard_trash(map_owner : Principal, map_name : Shared.ByteBuf) : async Shared.Result<Nat, Text> {
-    watchdog();
+    Cycles.watchdog(health);
     if (Principal.compare(msg.caller, map_owner) != #equal) return #Err("unauthorized");
     let (next, dropped) = History.discardTrash(
       history,
@@ -703,7 +607,7 @@ actor PasswordManager {
     map_name : Shared.ByteBuf,
     map_key : Shared.ByteBuf,
   ) : async Shared.Result<Nat, Text> {
-    watchdog();
+    Cycles.watchdog(health);
     if (Principal.compare(msg.caller, map_owner) != #equal) return #Err("unauthorized");
     let (next, cleared) = History.dropHistory(history, map_owner, map_name.inner, map_key.inner);
     history := next;
@@ -727,7 +631,7 @@ actor PasswordManager {
   /// that is a client concern, the same as item ids, and not something this can
   /// enforce.
   public shared (msg) func create_vault(map_name : Shared.ByteBuf) : async Shared.Result<(), Text> {
-    watchdog();
+    Cycles.watchdog(health);
     if (Principal.isAnonymous(msg.caller)) {
       return #Err("Sign in to create a vault.");
     };
@@ -744,7 +648,7 @@ actor PasswordManager {
     if (Map.size(mine) >= MAX_CLAIMED_VAULTS_PER_OWNER) {
       return #Err("You have too many vaults.");
     };
-    ownedVaults := ownedVaults.add(Principal.compare, msg.caller, mine.add(Blob.compare, map_name.inner, ()));
+    vaults.owned := vaults.owned.add(Principal.compare, msg.caller, mine.add(Blob.compare, map_name.inner, ()));
     #Ok();
   };
 
@@ -768,7 +672,7 @@ actor PasswordManager {
   /// app get a random name for exactly this reason (#13), which makes reuse
   /// effectively impossible — but the copy must not promise erasure.
   public shared (msg) func delete_vault(map_name : Shared.ByteBuf) : async Shared.Result<(), Text> {
-    watchdog();
+    Cycles.watchdog(health);
     if (Principal.isAnonymous(msg.caller)) return #Err("unauthorized");
     let mapName = map_name.inner;
     let id = (msg.caller, mapName);
@@ -806,19 +710,19 @@ actor PasswordManager {
     history := next;
 
     let remaining = mine.remove(Blob.compare, mapName);
-    ownedVaults := if (Map.isEmpty(remaining)) {
-      ownedVaults.remove(Principal.compare, msg.caller);
+    vaults.owned := if (Map.isEmpty(remaining)) {
+      vaults.owned.remove(Principal.compare, msg.caller);
     } else {
-      ownedVaults.add(Principal.compare, msg.caller, remaining);
+      vaults.owned.add(Principal.compare, msg.caller, remaining);
     };
 
     // The display name would otherwise outlive the vault and reappear on a
     // vault later created with the same name.
     let names = namesOwnedBy(msg.caller).remove(Blob.compare, mapName);
-    vaultNames := if (Map.isEmpty(names)) {
-      vaultNames.remove(Principal.compare, msg.caller);
+    vaults.names := if (Map.isEmpty(names)) {
+      vaults.names.remove(Principal.compare, msg.caller);
     } else {
-      vaultNames.add(Principal.compare, msg.caller, names);
+      vaults.names.add(Principal.compare, msg.caller, names);
     };
 
     #Ok();
@@ -913,10 +817,9 @@ actor PasswordManager {
 
   /// `owner -> mapName`. Keyed by owner because the read is "every vault *I*
   /// own" and it runs on the poll path.
-  var ownedVaults : Map.Map<Principal, Map.Map<Blob, ()>> = Map.empty<Principal, Map.Map<Blob, ()>>();
 
   func vaultsOwnedBy(owner : Principal) : Map.Map<Blob, ()> {
-    switch (ownedVaults.get(Principal.compare, owner)) {
+    switch (vaults.owned.get(Principal.compare, owner)) {
       case (null) { Map.empty<Blob, ()>() };
       case (?mine) { mine };
     };
@@ -938,7 +841,7 @@ actor PasswordManager {
   func registerVault(owner : Principal, mapName : Blob) {
     let mine = vaultsOwnedBy(owner);
     if (mine.containsKey(Blob.compare, mapName)) return;
-    ownedVaults := ownedVaults.add(Principal.compare, owner, mine.add(Blob.compare, mapName, ()));
+    vaults.owned := vaults.owned.add(Principal.compare, owner, mine.add(Blob.compare, mapName, ()));
   };
 
   /// `owner -> mapName -> display name`. Absent means "show the map name", so
@@ -947,10 +850,9 @@ actor PasswordManager {
   /// Keyed by owner rather than by the `(owner, mapName)` pair, because the
   /// primary read is "every name *I* own" and that runs on the poll path. The
   /// pair-keyed form made it O(rows across all users) per poll.
-  var vaultNames : Map.Map<Principal, Map.Map<Blob, Text>> = Map.empty<Principal, Map.Map<Blob, Text>>();
 
   func namesOwnedBy(owner : Principal) : Map.Map<Blob, Text> {
-    switch (vaultNames.get(Principal.compare, owner)) {
+    switch (vaults.names.get(Principal.compare, owner)) {
       case (null) { Map.empty<Blob, Text>() };
       case (?names) { names };
     };
@@ -991,7 +893,7 @@ actor PasswordManager {
   };
 
   public shared (msg) func set_vault_name(map_name : Shared.ByteBuf, display_name : Text) : async Shared.Result<(), Text> {
-    watchdog();
+    Cycles.watchdog(health);
     // Nothing an anonymous caller stores can ever be read back — every row is
     // keyed on its author and only surfaces for them or for someone they shared
     // a vault with, and the anonymous principal owns no vaults. Refuse rather
@@ -1004,10 +906,10 @@ actor PasswordManager {
     let mine = namesOwnedBy(msg.caller);
 
     func store(names : Map.Map<Blob, Text>) {
-      vaultNames := if (Map.isEmpty(names)) {
-        vaultNames.remove(Principal.compare, msg.caller);
+      vaults.names := if (Map.isEmpty(names)) {
+        vaults.names.remove(Principal.compare, msg.caller);
       } else {
-        vaultNames.add(Principal.compare, msg.caller, names);
+        vaults.names.add(Principal.compare, msg.caller, names);
       };
     };
 

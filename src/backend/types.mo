@@ -1,11 +1,34 @@
 import VetKeys "mo:ic-vetkeys/Types";
 import Shared "lib/vetkeys/Types";
+import Map "mo:core/pure/Map";
 
 /// Every type this canister exposes beyond the ones the endpoint groups
 /// contribute. The central schema the Motoko architecture asks for: `main.mo`
 /// composes, `lib/` computes, `mixins/` serves, and the shapes they agree on
 /// live here.
 module {
+  /// Whether the low-balance warning is currently standing.
+  ///
+  /// A record because a mixin receives a `var` by value, so its mutations would
+  /// not propagate back; records are shared by reference. Stable, and that is
+  /// load-bearing: it makes **the newest watchdog line in the log the current
+  /// state**, which is the contract `scripts/lib/cycles.mjs` reads it under.
+  /// Transient would reset on every deploy, and since a healthy deploy prints
+  /// nothing, a warning from before it would stand as the newest line long
+  /// after a top-up cleared it.
+  /// The vaults this canister knows about itself: which principal owns which
+  /// map, and the display name each carries.
+  ///
+  /// One record because the two are written together — creating a vault claims
+  /// a name, deleting it releases both — and because a mixin cannot take a
+  /// `var` and have its writes propagate back.
+  public type VaultsState = {
+    var owned : Map.Map<Principal, Map.Map<Blob, ()>>;
+    var names : Map.Map<Principal, Map.Map<Blob, Text>>;
+  };
+
+  public type HealthState = { var warnedLowCycles : Bool };
+
 /// What the canister can say about its own ability to derive vault keys.
 ///
 /// A state, never a number: the balance itself is the operator's business.

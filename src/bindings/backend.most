@@ -39,21 +39,16 @@ actor {
                        EncryptedMapValue__709694351>;
       var mapKeys : Map__86905547<MapId__490225076, [MapKey__37926915]>
     };
+  stable health : {var warnedLowCycles : Bool};
   stable var history :
     {
       root : Tree__430834836<Key__334261616, Entry__79086314>;
       size : Nat__58649523
     };
   stable var nextSeq : Nat64;
-  stable var ownedVaults :
+  stable vaults :
     {
-      root : Tree__430834836<Principal, Map__86905547<Blob, ()>>;
-      size : Nat__58649523
-    };
-  stable var vaultNames :
-    {
-      root : Tree__430834836<Principal, Map__86905547<Blob, Text>>;
-      size : Nat__58649523
-    };
-  stable var warnedLowCycles : Bool
+      var names : Map__86905547<Principal, Map__86905547<Blob, Text>>;
+      var owned : Map__86905547<Principal, Map__86905547<Blob, ()>>
+    }
 };
