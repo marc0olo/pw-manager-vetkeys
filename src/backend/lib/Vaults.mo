@@ -17,13 +17,6 @@ module {
   /// not something to leave open.
   public let MAX_DISPLAY_NAME_BYTES = 64;
 
-  /// Bounds how many rows one principal can occupy.
-  ///
-  /// A name now requires a vault and a vault holds at most one, so this can no
-  /// longer bind before `MAX_CLAIMED_VAULTS_PER_OWNER` does. Kept as the bound
-  /// on the rows themselves rather than on what may create them.
-  public let MAX_NAMES_PER_OWNER = 100;
-
   /// Bounds how many vaults one principal can own.
   ///
   /// `create_vault` is the only way a vault comes to exist — `ValueWrites`
@@ -79,13 +72,6 @@ module {
 
     if (Text.encodeUtf8(trimmed).size() > MAX_DISPLAY_NAME_BYTES) {
       return #err("A vault name may be at most " # debug_show (MAX_DISPLAY_NAME_BYTES) # " bytes.");
-    };
-
-    // Renaming a vault that already has a name replaces its row, so only a new
-    // one counts against the cap.
-    let mine = namesOwnedBy(vaults, owner);
-    if (Map.size(mine) >= MAX_NAMES_PER_OWNER and mine.get(Blob.compare, mapName) == null) {
-      return #err("You have named the maximum of " # debug_show (MAX_NAMES_PER_OWNER) # " vaults.");
     };
 
     if (labelTaken(vaults, owner, mapName, trimmed)) {
