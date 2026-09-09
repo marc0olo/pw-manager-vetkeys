@@ -34,10 +34,11 @@ actor PasswordManager {
 
   // The endpoint groups dfinity/vetkeys#443 proposes, built under
   // `lib/vetkeys/` to test its boundaries before the library commits to them
-  // (#58). Five are included exactly as the library would provide them; the
-  // value **writes** are this application's own and appear further down,
-  // because recording the value each write replaced is only possible from
-  // inside them.
+  // (#58). Four are included exactly as the library would provide them. Two —
+  // the value writes and the access-control writes — are this application's
+  // own and appear further down, each because it enforces something the
+  // library has no concept of: the value each write replaced, and the rule
+  // that a vault must exist before it can be written to or shared.
   //
   // Owning them is an either/or rather than an addition: the `encrypted-maps`
   // skill is explicit that exposing both the library's value mutators and ours
