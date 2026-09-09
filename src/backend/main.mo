@@ -756,13 +756,13 @@ actor PasswordManager {
     vaults.owned := vaults.owned.add(Principal.compare, owner, mine.add(Blob.compare, mapName, ()));
   };
 
-  /// `owner -> mapName -> display name`. Absent means "show the map name", so
-  /// nothing needs migrating or backfilling.
+  /// The names this owner has given their vaults.
   ///
-  /// Keyed by owner rather than by the `(owner, mapName)` pair, because the
-  /// primary read is "every name *I* own" and that runs on the poll path. The
-  /// pair-keyed form made it O(rows across all users) per poll.
-
+  /// `vaults.names` is `owner -> mapName -> display name`, and absent means
+  /// "show the map name", so nothing needs backfilling. Keyed by owner rather
+  /// than by the `(owner, mapName)` pair because the primary read is "every
+  /// name *I* own", which runs on the poll path; the pair-keyed form made it
+  /// O(rows across all users) per poll.
   func namesOwnedBy(owner : Principal) : Map.Map<Blob, Text> {
     switch (vaults.names.get(Principal.compare, owner)) {
       case (null) { Map.empty<Blob, Text>() };
@@ -771,12 +771,6 @@ actor PasswordManager {
   };
 
 
-  /// Rename one of *your own* vaults, or clear the name by passing "".
-  ///
-  /// Owner-only by construction: the row is keyed on `msg.caller`, so there is
-  /// no way to address someone else's vault. A collaborator renaming a shared
-  /// vault for everyone would be a surprise, and this makes it unrepresentable
-  /// rather than merely checked.
   /// Whether another vault of this owner's already shows this label.
   ///
   /// Checks display names *and* map names, because an unnamed vault renders as
@@ -804,6 +798,12 @@ actor PasswordManager {
     false;
   };
 
+  /// Rename one of *your own* vaults, or clear the name by passing "".
+  ///
+  /// Owner-only by construction: the row is keyed on `msg.caller`, so there is
+  /// no way to address someone else's vault. A collaborator renaming a shared
+  /// vault for everyone would be a surprise, and this makes it unrepresentable
+  /// rather than merely checked.
   public shared (msg) func set_vault_name(map_name : Shared.ByteBuf, display_name : Text) : async Shared.Result<(), Text> {
     Cycles.watchdog(health);
     // Nothing an anonymous caller stores can ever be read back — every row is
