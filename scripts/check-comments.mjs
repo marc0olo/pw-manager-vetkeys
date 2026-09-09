@@ -13,6 +13,18 @@
  * detect — which is why this covers the TypeScript half only. Half is better
  * than the none a habit has caught.
  *
+ * A second check rides along, for the one Motoko rule that *is* structural:
+ * `main.mo` must contain no `///`. moc emits actor-body doc comments into the
+ * Candid doc stream, where they bind to the next endpoint *by position* — so
+ * reordering the `include`s once moved "the append-only event log" onto
+ * `restore_version`. A composition root exposes no endpoints of its own, so
+ * every `///` in it describes something the interface does not have.
+ *
+ * `check-bindings` catches this only by luck: it compares against the committed
+ * binding, so a commit that reshuffles *and* regenerates passes with the wrong
+ * text baked in. That is how #62 shipped sixteen endpoints' docs onto the wrong
+ * names. This checks the cause instead of the drift.
+ *
  * **The blind spot is deliberate, and closing it makes the check worse.** A
  * stranded pair on the *first* declaration of a file is not flagged, because
  * `seenCode` is still false there. That looks like an oversight and is not:
@@ -61,8 +73,23 @@ for (const file of ROOTS.flatMap(walk)) {
   });
 }
 
+// `///` in the composition root reaches the generated interface. See above.
+const COMPOSITION_ROOT = "src/backend/main.mo";
+const rootDocs = readFileSync(COMPOSITION_ROOT, "utf-8")
+  .split("\n")
+  .map((line, i) => [line, i + 1])
+  .filter(([line]) => line.trim().startsWith("///"));
+
+if (rootDocs.length > 0) {
+  console.log(`FAIL  ${rootDocs.length} doc comment(s) in ${COMPOSITION_ROOT}:\n`);
+  for (const [line, n] of rootDocs) console.log(`  ${COMPOSITION_ROOT}:${n} — ${line.trim()}`);
+  console.log("\nThese reach the Candid and attach to whichever endpoint follows. Use `//`.");
+  process.exit(1);
+}
+
 if (findings.length === 0) {
   console.log("PASS  no doc comment is stranded above another (TypeScript)");
+  console.log("PASS  the composition root leaks no doc comments into the interface");
   process.exit(0);
 }
 console.log(`FAIL  ${findings.length} stranded doc comment(s):\n`);
