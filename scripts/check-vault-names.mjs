@@ -163,12 +163,16 @@ const emojiTooLong = await A.names.set_vault_name(bytes("Personal"), "🔐".repe
 check("the cap counts bytes, not characters", "Err" in emojiTooLong, `${emoji} emoji is ${emoji * 4} bytes`);
 
 // ---- bounded in count, not just in size -------------------------------------
+//
+// A name needs a vault and a vault holds one name, so rows are bounded by the
+// vault cap rather than by a cap of their own — the row limit can no longer be
+// the one that refuses.
 {
   const hoarder = await connect(Ed25519KeyIdentity.generate());
   let refusedAt = null;
   for (let i = 0; i < 105; i++) {
-    const result = await hoarder.names.set_vault_name(bytes(`v${i}`), `Name ${i}`);
-    if ("Err" in result) {
+    const created = await hoarder.names.create_vault(bytes(`v${i}`), `Name ${i}`);
+    if ("Err" in created) {
       refusedAt = i;
       break;
     }
@@ -177,6 +181,19 @@ check("the cap counts bytes, not characters", "Err" in emojiTooLong, `${emoji} e
   // Renaming replaces a row, so it must not be turned away by the cap.
   const rename = await hoarder.names.set_vault_name(bytes("v0"), "Renamed");
   check("but renaming an already-named vault still works at the cap", "Ok" in rename, JSON.stringify(rename));
+}
+
+// ---- a name cannot exist without its vault ----------------------------------
+//
+// A principal below every cap, so the refusal can only be the missing vault.
+{
+  const solo = await connect(Ed25519KeyIdentity.generate());
+  await solo.names.create_vault(bytes("only"), "Only");
+  check(
+    "naming a vault that was never created is refused",
+    "Err" in (await solo.names.set_vault_name(bytes("phantom"), "Phantom")),
+  );
+  check("and leaves no row behind", (await solo.names.get_vault_names()).length === 1);
 }
 
 // ---- anonymous callers cannot store rows ------------------------------------
@@ -201,6 +218,7 @@ check(
 );
 
 const fresh = await connect(Ed25519KeyIdentity.generate());
+await fresh.names.create_vault(bytes("Personal"), "Personal");
 await fresh.names.set_vault_name(bytes("Personal"), "First vault");
 check(
   "a vault that has never held an item can be named",

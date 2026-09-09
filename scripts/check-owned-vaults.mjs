@@ -323,7 +323,16 @@ check("an id of exactly 32 bytes is accepted", "Ok" in (await A.api.create_vault
 
   // Case-sensitive on purpose: refusing a name for a difference the user cannot
   // see is its own problem, and normalisation has no clean answer.
+  await N.api.create_vault(buf("v-three"), "Name v-three");
   check("but a different case is allowed", "Ok" in (await N.api.set_vault_name(buf("v-three"), "work")));
+
+  check(
+    "naming a vault that does not exist is refused",
+    "Err" in (await N.api.set_vault_name(buf("never-created"), "Ghost name")),
+  );
+  check("so no name row was left behind", !(await N.api.get_vault_names()).some(
+    (r) => new TextDecoder().decode(Uint8Array.from(r.map_name.inner)) === "never-created",
+  ));
 
   // Per owner. Someone else calling theirs "Work" is not a collision — the
   // sidebar separates owned from shared and names the sharer.
