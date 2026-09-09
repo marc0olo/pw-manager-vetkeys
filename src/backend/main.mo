@@ -62,11 +62,13 @@ actor PasswordManager {
   // duplicate type, and a `transient let` is no exception — mixin-local
   // implementation details share one namespace with their siblings.
   //
-  // For the same reason `ByteBuf` and `Result` come from `lib/vetkeys/Types`
-  // and are referenced through it rather than aliased here. A local
-  // `public type Result<Ok, Err> = Shared.Result<Ok, Err>` leaves the service
-  // correct but makes the generated binding churn its `Result_N` names,
-  // because the type is then declared twice.
+  // Relatedly, though by a different mechanism and without any error:
+  // `ByteBuf` and `Result` come from `lib/vetkeys/Types` and are referenced
+  // through it rather than aliased here. A local
+  // `public type Result<Ok, Err> = Shared.Result<Ok, Err>` compiles fine and
+  // leaves the service correct, but declares the type twice, and the generated
+  // binding then churns its `Result_N` names. Silent where M0051 above is
+  // loud, which is what makes it worth writing down.
   transient let encryptedMaps = EncryptedMaps.EncryptedMaps(encryptedMapsState, Types.accessRightsOperations());
 
   include VetKdEndpoints(encryptedMaps);
