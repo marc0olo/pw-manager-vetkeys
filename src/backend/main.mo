@@ -71,13 +71,13 @@ actor PasswordManager {
   // a mixin takes a `var` by value, so a group's writes to a bare `var` would
   // never reach the actor.
 
-  /// The append-only event log and the sequence it hands out. See lib/Recording.
+  // The append-only event log and the sequence it hands out. See lib/Recording.
   let events : Types.EventsState = { var log = History.empty(); var nextSeq = 0 };
 
-  /// Whether the low-balance warning is standing. See lib/Cycles.
+  // Whether the low-balance warning is standing. See lib/Cycles.
   let health : Types.HealthState = { var warnedLowCycles = false };
 
-  /// Vault ownership and the display name each vault carries.
+  // Vault ownership and the display name each vault carries.
   let vaults : Types.VaultsState = {
     var owned = Map.empty<Principal, Map.Map<Blob, ()>>();
     var names = Map.empty<Principal, Map.Map<Blob, Text>>();
