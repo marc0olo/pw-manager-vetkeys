@@ -1,7 +1,6 @@
 import VetKdEndpoints "lib/vetkeys/VetKdEndpoints";
 import EnumerationEndpoints "lib/vetkeys/EnumerationEndpoints";
 import AccessControlReadEndpoints "lib/vetkeys/AccessControlReadEndpoints";
-import AccessControlWriteEndpoints "lib/vetkeys/AccessControlWriteEndpoints";
 import ValueReadEndpoints "lib/vetkeys/ValueReadEndpoints";
 import EncryptedMaps "mo:ic-vetkeys/encrypted_maps/EncryptedMaps";
 import VetKeys "mo:ic-vetkeys/Types";
@@ -11,6 +10,7 @@ import Map "mo:core/pure/Map";
 import History "lib/History";
 import HealthMixin "mixins/Health";
 import ValueWritesMixin "mixins/ValueWrites";
+import AccessControlWritesMixin "mixins/AccessControlWrites";
 import TrashMixin "mixins/Trash";
 import HistoryMixin "mixins/History";
 import VaultsMixin "mixins/Vaults";
@@ -34,10 +34,11 @@ actor PasswordManager {
 
   // The endpoint groups dfinity/vetkeys#443 proposes, built under
   // `lib/vetkeys/` to test its boundaries before the library commits to them
-  // (#58). Five are included exactly as the library would provide them; the
-  // value **writes** are this application's own and appear further down,
-  // because recording the value each write replaced is only possible from
-  // inside them.
+  // (#58). Four are included exactly as the library would provide them. Two —
+  // the value writes and the access-control writes — are this application's
+  // own and appear further down, each because it enforces something the
+  // library has no concept of: the value each write replaced, and the rule
+  // that a vault must exist before it can be written to or shared.
   //
   // Owning them is an either/or rather than an addition: the `encrypted-maps`
   // skill is explicit that exposing both the library's value mutators and ours
@@ -70,13 +71,13 @@ actor PasswordManager {
   // a mixin takes a `var` by value, so a group's writes to a bare `var` would
   // never reach the actor.
 
-  /// The append-only event log and the sequence it hands out. See lib/Recording.
+  // The append-only event log and the sequence it hands out. See lib/Recording.
   let events : Types.EventsState = { var log = History.empty(); var nextSeq = 0 };
 
-  /// Whether the low-balance warning is standing. See lib/Cycles.
+  // Whether the low-balance warning is standing. See lib/Cycles.
   let health : Types.HealthState = { var warnedLowCycles = false };
 
-  /// Vault ownership and the display name each vault carries.
+  // Vault ownership and the display name each vault carries.
   let vaults : Types.VaultsState = {
     var owned = Map.empty<Principal, Map.Map<Blob, ()>>();
     var names = Map.empty<Principal, Map.Map<Blob, Text>>();
@@ -87,7 +88,6 @@ actor PasswordManager {
   include VetKdEndpoints(encryptedMaps);
   include EnumerationEndpoints(encryptedMaps);
   include AccessControlReadEndpoints(encryptedMaps);
-  include AccessControlWriteEndpoints(encryptedMaps);
   include ValueReadEndpoints(encryptedMaps);
 
   // ---------------------------------------------------------------------------
@@ -95,6 +95,7 @@ actor PasswordManager {
   // ---------------------------------------------------------------------------
 
   include ValueWritesMixin(encryptedMaps, events, vaults, health);
+  include AccessControlWritesMixin(encryptedMaps, vaults, health);
   include TrashMixin(encryptedMaps, events, health);
   include HistoryMixin(encryptedMaps, events, health);
   include VaultsMixin(encryptedMaps, encryptedMapsState, events, vaults, health);

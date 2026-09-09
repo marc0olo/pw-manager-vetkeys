@@ -2,6 +2,7 @@ import EncryptedMaps "mo:ic-vetkeys/encrypted_maps/EncryptedMaps";
 import VetKeys "mo:ic-vetkeys/Types";
 import Array "mo:core/Array";
 import Blob "mo:core/Blob";
+import Map "mo:core/pure/Map";
 import Shared "../lib/vetkeys/Types";
 import Cycles "../lib/Cycles";
 import History "../lib/History";
@@ -17,8 +18,8 @@ import Types "../types";
 /// the reads needed no change and should not have had to move.
 ///
 /// Four parameters, which is this group's contract: the library instance, the
-/// event log it appends to, the registry a first write claims a vault in, and
-/// the watchdog's flag. All four are records or immutable, because a mixin
+/// event log it appends to, the registry a write is checked against, and the
+/// watchdog's flag. All four are records or immutable, because a mixin
 /// takes a `var` by value.
 mixin (
   encryptedMaps : EncryptedMaps.EncryptedMaps<VetKeys.AccessRights>,
@@ -33,6 +34,20 @@ mixin (
     value : Shared.ByteBuf,
   ) : async Shared.Result<?Shared.ByteBuf, Text> {
     Cycles.watchdog(health);
+
+    // A vault may only come into existence through `create_vault`, which names
+    // it in the same message. The library would otherwise create the map as a
+    // side effect of this write, producing a vault no caller ever named — its
+    // label falling back to its id, for its owner and for anyone it is shared
+    // with. Refusing here is what makes that state unreachable rather than
+    // merely unlikely.
+    //
+    // Keyed on `map_owner`, not the caller, so a collaborator writing into a
+    // vault shared with them passes: the owner's `create_vault` registered it.
+    if (not Vaults.ownedBy(vaults, map_owner).containsKey(Blob.compare, map_name.inner)) {
+      return #Err("no such vault");
+    };
+
     switch (encryptedMaps.insertEncryptedValue(msg.caller, (map_owner, map_name.inner), map_key.inner, value.inner)) {
       case (#err(e)) { #Err(e) };
       // Nothing was superseded, so there is no version to keep — but the write
@@ -41,7 +56,6 @@ mixin (
       // could show is the one written *inside* the plaintext by whoever saved
       // it, which is the writer's to choose.
       case (#ok(null)) {
-        Vaults.register(vaults, map_owner, map_name.inner);
         Recording.record(
           events,
           msg.caller,
@@ -53,10 +67,6 @@ mixin (
         #Ok(null);
       };
       case (#ok(?blob)) {
-        // Registered here too, not only on a first write: a map that predates
-        // the registry has no entry, and an ordinary edit is the cheapest place
-        // to acquire one.
-        Vaults.register(vaults, map_owner, map_name.inner);
         // The value this write replaced. Recording it here is the whole of
         // version events.log: without it an edit destroys the previous secret,
         // which trash never covered because trash only sees deletions.

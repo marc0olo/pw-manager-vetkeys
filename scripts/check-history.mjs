@@ -37,6 +37,12 @@ const check = (label, pass, detail = "") => {
   console.log(`${pass ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`);
 };
 const buf = (t) => ({ inner: enc.encode(t) });
+/** A vault that exists: `create_vault` is the only thing that brings one into being. */
+const vaultNamed = async (who, label) => {
+  const created = await who.api.create_vault(buf(label), `Name ${label}`);
+  if ("Err" in created) throw Error(`could not create ${label}: ${created.Err}`);
+  return enc.encode(label);
+};
 const trashOf = async (who, owner, name) => {
   const r = await who.api.get_trash(owner, buf(name));
   return "Ok" in r ? r.Ok : { err: r.Err };
@@ -47,7 +53,7 @@ const A = await connect(alice);
 const me = alice.getPrincipal();
 const bobId = Ed25519KeyIdentity.generate();
 const B = await connect(bobId);
-const NAME = "Personal", N = enc.encode(NAME);
+const NAME = "Personal", N = await vaultNamed(A, NAME);
 
 await A.maps.setValue(me, N, enc.encode("k1"), enc.encode("secret one"));
 await A.maps.setValue(me, N, enc.encode("k2"), enc.encode("secret two"));
@@ -226,7 +232,7 @@ check("someone with no access to the vault is refused outright", denied.err === 
 
   // Scoped to the vault: another vault's trash is untouched. Otherwise
   // emptying one vault before sharing it would destroy recovery everywhere.
-  const OTHER = "Work", O = enc.encode(OTHER);
+  const OTHER = "Work", O = await vaultNamed(A, OTHER);
   await A.maps.setValue(me, O, enc.encode("w1"), enc.encode("other secret"));
   await A.maps.removeEncryptedValue(me, O, enc.encode("w1"));
   await A.api.discard_trash(me, buf(NAME));
@@ -241,7 +247,7 @@ check("someone with no access to the vault is refused outright", denied.err === 
 // carrying their principal and their timestamp. Both halves are asserted, since
 // forging the record is as bad as destroying the value.
 {
-  const OW = "Overwrite", O = enc.encode(OW);
+  const OW = "Overwrite", O = await vaultNamed(A, OW);
   await A.maps.setValue(me, O, enc.encode("k1"), enc.encode("the real secret"));
   await A.maps.setUserRights(me, O, bobId.getPrincipal(), { ReadWrite: null });
   await A.maps.removeEncryptedValue(me, O, enc.encode("k1"));
@@ -274,7 +280,7 @@ check("someone with no access to the vault is refused outright", denied.err === 
 // The everyday version of the same problem: trash only ever saw deletions, so
 // a writer editing a secret in place destroyed the previous value silently.
 {
-  const EV = "Edits", E = enc.encode(EV);
+  const EV = "Edits", E = await vaultNamed(A, EV);
   await A.maps.setValue(me, E, enc.encode("k1"), enc.encode("v1"));
   await A.maps.setValue(me, E, enc.encode("k1"), enc.encode("v2"));
   await A.maps.setValue(me, E, enc.encode("k1"), enc.encode("v3"));
@@ -291,7 +297,7 @@ check("someone with no access to the vault is refused outright", denied.err === 
 
 // ---- restoring removes nothing ---------------------------------------------
 {
-  const RV = "Restores", R = enc.encode(RV);
+  const RV = "Restores", R = await vaultNamed(A, RV);
   await A.maps.setValue(me, R, enc.encode("k1"), enc.encode("v1"));
   await A.maps.removeEncryptedValue(me, R, enc.encode("k1"));
   const before = (await A.api.get_history(me, buf(RV), buf("k1"))).Ok.length;
@@ -307,7 +313,7 @@ check("someone with no access to the vault is refused outright", denied.err === 
 
 // ---- only the owner can make a deletion unrecoverable ----------------------
 {
-  const OD = "OwnerOnly", D2 = enc.encode(OD);
+  const OD = "OwnerOnly", D2 = await vaultNamed(A, OD);
   await A.maps.setValue(me, D2, enc.encode("k1"), enc.encode("v1"));
   await A.maps.setUserRights(me, D2, bobId.getPrincipal(), { ReadWrite: null });
   await B.maps.removeMapValues(me, D2);
@@ -324,7 +330,7 @@ check("someone with no access to the vault is refused outright", denied.err === 
 
 // ---- discarding the trash leaves live secrets' history alone ---------------
 {
-  const MX = "Mixed", M = enc.encode(MX);
+  const MX = "Mixed", M = await vaultNamed(A, MX);
   await A.maps.setValue(me, M, enc.encode("live"), enc.encode("v1"));
   await A.maps.setValue(me, M, enc.encode("live"), enc.encode("v2")); // one version kept
   await A.maps.setValue(me, M, enc.encode("gone"), enc.encode("x"));
@@ -342,7 +348,7 @@ check("someone with no access to the vault is refused outright", denied.err === 
 
 // ---- pruning a history keeps the record ------------------------------------
 {
-  const PR = "Pruned", P = enc.encode(PR);
+  const PR = "Pruned", P = await vaultNamed(A, PR);
   await A.maps.setValue(me, P, enc.encode("k1"), enc.encode("v1"));
   await A.maps.setValue(me, P, enc.encode("k1"), enc.encode("v2"));
   await A.maps.setUserRights(me, P, bobId.getPrincipal(), { ReadWrite: null });
@@ -365,7 +371,7 @@ check("someone with no access to the vault is refused outright", denied.err === 
 // timestamp or author at all, and the only "updated" a client could show is
 // the one written *inside* the plaintext by whoever saved it.
 {
-  const CR = "Created", C2 = enc.encode(CR);
+  const CR = "Created", C2 = await vaultNamed(A, CR);
   await A.maps.setValue(me, C2, enc.encode("k1"), enc.encode("v1"));
 
   const events = (await A.api.get_history(me, buf(CR), buf("k1"))).Ok;
@@ -401,7 +407,7 @@ check("someone with no access to the vault is refused outright", denied.err === 
 
 // ---- reading the log needs read access, nothing more -----------------------
 {
-  const RA = "ReadAccess", RB = enc.encode(RA);
+  const RA = "ReadAccess", RB = await vaultNamed(A, RA);
   await A.maps.setValue(me, RB, enc.encode("k1"), enc.encode("v1"));
   await A.maps.setValue(me, RB, enc.encode("k1"), enc.encode("v2"));
   const reader = await connect(Ed25519KeyIdentity.generate());
@@ -422,7 +428,7 @@ check("someone with no access to the vault is refused outright", denied.err === 
 // there with no value — which is also what lets the poll's digest stand in for
 // the ciphertext.
 {
-  const PT = "PrunedTrash", Q = enc.encode(PT);
+  const PT = "PrunedTrash", Q = await vaultNamed(A, PT);
   await A.maps.setValue(me, Q, enc.encode("k1"), enc.encode("v1"));
   await A.maps.removeEncryptedValue(me, Q, enc.encode("k1"));
   check("it is in the trash", (await trashOf(A, me, PT)).length === 1);
@@ -436,7 +442,7 @@ check("someone with no access to the vault is refused outright", denied.err === 
 
 // ---- the poll can tell the trash changed without carrying it ---------------
 {
-  const FP = "Fingerprint", F = enc.encode(FP);
+  const FP = "Fingerprint", F = await vaultNamed(A, FP);
   const digestOf = async () => {
     const v = (await A.api.get_vault_summaries()).find((x) => dec.decode(Uint8Array.from(x.map_name.inner)) === FP);
     return v ? Buffer.from(Uint8Array.from(v.trash_digest.inner)).toString("hex") : null;

@@ -44,6 +44,14 @@ const check = (label, pass, detail = "") => {
   console.log(`${pass ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`);
 };
 const buf = (t) => ({ inner: enc.encode(t) });
+const attempt = async (f) => {
+  try {
+    await f();
+    return "ok";
+  } catch (e) {
+    return String(e.message ?? e);
+  }
+};
 const owned = async (who) => (await who.api.get_owned_vaults()).map((b) => dec.decode(Uint8Array.from(b.inner)));
 const listed = async (who) =>
   (await who.api.get_vault_summaries()).map((v) => `${v.owner.toText().slice(0, 5)}/${dec.decode(Uint8Array.from(v.map_name.inner))}`);
@@ -85,50 +93,97 @@ check("its trash is empty, not an error", "Ok" in (await A.api.get_trash(me, buf
 check("creating the same vault again succeeds", "Ok" in (await A.api.create_vault(buf("Empty"), "Name Empty")));
 check("and does not duplicate it", (await owned(A)).filter((n) => n === "Empty").length === 1);
 
-// ---- registration cannot refuse ---------------------------------------------
+// ---- create_vault is the only origin, so the cap bounds every vault ---------
 //
-// The gap this closes, measured before the fix: with registration bounded by
-// the claim cap, a write past it went unregistered — and once that vault was
-// emptied it left the library's enumeration too, so its owner could not see it
-// and its trash was unreachable. A stranded recovery path is what #34 and #39
-// exist to prevent, so the only safe registration is one that cannot decline.
-//
-// Bounding it also bought nothing: the library keeps no cap on maps per owner,
-// so those writes already made the canister store the maps themselves.
+// The library brings a map into being on first write, so a vault could exist
+// that `create_vault` never named — rendering as its own id, for its owner and
+// for anyone it was shared with. `insert_encrypted_value` now refuses a write
+// to a map name nobody created, which makes the cap a real bound rather than
+// one a write could walk around.
 {
   const capped = await connect(Ed25519KeyIdentity.generate());
   for (let i = 0; i < 100; i++) await capped.api.create_vault(buf(`c${i}`), `Name c${i}`);
   check("this principal is at the claim cap", (await owned(capped)).length === 100);
-  check("so claiming another is refused", "Err" in (await capped.api.create_vault(buf("Claimed"), "Name Claimed")));
+  check("so creating another is refused", "Err" in (await capped.api.create_vault(buf("Claimed"), "Name Claimed")));
 
-  // A write is not a claim, and must still register.
-  await capped.maps.setValue(capped.me, enc.encode("Beyond"), enc.encode("k1"), enc.encode("worth recovering"));
-  check("but writing past the cap still registers the vault", (await owned(capped)).includes("Beyond"));
+  const past = await attempt(() =>
+    capped.maps.setValue(capped.me, enc.encode("Beyond"), enc.encode("k1"), enc.encode("past the cap")),
+  );
+  check("and writing past it is refused too", past !== "ok", past);
+  check("so the cap cannot be walked around", !(await owned(capped)).includes("Beyond"));
+}
 
-  await capped.maps.removeEncryptedValue(capped.me, enc.encode("Beyond"), enc.encode("k1"));
-  const beyond = await summaryFor(capped, capped.me, "Beyond");
-  check("so emptying it does not hide it from its owner", beyond !== undefined);
+// ---- the gate, directly -----------------------------------------------------
+{
+  const G = await connect(Ed25519KeyIdentity.generate());
+  const ghost = await attempt(() => G.maps.setValue(G.me, enc.encode("ghost"), enc.encode("k1"), enc.encode("v1")));
+  check("a write to a map nobody created is refused", ghost !== "ok", ghost);
+  check("and creates nothing", (await owned(G)).length === 0);
+  check("nor a name row", (await G.api.get_vault_names()).length === 0);
+  // The listing unions in the library's enumeration, so a map created behind
+  // the registry's back would still appear here — as a vault with no name and
+  // no entry, which is the state this refusal exists to prevent.
+  check("nor a vault in the listing", (await listed(G)).length === 0, (await listed(G)).join(", "));
+
+  check("after creating it, the same write succeeds", "Ok" in (await G.api.create_vault(buf("ghost"), "Ghost")));
   check(
-    "and its trash is still reachable",
-    beyond !== undefined && Number(beyond.trashed) === 1,
-    "unreachable trash is a destroyed secret as far as recovery is concerned",
+    "the write now goes through",
+    (await attempt(() => G.maps.setValue(G.me, enc.encode("ghost"), enc.encode("k1"), enc.encode("v1")))) === "ok",
+  );
+
+  // Keyed on the map owner, not the caller — otherwise sharing breaks.
+  const guest = await connect(Ed25519KeyIdentity.generate());
+  await G.maps.setUserRights(G.me, enc.encode("ghost"), guest.me, { ReadWrite: null });
+  check(
+    "a collaborator writes into the owner's vault",
+    (await attempt(() => guest.maps.setValue(G.me, enc.encode("ghost"), enc.encode("k2"), enc.encode("v2")))) === "ok",
+  );
+  check("without it becoming theirs", !(await owned(guest)).includes("ghost"));
+
+  // The invariant the gate exists for.
+  check(
+    "every owned vault is named",
+    (await owned(G)).length === (await G.api.get_vault_names()).length,
+    `${(await owned(G)).length} owned, ${(await G.api.get_vault_names()).length} named`,
+  );
+
+  // The same hole through sharing, which is why `AccessControlWrites` is ours.
+  // The library grants an owner rights over any (owner, mapName) whether or not
+  // a map exists, and lists shared maps from the ACL with no emptiness
+  // condition — so this would otherwise put a vault nobody created into someone
+  // else's sidebar, unnamed and unnameable.
+  const shared = await connect(Ed25519KeyIdentity.generate());
+  check(
+    "sharing a map nobody created is refused",
+    (await attempt(() => G.maps.setUserRights(G.me, enc.encode("phantom"), shared.me, { Read: null }))) !== "ok",
+  );
+  check("so nothing reaches the grantee", (await shared.api.get_vault_summaries()).length === 0);
+
+  check(
+    "sharing one that exists still works",
+    (await attempt(() => G.maps.setUserRights(G.me, enc.encode("ghost"), shared.me, { Read: null }))) === "ok",
+  );
+  check("the grantee sees it", (await shared.api.get_vault_summaries()).length === 1);
+  check("named, not as its id", (await shared.api.get_vault_names()).length === 1);
+  check(
+    "and revoking needs no gate of its own",
+    (await attempt(() => G.maps.removeUser(G.me, enc.encode("ghost"), shared.me))) === "ok",
   );
 }
 
-// ---- the union still carries a map the registry never saw -------------------
+// ---- a vault with values is listed ------------------------------------------
 //
-// Not reachable through the API any more — that is the point of registration
-// being unconditional — so this asserts the surviving direction rather than the
-// legacy one: a vault with values is listed whether or not it has an entry,
-// because the library's enumeration is unioned in rather than replaced.
-//
-// The legacy case the union cannot carry (emptied before the registry existed,
-// so no entry and no values) is why this ships with a reinstall.
-await A.maps.setValue(me, enc.encode("Unregistered"), enc.encode("k1"), enc.encode("v1"));
-check("a vault with values is listed", (await summaryFor(A, me, "Unregistered")) !== undefined);
-check("and is registered by that write", (await owned(A)).includes("Unregistered"));
+// The listing unions the registry with the library's enumeration. Only the
+// registry half is reachable now — a map cannot exist without an entry — so the
+// union is belt-and-braces rather than load-bearing, and is kept because the
+// failure it covers (a map its owner holds and cannot see) is the one this
+// design will not risk.
+await A.api.create_vault(buf("Listed"), "Name Listed");
+await A.maps.setValue(me, enc.encode("Listed"), enc.encode("k1"), enc.encode("v1"));
+check("a vault with values is listed", (await summaryFor(A, me, "Listed")) !== undefined);
 
 // ---- an emptied vault survives ----------------------------------------------
+await A.api.create_vault(buf("Emptied"), "Name Emptied");
 await A.maps.setValue(me, enc.encode("Emptied"), enc.encode("k1"), enc.encode("secret"));
 await A.maps.removeEncryptedValue(me, enc.encode("Emptied"), enc.encode("k1"));
 const emptied = await summaryFor(A, me, "Emptied");
@@ -140,6 +195,7 @@ check("with its trash reachable", emptied !== undefined && Number(emptied.trashe
 // The bug the trash-driven version had: it reported no members, so the owner's
 // share dialog said "Only you." for a vault that was shared — exactly when they
 // might want to revoke whoever emptied it.
+await A.api.create_vault(buf("Shared"), "Name Shared");
 await A.maps.setValue(me, enc.encode("Shared"), enc.encode("k1"), enc.encode("secret"));
 await A.maps.setUserRights(me, enc.encode("Shared"), bobId.getPrincipal(), { ReadWrite: null });
 await B.maps.removeMapValues(me, enc.encode("Shared"));
@@ -191,6 +247,7 @@ check("an id of exactly 32 bytes is accepted", "Ok" in (await A.api.create_vault
   const D = await connect(Ed25519KeyIdentity.generate());
   const dId = D.me;
   const V = enc.encode("Doomed");
+  await D.api.create_vault({ inner: V }, "Name Doomed");
   await D.maps.setValue(dId, V, enc.encode("k1"), enc.encode("v1"));
   await D.maps.setValue(dId, V, enc.encode("k1"), enc.encode("v2")); // a version
   await D.maps.setValue(dId, V, enc.encode("k2"), enc.encode("trash me"));
@@ -256,16 +313,7 @@ check("an id of exactly 32 bytes is accepted", "Ok" in (await A.api.create_vault
     "v-one has it",
   );
 
-  // A vault can still be unnamed, even though `create_vault` now always names
-  // one: writing a value registers the vault without a name, which is the path
-  // every vault predating named creation came through. Such a vault renders as
-  // its map name, so a display name equal to that collides on screen just as
-  // surely as a duplicate display name would — which is why `labelTaken` keeps
-  // its map-name branch. `v-four` is registered by a write, and so unnamed.
-  await N.maps.setValue(N.me, enc.encode("v-four"), enc.encode("k1"), enc.encode("v1"));
   await N.api.create_vault(buf("v-five"), "Name v-five");
-  const asMapName = await N.api.set_vault_name(buf("v-five"), "v-four");
-  check("a name equal to an unnamed vault's map name is refused", "Err" in asMapName, JSON.stringify(asMapName));
 
   // ---- creation is atomic: a refused name leaves no vault -------------------
   //
@@ -288,16 +336,6 @@ check("an id of exactly 32 bytes is accepted", "Ok" in (await A.api.create_vault
     );
     check("nor did it acquire a name", named === false);
 
-    // `v-four` is owned but unnamed — registered by a value write. Creating it
-    // must *name* it rather than returning Ok and leaving it unnamed, or "a
-    // named vault or nothing" is false on the one path that can reach it.
-    const repair = await N.api.create_vault(buf("v-four"), "Recovered");
-    check("creating a vault you own but have not named succeeds", "Ok" in repair, JSON.stringify(repair));
-    const label = (await N.api.get_vault_names()).find(
-      (r) => new TextDecoder().decode(Uint8Array.from(r.map_name.inner)) === "v-four",
-    )?.display_name;
-    check("and names it, rather than leaving it unnamed", label === "Recovered", String(label));
-
     const blank = await N.api.create_vault(buf("v-seven"), "   ");
     check("creating with a blank name is refused", "Err" in blank, JSON.stringify(blank));
     check(
@@ -308,7 +346,16 @@ check("an id of exactly 32 bytes is accepted", "Ok" in (await A.api.create_vault
 
   // Case-sensitive on purpose: refusing a name for a difference the user cannot
   // see is its own problem, and normalisation has no clean answer.
+  await N.api.create_vault(buf("v-three"), "Name v-three");
   check("but a different case is allowed", "Ok" in (await N.api.set_vault_name(buf("v-three"), "work")));
+
+  check(
+    "naming a vault that does not exist is refused",
+    "Err" in (await N.api.set_vault_name(buf("never-created"), "Ghost name")),
+  );
+  check("so no name row was left behind", !(await N.api.get_vault_names()).some(
+    (r) => new TextDecoder().decode(Uint8Array.from(r.map_name.inner)) === "never-created",
+  ));
 
   // Per owner. Someone else calling theirs "Work" is not a collision — the
   // sidebar separates owned from shared and names the sharer.
@@ -325,7 +372,7 @@ check("listing owned vaults and polling derive no keys", derivations === 0, `${d
 
 console.log(
   failures.length === 0
-    ? "\nAn owned vault exists once claimed, survives being emptied, and a map with no registry entry is still visible to its owner."
+    ? "\nA vault exists only once created, is named from that moment, and survives being emptied."
     : `\n${failures.length} failure(s)`,
 );
 cycles.done();

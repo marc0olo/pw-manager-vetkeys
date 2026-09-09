@@ -334,6 +334,13 @@ mixin (
       return #Err("Sign in to name a vault.");
     };
 
+    // A name belongs to a vault, so there has to be one. Without this a caller
+    // can leave a display name behind for a map that was never created — an
+    // invisible row that still holds its label against `labelTaken`.
+    if (not VaultsLib.ownedBy(vaults, msg.caller).containsKey(Blob.compare, map_name.inner)) {
+      return #Err("no such vault");
+    };
+
     let mine = VaultsLib.namesOwnedBy(vaults, msg.caller);
 
     func store(names : Map.Map<Blob, Text>) {
@@ -345,9 +352,6 @@ mixin (
     };
 
     // Every rule lives in lib/Vaults so creating and renaming cannot disagree.
-    // `vaultLabel`'s fallback to the map name stays regardless: vaults created
-    // before naming became part of creation may still be unnamed, and this is
-    // the path that renames them.
     let trimmed = switch (VaultsLib.validateName(vaults, msg.caller, map_name.inner, display_name)) {
       case (#err(e)) { return #Err(e) };
       case (#ok(t)) { t };

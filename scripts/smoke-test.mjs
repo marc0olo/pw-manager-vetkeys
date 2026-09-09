@@ -1,10 +1,11 @@
 // End-to-end check of the vetKeys storage path against the local replica,
 // using the exact byte encodings src/frontend/lib/vault.ts uses.
 import { execSync } from "node:child_process";
-import { HttpAgent } from "@icp-sdk/core/agent";
+import { HttpAgent, Actor } from "@icp-sdk/core/agent";
 import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
 import { DefaultEncryptedMapsClient, EncryptedMaps } from "@icp-sdk/vetkeys/encrypted_maps";
 import { reportCycles } from "./lib/cycles.mjs";
+import { idlFactory } from "../src/bindings/declarations/backend.did.js";
 
 // Running these checks is what drains the canister; see scripts/lib/cycles.mjs.
 const cycles = reportCycles();
@@ -20,7 +21,9 @@ const VAULT = encoder.encode("Personal");
 
 async function connect(identity) {
   const agent = await HttpAgent.create({ identity, host, rootKey });
-  return new EncryptedMaps(new DefaultEncryptedMapsClient(agent, canisterId));
+  const maps = new EncryptedMaps(new DefaultEncryptedMapsClient(agent, canisterId));
+  maps.api = Actor.createActor(idlFactory, { agent, canisterId });
+  return maps;
 }
 
 function itemId() {
@@ -52,6 +55,7 @@ const item = {
   notes: "recovery codes in the safe",
   updatedAt: Date.now(),
 };
+await A.api.create_vault({ inner: VAULT }, "Personal");
 await A.setValue(alicePrincipal, VAULT, encoder.encode(id), encoder.encode(JSON.stringify(item)));
 const readBack = JSON.parse(decoder.decode(await A.getValue(alicePrincipal, VAULT, encoder.encode(id))));
 check("owner round-trips an item", readBack.password === item.password && readBack.title === "GitHub");
