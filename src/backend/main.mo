@@ -18,6 +18,7 @@ import Array "mo:core/Array";
 import Digest "lib/Digest";
 import Access "lib/Access";
 import Recording "lib/Recording";
+import Vaults "lib/Vaults";
 import History "lib/History";
 import Nat64 "mo:core/Nat64";
 import Nat "mo:core/Nat";
@@ -137,7 +138,7 @@ actor PasswordManager {
       // could show is the one written *inside* the plaintext by whoever saved
       // it, which is the writer's to choose.
       case (#ok(null)) {
-        registerVault(map_owner, map_name.inner);
+        Vaults.register(vaults, map_owner, map_name.inner);
         Recording.record(
           events,
           msg.caller,
@@ -152,7 +153,7 @@ actor PasswordManager {
         // Registered here too, not only on a first write: a map that predates
         // the registry has no entry, and an ordinary edit is the cheapest place
         // to acquire one.
-        registerVault(map_owner, map_name.inner);
+        Vaults.register(vaults, map_owner, map_name.inner);
         // The value this write replaced. Recording it here is the whole of
         // version events.log: without it an edit destroys the previous secret,
         // which trash never covered because trash only sees deletions.
@@ -553,7 +554,7 @@ actor PasswordManager {
     if (map_name.inner.size() > MAX_MAP_NAME_BYTES) {
       return #Err("That name is too long.");
     };
-    let mine = vaultsOwnedBy(msg.caller);
+    let mine = Vaults.ownedBy(vaults, msg.caller);
     if (mine.containsKey(Blob.compare, map_name.inner)) {
       return #Ok();
     };
@@ -591,7 +592,7 @@ actor PasswordManager {
 
     // Ownership is identity-derived, so this is the whole check: a vault *is*
     // `(owner, mapName)` and the caller can only name their own.
-    let mine = vaultsOwnedBy(msg.caller);
+    let mine = Vaults.ownedBy(vaults, msg.caller);
     let hasValues = switch (encryptedMaps.getEncryptedValuesForMap(msg.caller, id)) {
       case (#err(_)) { false };
       case (#ok(pairs)) { pairs.size() > 0 };
@@ -630,7 +631,7 @@ actor PasswordManager {
 
     // The display name would otherwise outlive the vault and reappear on a
     // vault later created with the same name.
-    let names = namesOwnedBy(msg.caller).remove(Blob.compare, mapName);
+    let names = Vaults.namesOwnedBy(vaults, msg.caller).remove(Blob.compare, mapName);
     vaults.names := if (Map.isEmpty(names)) {
       vaults.names.remove(Principal.compare, msg.caller);
     } else {
@@ -646,7 +647,7 @@ actor PasswordManager {
   /// without inferring it from a listing that also carries shared vaults.
   public query (msg) func get_owned_vaults() : async [Shared.ByteBuf] {
     var out : [Shared.ByteBuf] = [];
-    for ((mapName, _) in Map.entries(vaultsOwnedBy(msg.caller))) {
+    for ((mapName, _) in Map.entries(Vaults.ownedBy(vaults, msg.caller))) {
       out := Array.concat(out, [{ inner = mapName }]);
     };
     out;
@@ -730,73 +731,10 @@ actor PasswordManager {
   /// `owner -> mapName`. Keyed by owner because the read is "every vault *I*
   /// own" and it runs on the poll path.
 
-  func vaultsOwnedBy(owner : Principal) : Map.Map<Blob, ()> {
-    switch (vaults.owned.get(Principal.compare, owner)) {
-      case (null) { Map.empty<Blob, ()>() };
-      case (?mine) { mine };
-    };
-  };
-
-  /// Record that this principal owns this vault, if it is not recorded already.
-  ///
-  /// Called when a value is written, so a vault becomes permanent the moment it
-  /// holds something — and stays listed after everything in it is deleted,
-  /// which is the whole point.
-  ///
-  /// **Unconditional.** Declining to register — on a cap, or on any other
-  /// condition — produces a map with no entry, and once its values go it is a
-  /// vault its owner holds and cannot see, with its trash out of reach. That is
-  /// the one failure direction this whole design avoids, so the only safe
-  /// registration is one that cannot refuse. See
-  /// {@link MAX_CLAIMED_VAULTS_PER_OWNER} for why bounding it here bought
-  /// nothing.
-  func registerVault(owner : Principal, mapName : Blob) {
-    let mine = vaultsOwnedBy(owner);
-    if (mine.containsKey(Blob.compare, mapName)) return;
-    vaults.owned := vaults.owned.add(Principal.compare, owner, mine.add(Blob.compare, mapName, ()));
-  };
-
-  /// The names this owner has given their vaults.
-  ///
-  /// `vaults.names` is `owner -> mapName -> display name`, and absent means
-  /// "show the map name", so nothing needs backfilling. Keyed by owner rather
-  /// than by the `(owner, mapName)` pair because the primary read is "every
-  /// name *I* own", which runs on the poll path; the pair-keyed form made it
-  /// O(rows across all users) per poll.
-  func namesOwnedBy(owner : Principal) : Map.Map<Blob, Text> {
-    switch (vaults.names.get(Principal.compare, owner)) {
-      case (null) { Map.empty<Blob, Text>() };
-      case (?names) { names };
-    };
-  };
 
 
-  /// Whether another vault of this owner's already shows this label.
-  ///
-  /// Checks display names *and* map names, because an unnamed vault renders as
-  /// its map name — so a display name equal to another vault's map name
-  /// collides on screen just as surely as a duplicate display name. Vaults
-  /// created through the app have random map names, which makes that case
-  /// vanishingly unlikely rather than impossible.
-  ///
-  /// Excludes the vault being named, so renaming one to the label it already
-  /// carries is not a collision with itself.
-  func labelTaken(owner : Principal, mapName : Blob, wanted : Text) : Bool {
-    let names = namesOwnedBy(owner);
-    for ((otherName, display) in Map.entries(names)) {
-      if (Blob.compare(otherName, mapName) != #equal and display == wanted) return true;
-    };
-    for ((otherName, _) in Map.entries(vaultsOwnedBy(owner))) {
-      if (Blob.compare(otherName, mapName) != #equal and names.get(Blob.compare, otherName) == null) {
-        // Unnamed, so it renders as its map name.
-        switch (Text.decodeUtf8(otherName)) {
-          case (?asText) { if (asText == wanted) return true };
-          case (null) {};
-        };
-      };
-    };
-    false;
-  };
+
+
 
   /// Rename one of *your own* vaults, or clear the name by passing "".
   ///
@@ -815,7 +753,7 @@ actor PasswordManager {
     };
 
     let trimmed = Text.trim(display_name, #predicate(Char.isWhitespace));
-    let mine = namesOwnedBy(msg.caller);
+    let mine = Vaults.namesOwnedBy(vaults, msg.caller);
 
     func store(names : Map.Map<Blob, Text>) {
       vaults.names := if (Map.isEmpty(names)) {
@@ -868,7 +806,7 @@ actor PasswordManager {
     // after trimming, and deliberately neither case-insensitive nor
     // Unicode-normalised — `Work` and `work` are visually distinct, and
     // refusing a name for a difference the user cannot see is its own problem.
-    if (labelTaken(msg.caller, map_name.inner, trimmed)) {
+    if (Vaults.labelTaken(vaults, msg.caller, map_name.inner, trimmed)) {
       return #Err("You already have a vault called \"" # trimmed # "\".");
     };
 
@@ -895,7 +833,7 @@ actor PasswordManager {
     // is harmless: the client joins these against the vault listing, so it
     // simply never matches.
     //
-    for ((name, displayName) in Map.entries(namesOwnedBy(msg.caller))) {
+    for ((name, displayName) in Map.entries(Vaults.namesOwnedBy(vaults, msg.caller))) {
       List.add(found, { owner = msg.caller; map_name = { inner = name }; display_name = displayName });
     };
 
@@ -903,7 +841,7 @@ actor PasswordManager {
     // owner does. Listed from the access control list, which carries no such
     // emptiness condition.
     for ((owner, name) in encryptedMaps.getAccessibleSharedMapNames(msg.caller).values()) {
-      switch (namesOwnedBy(owner).get(Blob.compare, name)) {
+      switch (Vaults.namesOwnedBy(vaults, owner).get(Blob.compare, name)) {
         case (null) {};
         case (?displayName) {
           List.add(found, { owner; map_name = { inner = name }; display_name = displayName });
@@ -966,7 +904,7 @@ actor PasswordManager {
       };
       false;
     };
-    for ((mapName, _) in Map.entries(vaultsOwnedBy(caller))) {
+    for ((mapName, _) in Map.entries(Vaults.ownedBy(vaults, caller))) {
       if (not seen(mapName)) {
         // Absent from the library's listing means the map holds no values, so
         // nothing in it is live.

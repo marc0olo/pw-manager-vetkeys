@@ -309,6 +309,8 @@ export interface _SERVICE {
     Result_1
   >,
   /**
+   * / `owner -> mapName`. Keyed by owner because the read is "every vault *I*
+   * / own" and it runs on the poll path.
    * / Rename one of *your own* vaults, or clear the name by passing "".
    * /
    * / Owner-only by construction: the row is keyed on `msg.caller`, so there is
