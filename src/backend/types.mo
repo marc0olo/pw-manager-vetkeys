@@ -8,21 +8,14 @@ import History "lib/History";
 /// composes, `lib/` computes, `mixins/` serves, and the shapes they agree on
 /// live here.
 module {
-  /// Whether the low-balance warning is currently standing.
-  ///
-  /// A record because a mixin receives a `var` by value, so its mutations would
-  /// not propagate back; records are shared by reference. Stable, and that is
-  /// load-bearing: it makes **the newest watchdog line in the log the current
-  /// state**, which is the contract `scripts/lib/cycles.mjs` reads it under.
-  /// Transient would reset on every deploy, and since a healthy deploy prints
-  /// nothing, a warning from before it would stand as the newest line long
-  /// after a top-up cleared it.
   /// The append-only event log and the sequence it hands out.
   ///
   /// One record so the groups that write events can receive both — the counter
-  /// only means anything alongside the log it indexes.
-  /// Orders events. Canister-wide rather than per secret, so the audit log can
-  /// be read across vaults in the order things actually happened.
+  /// only means anything alongside the log it indexes, and a mixin receives a
+  /// `var` by value, so writes to a bare one would not propagate back.
+  ///
+  /// `nextSeq` orders events canister-wide rather than per secret, so an audit
+  /// log can be read across vaults in the order things actually happened.
   public type EventsState = { var log : History.Store; var nextSeq : Nat64 };
 
   /// The vaults this canister knows about itself: which principal owns which
@@ -31,23 +24,33 @@ module {
   /// One record because the two are written together — creating a vault claims
   /// a name, deleting it releases both — and because a mixin cannot take a
   /// `var` and have its writes propagate back.
-  /// `owner -> mapName`. Keyed by owner because the read is "every vault *I*
-  /// own" and it runs on the poll path.
+  ///
+  /// Both are keyed by owner rather than by the `(owner, mapName)` pair,
+  /// because the primary read is "everything *I* own" and that runs on the poll
+  /// path; the pair-keyed form made it O(rows across all users) per poll.
   public type VaultsState = {
     var owned : Map.Map<Principal, Map.Map<Blob, ()>>;
     var names : Map.Map<Principal, Map.Map<Blob, Text>>;
   };
 
+  /// Whether the low-balance warning is currently standing.
+  ///
+  /// A record for the same reason as the two above. Stable, and that is
+  /// load-bearing: it makes **the newest watchdog line in the log the current
+  /// state**, which is the contract `scripts/lib/cycles.mjs` reads it under.
+  /// Transient would reset on every deploy, and since a healthy deploy prints
+  /// nothing, a warning from before it would stand as the newest line long
+  /// after a top-up cleared it.
   public type HealthState = { var warnedLowCycles : Bool };
 
-/// What the canister can say about its own ability to derive vault keys.
-///
-/// A state, never a number: the balance itself is the operator's business.
-///
-/// The threshold for `#low_cycles` is {@link BLAME_CYCLES_BELOW}, which is not
-/// the one the operator's warning uses: naming a cause to a user demands more
-/// than warning early does.
-public type ServiceHealth = {
+  /// What the canister can say about its own ability to derive vault keys.
+  ///
+  /// A state, never a number: the balance itself is the operator's business.
+  ///
+  /// The threshold for `#low_cycles` is {@link BLAME_CYCLES_BELOW}, which is not
+  /// the one the operator's warning uses: naming a cause to a user demands more
+  /// than warning early does.
+  public type ServiceHealth = {
   /// Derivation should work. If a call still failed, the cause is not one
   /// this canister can name.
   #funded;
@@ -55,7 +58,7 @@ public type ServiceHealth = {
   #low_cycles;
 };
 
-public type TrashedItem = {
+  public type TrashedItem = {
   /// Which event this row is, and what `restore_version` takes.
   ///
   /// The map key is not an identity here: a secret can be deleted, restored
@@ -80,9 +83,9 @@ public type TrashedItem = {
   deleted_by : Principal;
 };
 
-public type VersionKind = { #Created; #Edited; #Deleted; #Restored };
+  public type VersionKind = { #Created; #Edited; #Deleted; #Restored };
 
-public type Version = {
+  public type Version = {
   seq : Nat64;
   /// The value this event superseded. Absent for a restore, which superseded
   /// nothing, and for a version whose ciphertext the owner has dropped —
@@ -94,7 +97,7 @@ public type Version = {
   kind : VersionKind;
 };
 
-public type ItemSummary = {
+  public type ItemSummary = {
   map_key : Shared.ByteBuf;
   /// Restorable versions: value-carrying events only. A `#Created` marker and
   /// a version the owner has pruned are both on the record, but neither is
@@ -112,13 +115,13 @@ public type ItemSummary = {
   updated_at : Nat64;
 };
 
-public type VaultName = {
+  public type VaultName = {
   owner : Principal;
   map_name : Shared.ByteBuf;
   display_name : Text;
 };
 
-public type VaultSummary = {
+  public type VaultSummary = {
   owner : Principal;
   map_name : Shared.ByteBuf;
   access_control : [(Principal, VetKeys.AccessRights)];

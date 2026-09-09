@@ -62,13 +62,19 @@ actor PasswordManager {
   // leaves the service correct, but declares the type twice, and the generated
   // binding then churns its `Result_N` names. Silent where M0051 above is
   // loud, which is what makes it worth writing down.
-  // Everything below is state, and it comes before the includes: a stable `let`
-  // cannot be forward-referenced (M0016), unlike a `transient let`. Each record
-  // exists because a mixin takes a `var` by value, so a group's writes to a
-  // bare `var` would never reach the actor.
+
+  // State comes before the `include`s that take it. An `include` argument is
+  // evaluated where it appears, so it cannot name state declared later
+  // (M0016) — `transient` makes no difference, and a *function* body can
+  // forward-reference freely because it runs later. Each record exists because
+  // a mixin takes a `var` by value, so a group's writes to a bare `var` would
+  // never reach the actor.
 
   /// The append-only event log and the sequence it hands out. See lib/Recording.
   let events : Types.EventsState = { var log = History.empty(); var nextSeq = 0 };
+
+  /// Whether the low-balance warning is standing. See lib/Cycles.
+  let health : Types.HealthState = { var warnedLowCycles = false };
 
   /// Vault ownership and the display name each vault carries.
   let vaults : Types.VaultsState = {
@@ -87,9 +93,6 @@ actor PasswordManager {
   // ---------------------------------------------------------------------------
   // This application's own groups
   // ---------------------------------------------------------------------------
-
-  /// Whether the low-balance warning is standing. See lib/Cycles.
-  let health : Types.HealthState = { var warnedLowCycles = false };
 
   include ValueWritesMixin(encryptedMaps, events, vaults, health);
   include TrashMixin(encryptedMaps, events, health);
