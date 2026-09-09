@@ -462,15 +462,18 @@ export class VaultClient {
    * as its map name, a hex string, and is fixable by renaming. The other order
    * would leave a name with no vault, which nothing would ever show.
    */
+  /**
+   * Create a vault under a random id, with its name.
+   *
+   * One call, so it either produces a named vault or nothing. It used to be
+   * `create_vault` then `set_vault_name`: a failure between them left a vault
+   * labelled by its own id, and the duplicate-name refusal arrived *after* the
+   * vault existed. The canister now checks everything before it writes.
+   */
   async createVault(displayName: string): Promise<string> {
     const name = newVaultName();
-    const created = await this.backend.create_vault({ inner: encoder.encode(name) });
+    const created = await this.backend.create_vault({ inner: encoder.encode(name) }, displayName.trim());
     if ("Err" in created) throw new Error(created.Err);
-    // Always named, never conditionally: an unnamed vault renders as its random
-    // id, so a caller passing nothing should see an error rather than end up
-    // with a vault called `a3f1b2c4…`. The dialog enforces this too.
-    const named = await this.backend.set_vault_name({ inner: encoder.encode(name) }, displayName.trim());
-    if ("Err" in named) throw new Error(named.Err);
     return name;
   }
 

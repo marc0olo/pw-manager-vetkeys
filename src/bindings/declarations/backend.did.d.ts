@@ -85,7 +85,7 @@ export type VersionKind = { 'Edited' : null } |
   { 'Created' : null } |
   { 'Deleted' : null };
 export interface _SERVICE {
-  'create_vault' : ActorMethod<[ByteBuf], Result>,
+  'create_vault' : ActorMethod<[ByteBuf, string], Result>,
   'delete_vault' : ActorMethod<[ByteBuf], Result>,
   'discard_trash' : ActorMethod<[Principal, ByteBuf], Result_2>,
   'drop_history' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_2>,
