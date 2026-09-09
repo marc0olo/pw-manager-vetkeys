@@ -21,6 +21,8 @@ module {
   ///
   /// One record so the groups that write events can receive both — the counter
   /// only means anything alongside the log it indexes.
+  /// Orders events. Canister-wide rather than per secret, so the audit log can
+  /// be read across vaults in the order things actually happened.
   public type EventsState = { var log : History.Store; var nextSeq : Nat64 };
 
   /// The vaults this canister knows about itself: which principal owns which
@@ -29,6 +31,8 @@ module {
   /// One record because the two are written together — creating a vault claims
   /// a name, deleting it releases both — and because a mixin cannot take a
   /// `var` and have its writes propagate back.
+  /// `owner -> mapName`. Keyed by owner because the read is "every vault *I*
+  /// own" and it runs on the poll path.
   public type VaultsState = {
     var owned : Map.Map<Principal, Map.Map<Blob, ()>>;
     var names : Map.Map<Principal, Map.Map<Blob, Text>>;

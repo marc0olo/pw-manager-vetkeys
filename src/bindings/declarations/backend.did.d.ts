@@ -85,84 +85,9 @@ export type VersionKind = { 'Edited' : null } |
   { 'Created' : null } |
   { 'Deleted' : null };
 export interface _SERVICE {
-  /**
-   * / Claim a vault that holds nothing yet.
-   * /
-   * / The point of the registry: an entry can be written without inserting a
-   * / value, which is what "create an empty vault" has always meant here. Until
-   * / now a vault began existing when its first secret was stored, so there was
-   * / no moment at which to name it or to land on it.
-   * /
-   * / The caller becomes the owner — a vault *is* `(owner, mapName)`, so there
-   * / is nothing to assign. Idempotent: claiming one you already own succeeds
-   * / and changes nothing, so a retry after a failed response is safe.
-   * /
-   * / The name is the caller's to choose and is stored in the clear, like every
-   * / map name. The app generates an opaque id rather than a readable name (#13)
-   * / so that renaming a vault does not leave the original in plaintext forever;
-   * / that is a client concern, the same as item ids, and not something this can
-   * / enforce.
-   */
   'create_vault' : ActorMethod<[ByteBuf], Result>,
-  /**
-   * / Delete a vault: its contents, its events.log, its sharing and its name.
-   * /
-   * / **Atomic**, which is worth stating because the design in #21 assumed it
-   * / could not be. That assumed the *client* would orchestrate it — wipe, then
-   * / one `remove_user` per grantee — leaving a half-deleted vault if any call
-   * / failed. Owning the endpoints makes it one update message, so it either all
-   * / happens or none of it does, and there is no partial state for the UI to
-   * / represent.
-   * /
-   * / **Owner only.** Revoking needs manage rights, so a `ReadWrite`
-   * / collaborator can only empty a vault — which is why the UI keeps Empty and
-   * / Delete as separate actions rather than one that quietly degrades.
-   * /
-   * / **Not cryptographic erasure.** A vault's key derives from
-   * / `(owner, mapName)`, so re-creating one with the same name yields the same
-   * / key and anyone holding old ciphertext can still read it. This removes data
-   * / from the canister; it does not revoke the key. Vaults created through the
-   * / app get a random name for exactly this reason (#13), which makes reuse
-   * / effectively impossible — but the copy must not promise erasure.
-   */
   'delete_vault' : ActorMethod<[ByteBuf], Result>,
-  /**
-   * / Make a vault's deletions unrecoverable now, rather than waiting out their
-   * / 90 days.
-   * /
-   * / The counterpart to trash being vault-scoped: sharing a vault hands the
-   * / grantee its trash too, so there has to be a way to take a secret out of
-   * / reach *before* granting access. Without this the exposure would have no
-   * / remedy but time.
-   * /
-   * / **Owner only.** The earlier rule was write access, on the reasoning that
-   * / `ReadWrite` already destroys a vault's contents through
-   * / `remove_map_values`. Trash made that false: a writer can empty a vault but
-   * / no longer destroy it, so this is the only true destruction and gating it on
-   * / write hands back the power trash removed. Measured — a collaborator could
-   * / wipe a vault they did not own, discard its trash, and the vault then
-   * / dropped out of the owner's listing.
-   * /
-   * / Scoped to secrets with no live value, so it empties the trash without
-   * / touching the version events.log of secrets that are still there.
-   */
   'discard_trash' : ActorMethod<[Principal, ByteBuf], Result_2>,
-  /**
-   * / Drop the stored versions of one secret, keeping the secret itself.
-   * /
-   * / The owner's way to reclaim space, or to stop keeping a secret's earlier
-   * / values, without a retention policy guessing on their behalf (#38).
-   * /
-   * / Clears the ciphertext and **keeps the events**, so "edited by X at T"
-   * / survives. Otherwise pruning would be a way to launder the audit trail.
-   * /
-   * / Not restricted to live secrets. Applied to a deleted one it clears the
-   * / version the trash was offering, and `get_trash` then skips the group —
-   * / a group whose newest event carries no value has nothing to put back. So
-   * / this doubles as "delete this one trashed secret for good", which is the
-   * / per-secret counterpart to `discard_trash`. Owner-only for that reason:
-   * / it is a destruction, not housekeeping.
-   */
   'drop_history' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_2>,
   'get_accessible_shared_map_names' : ActorMethod<
     [],
@@ -182,84 +107,17 @@ export interface _SERVICE {
     [Principal, ByteBuf, ByteBuf],
     Result_10
   >,
-  /**
-   * / Every recorded version of one secret, oldest first.
-   * /
-   * / Visible to everyone who can read the vault, on the same reasoning as
-   * / `get_trash`: a reader can already read the current value, so earlier
-   * / values of the same secret are not a wider class of information. It does
-   * / mean a member added later sees versions written before they arrived —
-   * / deliberate, and `drop_history` is the owner's remedy.
-   * /
-   * / Not on the poll. Values ride this because it is user-initiated and scoped
-   * / to one secret; #14's rule is that nothing automatic carries ciphertext.
-   */
   'get_history' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_9>,
-  /**
-   * / Per-item events.log facts for one vault: how much is restorable, and when the
-   * / current value was actually written.
-   * /
-   * / A separate query rather than fields on `get_vault_summaries`, which runs
-   * / every 15 s: #14 got the poll down to a digest and a key list, and two
-   * / numbers per item would grow it with the vault. This is read once when a
-   * / vault is opened, alongside the values themselves.
-   * /
-   * / No ciphertext, so it costs no key derivation.
-   */
   'get_item_summaries' : ActorMethod<[Principal, ByteBuf], Result_8>,
   'get_owned_non_empty_map_names' : ActorMethod<[], Array<ByteBuf>>,
-  /**
-   * / Every vault this caller owns, whether or not it holds anything.
-   * /
-   * / The registry read on its own, for a client that wants to know what it owns
-   * / without inferring it from a listing that also carries shared vaults.
-   */
   'get_owned_vaults' : ActorMethod<[], Array<ByteBuf>>,
   'get_service_health' : ActorMethod<[], Result_7>,
   'get_shared_user_access_for_map' : ActorMethod<
     [Principal, ByteBuf],
     Result_6
   >,
-  /**
-   * / Orders events. Canister-wide rather than per secret, so the audit log can
-   * / be read across vaults in the order things actually happened.
-   * / What is recoverable in one vault, with each item's ciphertext so a client
-   * / can show what it was rather than only when it went. See `TrashedItem` for
-   * / why returning values here is not the thing #14 removed from the poll.
-   * /
-   * / Visible to everyone who can read the vault. What that changes differs by
-   * / access level, and the difference is worth stating precisely.
-   * /
-   * / For a member who can **write**, nothing new is disclosed:
-   * / `restore_trashed_values` puts back every entry in the vault on write
-   * / access alone, so they could already recover an entry withheld from the
-   * / listing and then read it. Listing less than the restore path recovers
-   * / hides entries without keeping them out of reach.
-   * /
-   * / For a `Read` member it **is** a new disclosure. They hold the vault key,
-   * / so the ciphertext returned here decrypts, and one added after a deletion
-   * / can read a secret destroyed before they had any access — which no path
-   * / reached before. Accepted deliberately, not incidentally: trash belongs to
-   * / the vault, the share dialog says how many entries a grantee would
-   * / inherit, and `discard_trash` is the remedy.
-   * /
-   * / The alternative was to filter the restore path by the same predicate,
-   * / making owner-or-deleter real rather than cosmetic — one line, since
-   * / `restore_trashed_values` has the entry in hand. Rejected because it turns
-   * / `deletedBy` into authorization data rather than display, and because it
-   * / denies a team the case a shared vault exists for: recovering what a
-   * / colleague who has since left deleted.
-   */
   'get_trash' : ActorMethod<[Principal, ByteBuf], Result_5>,
   'get_user_rights' : ActorMethod<[Principal, ByteBuf, Principal], Result_1>,
-  /**
-   * / Display names for every vault the caller can see, owned and shared.
-   * /
-   * / One query and **zero key derivations** — the hard requirement. The sidebar
-   * / must render names without opening a vault, or lazy loading is undone. Rows
-   * / for vaults the caller cannot see are never returned, so a stray row is
-   * / invisible as well as harmless.
-   */
   'get_vault_names' : ActorMethod<[], Array<VaultName>>,
   'get_vault_summaries' : ActorMethod<[], Array<VaultSummary>>,
   'get_vetkey_verification_key' : ActorMethod<[], ByteBuf>,
@@ -273,51 +131,12 @@ export interface _SERVICE {
   >,
   'remove_map_values' : ActorMethod<[Principal, ByteBuf], Result_3>,
   'remove_user' : ActorMethod<[Principal, ByteBuf, Principal], Result_1>,
-  /**
-   * / Put a whole vault's trash back, for undoing a wipe without one call per
-   * / item.
-   * /
-   * / Authorization is the library's, per insert, so write access is what this
-   * / needs and a reader is refused on the first entry. It restores every
-   * / entry the trash lists rather than only the caller's own, which is why
-   * / `get_trash` lists the same set — see its comment.
-   * /
-   * / Restores the **newest** version of each deleted secret. A vault can hold
-   * / several events for one map key, and replaying them all would mean each
-   * / insert overwriting the last — silent loss inside a recovery operation.
-   * / `History.trash` already yields one row per key, which is that row.
-   */
   'restore_trashed_values' : ActorMethod<[Principal, ByteBuf], Result_2>,
-  /**
-   * / Put one version back, addressed by its event.
-   * /
-   * / Any version, not only a deleted one: restoring over a live secret
-   * / supersedes it, which is an edit, so the value being replaced is kept like
-   * / any other. That is why this is not called `restore_trashed_value` — the
-   * / trash is one view of the log, and this operates on the log.
-   * /
-   * / Authorization is the library's: this is an insert, so a caller without
-   * / write rights is refused there and nothing is recorded.
-   * /
-   * / Removes nothing. The row stays, and the secret leaves the trash because it
-   * / has a live value again — which is what keeps a writer unable to destroy
-   * / anything, and what lets a recovered secret keep its events.log.
-   */
   'restore_version' : ActorMethod<[Principal, ByteBuf, bigint], Result>,
   'set_user_rights' : ActorMethod<
     [Principal, ByteBuf, Principal, AccessRights],
     Result_1
   >,
-  /**
-   * / `owner -> mapName`. Keyed by owner because the read is "every vault *I*
-   * / own" and it runs on the poll path.
-   * / Rename one of *your own* vaults, or clear the name by passing "".
-   * /
-   * / Owner-only by construction: the row is keyed on `msg.caller`, so there is
-   * / no way to address someone else's vault. A collaborator renaming a shared
-   * / vault for everyone would be a surprise, and this makes it unrepresentable
-   * / rather than merely checked.
-   */
   'set_vault_name' : ActorMethod<[ByteBuf, string], Result>,
 }
 export declare const idlFactory: IDL.InterfaceFactory;

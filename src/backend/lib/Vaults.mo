@@ -10,6 +10,33 @@ import Types "../types";
 /// A module because the value writes register a vault, the vault group creates
 /// and deletes them, and the poll lists them — three groups over one registry.
 module {
+  /// Bounds a single row. Display names are not key material, so this is about
+  /// storage rather than correctness — but unbounded text from any caller is
+  /// not something to leave open.
+  public let MAX_DISPLAY_NAME_BYTES = 64;
+
+  /// Bounds how many rows one principal can occupy. Row *size* was bounded from
+  /// the start and row *count* was not, which left an open-ended write for any
+  /// caller. Generous enough that no real user meets it.
+  public let MAX_NAMES_PER_OWNER = 100;
+
+  /// Bounds vaults *claimed* with `create_vault` — an entry with no map behind
+  /// it, which is app-only state the library does not mirror.
+  ///
+  /// Registration on a write is deliberately **not** bounded by this. The
+  /// library keeps no cap of its own on maps per owner, so a caller who writes
+  /// to a thousand map names already makes the canister store a thousand maps;
+  /// an entry here is a constant-factor addition to state they have already
+  /// forced. Capping it bounded nothing and created a vault its owner could not
+  /// see — measured: past the cap a write went unregistered, and emptying that
+  /// vault then hid it while its trash survived.
+  public let MAX_CLAIMED_VAULTS_PER_OWNER = 100;
+
+  /// Bounds a map name. The library caps a map *key* at 32 bytes; a map name
+  /// has no cap of its own, and an unbounded name from any caller is the same
+  /// open-ended write the display-name cap closed.
+  public let MAX_MAP_NAME_BYTES = 32;
+
   /// The vaults this owner holds, or an empty map.
   public func ownedBy(vaults : Types.VaultsState, owner : Principal) : Map.Map<Blob, ()> {
     vaults.owned.get(Principal.compare, owner) ?? Map.empty<Blob, ()>();
