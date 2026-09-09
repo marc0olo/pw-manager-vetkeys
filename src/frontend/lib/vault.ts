@@ -72,14 +72,13 @@ export interface VaultSummary {
 }
 
 /**
- * A deleted item, decrypted, with who removed it and when.
+ * One stored version of a secret, decrypted.
  *
  * The canister returns the ciphertext, and the key material cached from opening
- * the vault decrypts it — a trashed value was never re-encrypted, so the same
- * key works and no extra derivation is needed. Without this the dialog could
- * only offer "restore something deleted at 14:22", which is not recovery.
+ * the vault decrypts it — a superseded value was never re-encrypted, so the
+ * same key works and no extra derivation is needed. Without this the dialog
+ * could only offer "restore something from 14:22", which is not recovery.
  */
-/** One stored version of a secret, decrypted. */
 export interface ItemVersion {
   /** The event, and what `restoreVersion` takes. */
   seq: bigint;
@@ -312,12 +311,6 @@ export class VaultClient {
   }
 
   /**
-   * Every vault we can read, with all items decrypted.
-   *
-   * The canister only reports *non-empty* owned vaults, so a brand-new user has
-   * nothing to list — the caller always shows their own vault regardless.
-   */
-  /**
    * Every vault we can see, with **no decryption and no key derivation**.
    *
    * Reads through the raw canister client rather than
@@ -453,15 +446,6 @@ export class VaultClient {
     );
   }
 
-  /**
-   * Claim a new vault, and give it a display name.
-   *
-   * Two calls rather than one: the map name is opaque, so the readable name is
-   * a display name, and that lives in a different store with its own endpoint.
-   * A failure between them leaves a vault with no display name — which renders
-   * as its map name, a hex string, and is fixable by renaming. The other order
-   * would leave a name with no vault, which nothing would ever show.
-   */
   /**
    * Create a vault under a random id, with its name.
    *

@@ -164,9 +164,9 @@ check("nor owned by them", (await owned(stranger)).length === 0);
   const anon = await connect(new anonModule.AnonymousIdentity());
   check("an anonymous caller cannot create a vault", "Err" in (await anon.api.create_vault(buf("Anon"), "Name Anon")));
 }
-check("an empty name is refused", "Err" in (await A.api.create_vault({ inner: new Uint8Array() }, "Nameless")));
-check("a name over 32 bytes is refused", "Err" in (await A.api.create_vault(buf("x".repeat(33)), "Long id")));
-check("32 bytes exactly is accepted", "Ok" in (await A.api.create_vault(buf("x".repeat(32)), "Exact id")));
+check("an empty id is refused", "Err" in (await A.api.create_vault({ inner: new Uint8Array() }, "Nameless")));
+check("an id over 32 bytes is refused", "Err" in (await A.api.create_vault(buf("x".repeat(33)), "Long id")));
+check("an id of exactly 32 bytes is accepted", "Ok" in (await A.api.create_vault(buf("x".repeat(32)), "Exact id")));
 
 {
   const hoarder = await connect(Ed25519KeyIdentity.generate());
@@ -287,6 +287,16 @@ check("32 bytes exactly is accepted", "Ok" in (await A.api.create_vault(buf("x".
       (r) => new TextDecoder().decode(Uint8Array.from(r.map_name.inner)) === "v-six",
     );
     check("nor did it acquire a name", named === false);
+
+    // `v-four` is owned but unnamed — registered by a value write. Creating it
+    // must *name* it rather than returning Ok and leaving it unnamed, or "a
+    // named vault or nothing" is false on the one path that can reach it.
+    const repair = await N.api.create_vault(buf("v-four"), "Recovered");
+    check("creating a vault you own but have not named succeeds", "Ok" in repair, JSON.stringify(repair));
+    const label = (await N.api.get_vault_names()).find(
+      (r) => new TextDecoder().decode(Uint8Array.from(r.map_name.inner)) === "v-four",
+    )?.display_name;
+    check("and names it, rather than leaving it unnamed", label === "Recovered", String(label));
 
     const blank = await N.api.create_vault(buf("v-seven"), "   ");
     check("creating with a blank name is refused", "Err" in blank, JSON.stringify(blank));
