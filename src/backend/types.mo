@@ -1,6 +1,7 @@
 import VetKeys "mo:ic-vetkeys/Types";
 import Shared "lib/vetkeys/Types";
 import Map "mo:core/pure/Map";
+import History "lib/History";
 
 /// Every type this canister exposes beyond the ones the endpoint groups
 /// contribute. The central schema the Motoko architecture asks for: `main.mo`
@@ -16,6 +17,12 @@ module {
   /// Transient would reset on every deploy, and since a healthy deploy prints
   /// nothing, a warning from before it would stand as the newest line long
   /// after a top-up cleared it.
+  /// The append-only event log and the sequence it hands out.
+  ///
+  /// One record so the groups that write events can receive both — the counter
+  /// only means anything alongside the log it indexes.
+  public type EventsState = { var log : History.Store; var nextSeq : Nat64 };
+
   /// The vaults this canister knows about itself: which principal owns which
   /// map, and the display name each carries.
   ///

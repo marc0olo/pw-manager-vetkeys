@@ -16,8 +16,9 @@ import Char "mo:core/Char";
 import List "mo:core/List";
 import Array "mo:core/Array";
 import Digest "lib/Digest";
+import Access "lib/Access";
+import Recording "lib/Recording";
 import History "lib/History";
-import Time "mo:core/Time";
 import Nat64 "mo:core/Nat64";
 import Nat "mo:core/Nat";
 import Cycles "lib/Cycles";
@@ -70,9 +71,15 @@ actor PasswordManager {
   // leaves the service correct, but declares the type twice, and the generated
   // binding then churns its `Result_N` names. Silent where M0051 above is
   // loud, which is what makes it worth writing down.
-  /// Vault ownership and display names, as one record so the groups that need
-  /// them can receive them — a mixin takes a `var` by value, so its writes
-  /// would not propagate back.
+  // Everything below is state, and it comes before the includes: a stable `let`
+  // cannot be forward-referenced (M0016), unlike a `transient let`. Each record
+  // exists because a mixin takes a `var` by value, so a group's writes to a
+  // bare `var` would never reach the actor.
+
+  /// The append-only event log and the sequence it hands out. See lib/Recording.
+  let events : Types.EventsState = { var log = History.empty(); var nextSeq = 0 };
+
+  /// Vault ownership and the display name each vault carries.
   let vaults : Types.VaultsState = {
     var owned = Map.empty<Principal, Map.Map<Blob, ()>>();
     var names = Map.empty<Principal, Map.Map<Blob, Text>>();
@@ -131,12 +138,13 @@ actor PasswordManager {
       // it, which is the writer's to choose.
       case (#ok(null)) {
         registerVault(map_owner, map_name.inner);
-        record(
+        Recording.record(
+          events,
           msg.caller,
           map_owner,
           map_name.inner,
           [(map_key.inner, null, #Created)],
-          liveness(msg.caller, map_owner, map_name.inner),
+          Recording.liveness(encryptedMaps, msg.caller, map_owner, map_name.inner),
         );
         #Ok(null);
       };
@@ -146,14 +154,15 @@ actor PasswordManager {
         // to acquire one.
         registerVault(map_owner, map_name.inner);
         // The value this write replaced. Recording it here is the whole of
-        // version history: without it an edit destroys the previous secret,
+        // version events.log: without it an edit destroys the previous secret,
         // which trash never covered because trash only sees deletions.
-        record(
+        Recording.record(
+          events,
           msg.caller,
           map_owner,
           map_name.inner,
           [(map_key.inner, ?blob, #Edited)],
-          liveness(msg.caller, map_owner, map_name.inner),
+          Recording.liveness(encryptedMaps, msg.caller, map_owner, map_name.inner),
         );
         #Ok(?{ inner = blob });
       };
@@ -173,12 +182,13 @@ actor PasswordManager {
       case (#err(e)) { #Err(e) };
       case (#ok(null)) { #Ok(null) };
       case (#ok(?blob)) {
-        record(
+        Recording.record(
+          events,
           msg.caller,
           map_owner,
           map_name.inner,
           [(map_key.inner, ?blob, #Deleted)],
-          liveness(msg.caller, map_owner, map_name.inner),
+          Recording.liveness(encryptedMaps, msg.caller, map_owner, map_name.inner),
         );
         #Ok(?{ inner = blob });
       };
@@ -200,7 +210,8 @@ actor PasswordManager {
     switch (encryptedMaps.removeMapValues(msg.caller, (map_owner, map_name.inner))) {
       case (#err(e)) { #Err(e) };
       case (#ok(keys)) {
-        record(
+        Recording.record(
+          events,
           msg.caller,
           map_owner,
           map_name.inner,
@@ -217,42 +228,6 @@ actor PasswordManager {
     };
   };
 
-  /// The caller's own rights on a vault, or null if they have none.
-  ///
-  /// Surfaced on {@link VaultSummary} rather than as its own endpoint, so the
-  /// client learns it from the listing it already polls.
-  ///
-  /// The library will not answer this: `get_user_rights` requires
-  /// `ReadWriteManage`, and the vault listing flattens the refusal to an empty
-  /// access-control list, so a `Read` or `ReadWrite` grantee cannot discover
-  /// what they are allowed to do (upstream dfinity/vetkeys#438).
-  ///
-  /// The client's workaround was to offer every control and withdraw the ones
-  /// the canister refused — which meant a read-only collaborator was shown
-  /// "Delete" and "Empty vault" until they tried one. Correct, since the
-  /// canister remains the authority, but it asks the user to discover their
-  /// own permissions by bumping into them.
-  ///
-  /// We can answer it because we hold the state the library reads: the ACL is a
-  /// plain field of `KeyManagerState`. Telling callers their *own* rights
-  /// discloses nothing about anyone else, which is the whole of #438's request.
-  func rightsOf(caller : Principal, map_owner : Principal, mapName : Blob) : ?VetKeys.AccessRights {
-    // Ownership is identity-derived rather than an ACL entry, so it is not in
-    // the map to look up.
-    if (Principal.compare(caller, map_owner) == #equal) return ?(#ReadWriteManage);
-
-    switch (encryptedMapsState.keyManager.accessControl.get(caller)) {
-      case (null) { null };
-      case (?entries) {
-        for (((owner, name), rights) in entries.values()) {
-          if (Principal.compare(owner, map_owner) == #equal and Blob.compare(name, mapName) == #equal) {
-            return ?rights;
-          };
-        };
-        null;
-      };
-    };
-  };
 
   // ---------------------------------------------------------------------------
   // Trash
@@ -267,77 +242,14 @@ actor PasswordManager {
   // unreachable whether or not anything has purged it.
   // ---------------------------------------------------------------------------
 
-  var history : History.Store = History.empty();
 
   /// Orders events. Canister-wide rather than per secret, so the audit log can
   /// be read across vaults in the order things actually happened.
-  var nextSeq : Nat64 = 0;
 
-  func now() : Nat64 = Nat64.fromIntWrap(Time.now());
 
-  /// Which map keys currently hold a value, as a predicate.
-  ///
-  /// Liveness is the mixin's state and the library's key comparator is private,
-  /// so this goes through the public read API. Every caller here has already
-  /// passed an access check; a refusal yields "nothing is live", which only ever
-  /// makes the trash view larger, never a disclosure.
-  func liveness(caller : Principal, owner : Principal, mapName : Blob) : Blob -> Bool {
-    let live = switch (encryptedMaps.getEncryptedValuesForMap(caller, (owner, mapName))) {
-      case (#err(_)) { [] };
-      case (#ok(pairs)) { Array.map<(Blob, Blob), Blob>(pairs, func((key, _)) { key }) };
-    };
-    func(mapKey : Blob) : Bool {
-      for (k in live.values()) { if (Blob.compare(k, mapKey) == #equal) return true };
-      false;
-    };
-  };
 
-  /// The same predicate from a list of keys already in hand, for the poll path
-  /// where the listing has just produced them.
-  func livenessOf(keys : [Blob]) : Blob -> Bool {
-    func(mapKey : Blob) : Bool {
-      for (k in keys.values()) { if (Blob.compare(k, mapKey) == #equal) return true };
-      false;
-    };
-  };
 
-  /// Append events, then reclaim this vault's expired groups.
-  ///
-  /// Reclamation is a side errand, not the guarantee: the read paths filter by
-  /// age, so an expired group is unreachable whether or not this has run. What
-  /// it costs to skip is bytes on disk for a vault nobody writes to.
-  func record(
-    by : Principal,
-    owner : Principal,
-    mapName : Blob,
-    events : [(Blob, ?Blob, History.Kind)],
-    isLive : Blob -> Bool,
-  ) {
-    let at = now();
-    var next = history;
-    for ((mapKey, value, kind) in events.values()) {
-      next := History.append(next, (owner, mapName, mapKey, nextSeq), { value; at; by; kind });
-      nextSeq += 1;
-    };
-    history := History.purge(next, owner, mapName, isLive, at);
-  };
 
-  /// Whether the caller may read this vault, which is the whole of the trash
-  /// authorization: trash is a property of the vault, so anyone who can read
-  /// the vault can read what has been deleted from it.
-  ///
-  /// Asked on every trash read rather than recorded when the entry was made, so
-  /// revocation takes effect immediately — a collaborator who deleted an item
-  /// and was later removed keeps no window onto the vault through its trash.
-  func canRead(who : Principal, owner : Principal, mapName : Blob) : Bool {
-    if (Principal.compare(who, owner) == #equal) return true;
-    for ((sharedOwner, sharedName) in encryptedMaps.getAccessibleSharedMapNames(who).values()) {
-      if (Principal.compare(sharedOwner, owner) == #equal and Blob.compare(sharedName, mapName) == #equal) {
-        return true;
-      };
-    };
-    false;
-  };
 
 
   /// What is recoverable in one vault, with each item's ciphertext so a client
@@ -367,10 +279,10 @@ actor PasswordManager {
   /// denies a team the case a shared vault exists for: recovering what a
   /// colleague who has since left deleted.
   public query (msg) func get_trash(map_owner : Principal, map_name : Shared.ByteBuf) : async Shared.Result<[Types.TrashedItem], Text> {
-    if (not canRead(msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
+    if (not Access.canRead(encryptedMaps, msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
     #Ok(
       Array.filterMap<(Blob, Nat64, History.Entry), Types.TrashedItem>(
-        History.trash(history, map_owner, map_name.inner, liveness(msg.caller, map_owner, map_name.inner), now()),
+        History.trash(events.log, map_owner, map_name.inner, Recording.liveness(encryptedMaps, msg.caller, map_owner, map_name.inner), Recording.now()),
         func((mapKey, seq, entry)) {
           // `History.trash` only yields value-carrying rows, so this cannot be
           // null. Matched rather than asserted: a trap here would take down a
@@ -409,12 +321,12 @@ actor PasswordManager {
     map_name : Shared.ByteBuf,
     map_key : Shared.ByteBuf,
   ) : async Shared.Result<[Types.Version], Text> {
-    if (not canRead(msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
-    let isLive = liveness(msg.caller, map_owner, map_name.inner);
-    let rows = History.forKey(history, map_owner, map_name.inner, map_key.inner);
-    // A deleted secret's history expires with it, all at once — so an expired
+    if (not Access.canRead(encryptedMaps, msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
+    let isLive = Recording.liveness(encryptedMaps, msg.caller, map_owner, map_name.inner);
+    let rows = History.forKey(events.log, map_owner, map_name.inner, map_key.inner);
+    // A deleted secret's events.log expires with it, all at once — so an expired
     // group answers empty rather than leaking what it used to hold.
-    if (History.groupExpired(rows, isLive(map_key.inner), now())) return #Ok([]);
+    if (History.groupExpired(rows, isLive(map_key.inner), Recording.now())) return #Ok([]);
     #Ok(
       Array.map<(Nat64, History.Entry), Types.Version>(
         Array.sort<(Nat64, History.Entry)>(rows, func(a, b) { Nat64.compare(a.0, b.0) }),
@@ -443,28 +355,28 @@ actor PasswordManager {
   ///
   /// Removes nothing. The row stays, and the secret leaves the trash because it
   /// has a live value again — which is what keeps a writer unable to destroy
-  /// anything, and what lets a recovered secret keep its history.
+  /// anything, and what lets a recovered secret keep its events.log.
   public shared (msg) func restore_version(
     map_owner : Principal,
     map_name : Shared.ByteBuf,
     seq : Nat64,
   ) : async Shared.Result<(), Text> {
     Cycles.watchdog(health);
-    let at = now();
+    let at = Recording.now();
     // The map key is part of the event key, so the row has to be found by
     // scanning this vault's events rather than by direct lookup. One vault's
     // log, on a user-initiated call.
-    let isLive = liveness(msg.caller, map_owner, map_name.inner);
+    let isLive = Recording.liveness(encryptedMaps, msg.caller, map_owner, map_name.inner);
     var found : ?(Blob, History.Entry) = null;
-    for (mapKey in History.keysIn(history, map_owner, map_name.inner).values()) {
-      for ((rowSeq, entry) in History.forKey(history, map_owner, map_name.inner, mapKey).values()) {
+    for (mapKey in History.keysIn(events.log, map_owner, map_name.inner).values()) {
+      for ((rowSeq, entry) in History.forKey(events.log, map_owner, map_name.inner, mapKey).values()) {
         if (rowSeq == seq) { found := ?(mapKey, entry) };
       };
     };
     switch (found) {
       case (null) { #Err("no such version") };
       case (?(mapKey, entry)) {
-        let rows = History.forKey(history, map_owner, map_name.inner, mapKey);
+        let rows = History.forKey(events.log, map_owner, map_name.inner, mapKey);
         if (History.groupExpired(rows, isLive(mapKey), at)) return #Err("no such version");
         switch (entry.value) {
           case (null) { #Err("this version's value was dropped") };
@@ -476,7 +388,7 @@ actor PasswordManager {
                 // edit and the replaced version is kept. Restoring into an
                 // empty key supersedes nothing, and the event carries no value.
                 let kind = switch (superseded) { case (null) { #Restored }; case (?_) { #Edited } };
-                record(msg.caller, map_owner, map_name.inner, [(mapKey, superseded, kind)], isLive);
+                Recording.record(events, msg.caller, map_owner, map_name.inner, [(mapKey, superseded, kind)], isLive);
                 #Ok();
               };
             };
@@ -487,7 +399,7 @@ actor PasswordManager {
   };
 
 
-  /// Per-item history facts for one vault: how much is restorable, and when the
+  /// Per-item events.log facts for one vault: how much is restorable, and when the
   /// current value was actually written.
   ///
   /// A separate query rather than fields on `get_vault_summaries`, which runs
@@ -500,12 +412,12 @@ actor PasswordManager {
     map_owner : Principal,
     map_name : Shared.ByteBuf,
   ) : async Shared.Result<[Types.ItemSummary], Text> {
-    if (not canRead(msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
-    let isLive = liveness(msg.caller, map_owner, map_name.inner);
-    let at = now();
+    if (not Access.canRead(encryptedMaps, msg.caller, map_owner, map_name.inner)) return #Err("unauthorized");
+    let isLive = Recording.liveness(encryptedMaps, msg.caller, map_owner, map_name.inner);
+    let at = Recording.now();
     var out : [Types.ItemSummary] = [];
-    for (mapKey in History.keysIn(history, map_owner, map_name.inner).values()) {
-      let rows = History.forKey(history, map_owner, map_name.inner, mapKey);
+    for (mapKey in History.keysIn(events.log, map_owner, map_name.inner).values()) {
+      let rows = History.forKey(events.log, map_owner, map_name.inner, mapKey);
       if (not History.groupExpired(rows, isLive(mapKey), at)) {
         var versions = 0;
         var newestSeq : Nat64 = 0;
@@ -534,11 +446,11 @@ actor PasswordManager {
   /// `History.trash` already yields one row per key, which is that row.
   public shared (msg) func restore_trashed_values(map_owner : Principal, map_name : Shared.ByteBuf) : async Shared.Result<Nat, Text> {
     Cycles.watchdog(health);
-    let at = now();
-    let isLive = liveness(msg.caller, map_owner, map_name.inner);
+    let at = Recording.now();
+    let isLive = Recording.liveness(encryptedMaps, msg.caller, map_owner, map_name.inner);
     var restored = 0;
-    var events : [(Blob, ?Blob, History.Kind)] = [];
-    for ((mapKey, _, entry) in History.trash(history, map_owner, map_name.inner, isLive, at).values()) {
+    var pending : [(Blob, ?Blob, History.Kind)] = [];
+    for ((mapKey, _, entry) in History.trash(events.log, map_owner, map_name.inner, isLive, at).values()) {
       switch (entry.value) {
         case (null) {};
         case (?value) {
@@ -546,14 +458,14 @@ actor PasswordManager {
             case (#err(e)) { return #Err(e) };
             case (#ok(superseded)) {
               let kind = switch (superseded) { case (null) { #Restored }; case (?_) { #Edited } };
-              events := Array.concat(events, [(mapKey, superseded, kind)]);
+              pending := pending.concat([(mapKey, superseded, kind)]);
               restored += 1;
             };
           };
         };
       };
     };
-    record(msg.caller, map_owner, map_name.inner, events, isLive);
+    Recording.record(events, msg.caller, map_owner, map_name.inner, pending, isLive);
     #Ok(restored);
   };
 
@@ -574,17 +486,17 @@ actor PasswordManager {
   /// dropped out of the owner's listing.
   ///
   /// Scoped to secrets with no live value, so it empties the trash without
-  /// touching the version history of secrets that are still there.
+  /// touching the version events.log of secrets that are still there.
   public shared (msg) func discard_trash(map_owner : Principal, map_name : Shared.ByteBuf) : async Shared.Result<Nat, Text> {
     Cycles.watchdog(health);
     if (Principal.compare(msg.caller, map_owner) != #equal) return #Err("unauthorized");
     let (next, dropped) = History.discardTrash(
-      history,
+      events.log,
       map_owner,
       map_name.inner,
-      liveness(msg.caller, map_owner, map_name.inner),
+      Recording.liveness(encryptedMaps, msg.caller, map_owner, map_name.inner),
     );
-    history := next;
+    events.log := next;
     #Ok(dropped);
   };
 
@@ -609,8 +521,8 @@ actor PasswordManager {
   ) : async Shared.Result<Nat, Text> {
     Cycles.watchdog(health);
     if (Principal.compare(msg.caller, map_owner) != #equal) return #Err("unauthorized");
-    let (next, cleared) = History.dropHistory(history, map_owner, map_name.inner, map_key.inner);
-    history := next;
+    let (next, cleared) = History.dropHistory(events.log, map_owner, map_name.inner, map_key.inner);
+    events.log := next;
     #Ok(cleared);
   };
 
@@ -652,7 +564,7 @@ actor PasswordManager {
     #Ok();
   };
 
-  /// Delete a vault: its contents, its history, its sharing and its name.
+  /// Delete a vault: its contents, its events.log, its sharing and its name.
   ///
   /// **Atomic**, which is worth stating because the design in #21 assumed it
   /// could not be. That assumed the *client* would orchestrate it — wipe, then
@@ -706,8 +618,8 @@ actor PasswordManager {
 
     // Everything, not just the trash: nothing should survive a vault that is
     // gone, and events left behind would sit under a name no listing returns.
-    let (next, _) = History.discardVault(history, msg.caller, mapName);
-    history := next;
+    let (next, _) = History.discardVault(events.log, msg.caller, mapName);
+    events.log := next;
 
     let remaining = mine.remove(Blob.compare, mapName);
     vaults.owned := if (Map.isEmpty(remaining)) {
@@ -790,7 +702,7 @@ actor PasswordManager {
   // For maps written *before* this existed the union is the only thing carrying
   // them, and one case it cannot carry: a vault already emptied, whose values
   // are gone and which was never registered. Its trash survives and becomes
-  // unreachable. There is no history-derived backfill, so this ships with a
+  // unreachable. There is no events.log-derived backfill, so this ships with a
   // reinstall — which makes that state unreachable rather than merely unlikely.
   //
   // App-owned state duplicating something the library should know, so upstream
@@ -943,7 +855,7 @@ actor PasswordManager {
     // No two of this caller's vaults may *render* the same label.
     //
     // Not tidiness. `EmptyVaultDialog` and `DeleteVaultDialog` arm on the typed
-    // label matching the vault's, and delete takes the values, their history,
+    // label matching the vault's, and delete takes the values, their events.log,
     // the trash, the sharing and the registry entry in one irreversible call.
     // Two vaults labelled "Work" turn that confirmation into something the user
     // is deliberate about a *name* over, rather than a vault.
@@ -1031,7 +943,7 @@ actor PasswordManager {
   ///
   /// The union half. An owned map disappears from
   /// `get_owned_non_empty_map_names` as soon as its last value goes, so
-  /// without this an emptied vault takes its trash and its history out of reach
+  /// without this an emptied vault takes its trash and its events.log out of reach
   /// exactly when recovery matters — and a second owned vault could never
   /// persist at all.
   ///
@@ -1058,7 +970,7 @@ actor PasswordManager {
       if (not seen(mapName)) {
         // Absent from the library's listing means the map holds no values, so
         // nothing in it is live.
-        let inTrash = History.trash(history, caller, mapName, func(_ : Blob) : Bool { false }, at);
+        let inTrash = History.trash(events.log, caller, mapName, func(_ : Blob) : Bool { false }, at);
         List.add(
           extra,
           {
@@ -1076,8 +988,8 @@ actor PasswordManager {
             item_keys = [];
             digest = { inner = Digest.ofKeyvals([]) };
             trashed = inTrash.size();
-            my_rights = rightsOf(caller, caller, mapName);
-            trash_digest = { inner = trashDigest(inTrash) };
+            my_rights = Access.rightsOf(encryptedMapsState, caller, caller, mapName);
+            trash_digest = { inner = Recording.trashDigest(inTrash) };
           },
         );
       };
@@ -1085,13 +997,9 @@ actor PasswordManager {
     List.toArray(extra);
   };
 
-  /// Fingerprint of a trash listing, for the poll.
-  func trashDigest(rows : [(Blob, Nat64, History.Entry)]) : Blob {
-    Digest.ofTrash(Array.map<(Blob, Nat64, History.Entry), (Blob, Nat64)>(rows, func((mapKey, seq, _)) { (mapKey, seq) }));
-  };
 
   public query (msg) func get_vault_summaries() : async [Types.VaultSummary] {
-    let at = now();
+    let at = Recording.now();
     let listed = Array.map<EncryptedMaps.EncryptedMapData<VetKeys.AccessRights>, Types.VaultSummary>(
       encryptedMaps.getAllAccessibleEncryptedMaps(msg.caller),
       func(map) {
@@ -1101,9 +1009,9 @@ actor PasswordManager {
         let sorted = Array.sort<(Blob, Blob)>(map.keyvals, func(a, b) { Blob.compare(a.0, b.0) });
         // Liveness from the keys already in hand, so the poll costs no extra
         // read to work out what is in the trash.
-        let isLive = livenessOf(Array.map<(Blob, Blob), Blob>(map.keyvals, func((key, _)) { key }));
-        let inTrash = if (canRead(msg.caller, map.map_owner, map.map_name)) {
-          History.trash(history, map.map_owner, map.map_name, isLive, at);
+        let isLive = Recording.livenessOf(Array.map<(Blob, Blob), Blob>(map.keyvals, func((key, _)) { key }));
+        let inTrash = if (Access.canRead(encryptedMaps, msg.caller, map.map_owner, map.map_name)) {
+          History.trash(events.log, map.map_owner, map.map_name, isLive, at);
         } else { [] };
         {
           owner = map.map_owner;
@@ -1112,8 +1020,8 @@ actor PasswordManager {
           item_keys = Array.map<(Blob, Blob), Shared.ByteBuf>(sorted, func((key, _)) { { inner = key } });
           digest = { inner = Digest.ofKeyvals(map.keyvals) };
           trashed = inTrash.size();
-          my_rights = rightsOf(msg.caller, map.map_owner, map.map_name);
-          trash_digest = { inner = trashDigest(inTrash) };
+          my_rights = Access.rightsOf(encryptedMapsState, msg.caller, map.map_owner, map.map_name);
+          trash_digest = { inner = Recording.trashDigest(inTrash) };
         };
       },
     );

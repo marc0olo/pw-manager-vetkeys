@@ -105,7 +105,7 @@ export interface _SERVICE {
    */
   'create_vault' : ActorMethod<[ByteBuf], Result>,
   /**
-   * / Delete a vault: its contents, its history, its sharing and its name.
+   * / Delete a vault: its contents, its events.log, its sharing and its name.
    * /
    * / **Atomic**, which is worth stating because the design in #21 assumed it
    * / could not be. That assumed the *client* would orchestrate it — wipe, then
@@ -144,7 +144,7 @@ export interface _SERVICE {
    * / dropped out of the owner's listing.
    * /
    * / Scoped to secrets with no live value, so it empties the trash without
-   * / touching the version history of secrets that are still there.
+   * / touching the version events.log of secrets that are still there.
    */
   'discard_trash' : ActorMethod<[Principal, ByteBuf], Result_2>,
   /**
@@ -196,7 +196,7 @@ export interface _SERVICE {
    */
   'get_history' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_9>,
   /**
-   * / Per-item history facts for one vault: how much is restorable, and when the
+   * / Per-item events.log facts for one vault: how much is restorable, and when the
    * / current value was actually written.
    * /
    * / A separate query rather than fields on `get_vault_summaries`, which runs
@@ -221,6 +221,8 @@ export interface _SERVICE {
     Result_6
   >,
   /**
+   * / Orders events. Canister-wide rather than per secret, so the audit log can
+   * / be read across vaults in the order things actually happened.
    * / What is recoverable in one vault, with each item's ciphertext so a client
    * / can show what it was rather than only when it went. See `TrashedItem` for
    * / why returning values here is not the thing #14 removed from the poll.
@@ -299,7 +301,7 @@ export interface _SERVICE {
    * /
    * / Removes nothing. The row stays, and the secret leaves the trash because it
    * / has a live value again — which is what keeps a writer unable to destroy
-   * / anything, and what lets a recovered secret keep its history.
+   * / anything, and what lets a recovered secret keep its events.log.
    */
   'restore_version' : ActorMethod<[Principal, ByteBuf, bigint], Result>,
   'set_user_rights' : ActorMethod<

@@ -23,6 +23,7 @@ type Map__86905547<K, V> = Map__442488879<K, V>;
 type Nat__58649523 = Nat__920180692;
 type Nat__920180692 = Nat;
 type Owner__935355819 = Principal;
+type Store__567524525 = Map__86905547<Key__334261616, Entry__79086314>;
 type Tree__430834836<K, V> =
   {
     #black : (Tree__430834836<K, V>, K, V, Tree__430834836<K, V>);
@@ -39,13 +40,8 @@ actor {
                        EncryptedMapValue__709694351>;
       var mapKeys : Map__86905547<MapId__490225076, [MapKey__37926915]>
     };
+  stable events : {var log : Store__567524525; var nextSeq : Nat64};
   stable health : {var warnedLowCycles : Bool};
-  stable var history :
-    {
-      root : Tree__430834836<Key__334261616, Entry__79086314>;
-      size : Nat__58649523
-    };
-  stable var nextSeq : Nat64;
   stable vaults :
     {
       var names : Map__86905547<Principal, Map__86905547<Blob, Text>>;
