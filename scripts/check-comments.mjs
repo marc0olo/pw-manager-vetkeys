@@ -12,6 +12,17 @@
  * `///` lines merge into a single block, so there is nothing structural to
  * detect — which is why this covers the TypeScript half only. Half is better
  * than the none a habit has caught.
+ *
+ * **The blind spot is deliberate, and closing it makes the check worse.** A
+ * stranded pair on the *first* declaration of a file is not flagged, because
+ * `seenCode` is still false there. That looks like an oversight and is not:
+ * in that position `[file header][declaration doc][code]` and
+ * `[stale doc][current doc][code]` are structurally identical, and only
+ * meaning separates them. Replacing the check with "allow adjacency only when
+ * the first block opens the file" was tried — it catches the first-declaration
+ * case and then flags every legitimate header that sits below imports, which
+ * this repository has. A gate that cries wolf gets deleted, so the trade is
+ * zero false positives at the cost of one position per file.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
