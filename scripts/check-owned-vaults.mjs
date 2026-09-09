@@ -146,6 +146,29 @@ check("and does not duplicate it", (await owned(A)).filter((n) => n === "Empty")
     (await owned(G)).length === (await G.api.get_vault_names()).length,
     `${(await owned(G)).length} owned, ${(await G.api.get_vault_names()).length} named`,
   );
+
+  // The same hole through sharing, which is why `AccessControlWrites` is ours.
+  // The library grants an owner rights over any (owner, mapName) whether or not
+  // a map exists, and lists shared maps from the ACL with no emptiness
+  // condition — so this would otherwise put a vault nobody created into someone
+  // else's sidebar, unnamed and unnameable.
+  const shared = await connect(Ed25519KeyIdentity.generate());
+  check(
+    "sharing a map nobody created is refused",
+    (await attempt(() => G.maps.setUserRights(G.me, enc.encode("phantom"), shared.me, { Read: null }))) !== "ok",
+  );
+  check("so nothing reaches the grantee", (await shared.api.get_vault_summaries()).length === 0);
+
+  check(
+    "sharing one that exists still works",
+    (await attempt(() => G.maps.setUserRights(G.me, enc.encode("ghost"), shared.me, { Read: null }))) === "ok",
+  );
+  check("the grantee sees it", (await shared.api.get_vault_summaries()).length === 1);
+  check("named, not as its id", (await shared.api.get_vault_names()).length === 1);
+  check(
+    "and revoking needs no gate of its own",
+    (await attempt(() => G.maps.removeUser(G.me, enc.encode("ghost"), shared.me))) === "ok",
+  );
 }
 
 // ---- a vault with values is listed ------------------------------------------

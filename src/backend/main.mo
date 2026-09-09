@@ -1,7 +1,6 @@
 import VetKdEndpoints "lib/vetkeys/VetKdEndpoints";
 import EnumerationEndpoints "lib/vetkeys/EnumerationEndpoints";
 import AccessControlReadEndpoints "lib/vetkeys/AccessControlReadEndpoints";
-import AccessControlWriteEndpoints "lib/vetkeys/AccessControlWriteEndpoints";
 import ValueReadEndpoints "lib/vetkeys/ValueReadEndpoints";
 import EncryptedMaps "mo:ic-vetkeys/encrypted_maps/EncryptedMaps";
 import VetKeys "mo:ic-vetkeys/Types";
@@ -11,6 +10,7 @@ import Map "mo:core/pure/Map";
 import History "lib/History";
 import HealthMixin "mixins/Health";
 import ValueWritesMixin "mixins/ValueWrites";
+import AccessControlWritesMixin "mixins/AccessControlWrites";
 import TrashMixin "mixins/Trash";
 import HistoryMixin "mixins/History";
 import VaultsMixin "mixins/Vaults";
@@ -87,7 +87,6 @@ actor PasswordManager {
   include VetKdEndpoints(encryptedMaps);
   include EnumerationEndpoints(encryptedMaps);
   include AccessControlReadEndpoints(encryptedMaps);
-  include AccessControlWriteEndpoints(encryptedMaps);
   include ValueReadEndpoints(encryptedMaps);
 
   // ---------------------------------------------------------------------------
@@ -95,6 +94,7 @@ actor PasswordManager {
   // ---------------------------------------------------------------------------
 
   include ValueWritesMixin(encryptedMaps, events, vaults, health);
+  include AccessControlWritesMixin(encryptedMaps, vaults, health);
   include TrashMixin(encryptedMaps, events, health);
   include HistoryMixin(encryptedMaps, events, health);
   include VaultsMixin(encryptedMaps, encryptedMapsState, events, vaults, health);

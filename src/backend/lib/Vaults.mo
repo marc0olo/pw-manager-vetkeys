@@ -101,15 +101,6 @@ module {
     for ((otherName, display) in Map.entries(names)) {
       if (not otherName.equal(mapName) and display == wanted) return true;
     };
-    for ((otherName, _) in Map.entries(ownedBy(vaults, owner))) {
-      if (not otherName.equal(mapName) and names.get(Blob.compare, otherName) == null) {
-        // Unnamed, so it renders as its map name.
-        switch (Text.decodeUtf8(otherName)) {
-          case (?asText) { if (asText == wanted) return true };
-          case (null) {};
-        };
-      };
-    };
     false;
   };
 };
