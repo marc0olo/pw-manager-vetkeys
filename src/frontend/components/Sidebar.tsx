@@ -1,6 +1,6 @@
 import { CopyIcon, LockIcon, RefreshIcon, ShareIcon, ShieldIcon } from "./Icons";
 import { SessionStatus } from "./SessionStatus";
-import { accessLevel, vaultId, vaultLabel, type VaultSummary } from "../lib/vault";
+import { accessLevel, isUnnamed, vaultId, vaultLabel, type VaultSummary } from "../lib/vault";
 
 interface Props {
   vaults: VaultSummary[];
@@ -152,6 +152,15 @@ function VaultGroup({
                 onClick={() => onSelect(id)}
               >
                 <span className="vaultRow__name">{vaultLabel(vault)}</span>
+                {isUnnamed(vault) && (
+                  // The row is showing an id, not a name somebody chose. Says
+                  // so, because a hex string otherwise reads as a deliberate
+                  // title — and because two vaults can then look identical, one
+                  // named "Work" and one whose id happens to be `Work`.
+                  <span className="vaultRow__unnamed" title="This vault has no name — showing its id">
+                    unnamed
+                  </span>
+                )}
                 {changed.includes(id) && (
                   // A dot, and a name for screen readers. Nothing about it
                   // asks to be dealt with.

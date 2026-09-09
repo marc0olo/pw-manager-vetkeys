@@ -130,6 +130,42 @@ export function vaultLabel(vault: VaultSummary): string {
   return vault.displayName || vault.name;
 }
 
+/**
+ * Whether {@link vaultLabel} is falling back to the vault's id.
+ *
+ * Presentational only, and deliberately **not** folded into `vaultLabel`: the
+ * label is what the delete and empty dialogs ask the user to type, so it has to
+ * stay the bare id. Two unnamed vaults would otherwise both read "Unnamed
+ * vault" and collide with each other — the same problem this marker exists to
+ * solve, moved somewhere else. The id is the only string unique per owner, so
+ * it stays the label and this drives a marker beside it.
+ *
+ * Reachable two ways, neither through this app's UI: a vault registered by a
+ * value write rather than by `create_vault`, and vaults predating naming being
+ * part of creation. It can also arrive from *someone else* — a vault shared
+ * with you carries its owner's name row, so an owner who wrote directly and
+ * never named it shows up unnamed in your sidebar without you doing anything
+ * unusual.
+ *
+ * **A marked state rather than an impossible one, and that is a choice.**
+ * `insert_encrypted_value` is ours since #62, so it could refuse a write to a
+ * map the caller has not created — which would make an unnamed vault
+ * unreachable without #46's hazard, since nothing would be created and left
+ * unregistered. We keep accepting it because `setValue` to a fresh map is how
+ * the stock `@icp-sdk/vetkeys` client brings a vault into being, and every
+ * adopter and tool expects that; our own replica checks make 46 such writes
+ * across five scripts that never create a vault at all. Refusing would break
+ * that behaviourally while `check-bindings` still passed, which is the worst
+ * shape of break.
+ *
+ * The fix that costs nobody anything is upstream — a documented
+ * encrypt-then-call-your-own-endpoint path, which dfinity/vetkeys#443 now asks
+ * for. Until then this is marked, not prevented.
+ */
+export function isUnnamed(vault: VaultSummary): boolean {
+  return !vault.displayName;
+}
+
 export function accessLevel(rights: AccessRights): AccessLevel {
   return Object.keys(rights)[0] as AccessLevel;
 }

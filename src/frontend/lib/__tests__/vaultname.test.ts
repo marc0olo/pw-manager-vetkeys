@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidVaultName, labelTaken, newVaultName, type VaultSummary } from "../vault";
+import { isUnnamed, isValidVaultName, labelTaken, newVaultName, vaultLabel, type VaultSummary } from "../vault";
 import { Principal } from "@icp-sdk/core/principal";
 
 /**
@@ -123,5 +123,38 @@ describe("labelTaken", () => {
 
   it("says nothing about an empty name, which clears rather than sets", () => {
     expect(labelTaken([v({ displayName: "Work" })], "   ", null)).toBe(false);
+  });
+});
+
+describe("isUnnamed", () => {
+  const v = (o: Partial<VaultSummary>): VaultSummary => ({
+    owner: Principal.fromText("2ibo7-dia"),
+    name: "abc123",
+    displayName: null,
+    isOwned: true,
+    rights: null,
+    sharedWith: [],
+    itemIds: [],
+    fingerprint: "f",
+    trashed: 0,
+    trashFingerprint: "t",
+    ...o,
+  });
+
+  it("is true only when the label is falling back to the id", () => {
+    expect(isUnnamed(v({ displayName: null }))).toBe(true);
+    expect(isUnnamed(v({ displayName: "" }))).toBe(true);
+    expect(isUnnamed(v({ displayName: "Work" }))).toBe(false);
+  });
+
+  it("leaves vaultLabel alone, because the dialogs ask for what it returns", () => {
+    // Two unnamed vaults must stay distinguishable. If the *label* became
+    // "Unnamed vault" they would collide with each other, and the typed
+    // confirmation would stop naming one vault.
+    const a = v({ name: "aaaa", displayName: null });
+    const b = v({ name: "bbbb", displayName: null });
+    expect(vaultLabel(a)).toBe("aaaa");
+    expect(vaultLabel(b)).toBe("bbbb");
+    expect(vaultLabel(a)).not.toBe(vaultLabel(b));
   });
 });
