@@ -170,6 +170,9 @@ src/backend/main.mo        The whole backend: the mixin, vault names, poll summa
                            and the cycles watchdog every write runs
 src/backend/lib/Digest.mo  The vault content digest — pure, and unit-tested
 src/backend/lib/History.mo Every version of every secret — pure, and unit-tested
+src/backend/lib/vetkeys/  The endpoint groups dfinity/vetkeys#443 proposes, built
+                          locally to test its boundaries (#58) — five included as
+                          the library would provide them, value writes owned here
 test/Digest.test.mo        Motoko tests: `mops test`, no replica needed
 test/History.test.mo       Append-only, per-secret expiry, liveness, pruning
 src/frontend/lib/vault.ts  Encrypt/decrypt and access control over EncryptedMaps
@@ -201,10 +204,19 @@ scripts/check-ii-metadata.mjs  Validates the II app-metadata document
 scripts/lib/cycles.mjs     What a replica check cost, and how much headroom is left
 ```
 
-`include EncryptedMapsControlPlaneCanister(state)` contributes the vetKD, access
-control and enumeration endpoints, but **not** the value endpoints — those are
-hand-written here, because owning them is the only way to record a version of a
-secret as it is replaced. The signatures `@icp-sdk/vetkeys`' client calls are
+The backend no longer includes a library mixin. It builds one `EncryptedMaps`
+instance and passes it to six endpoint groups — the split proposed in
+dfinity/vetkeys#443, implemented locally under `src/backend/lib/vetkeys/` to
+test those boundaries before the library commits to them (#58). Five behave
+exactly as the library's mixin did; the value **writes** are ours, because
+owning them is the only way to record a version of a secret as it is replaced.
+
+Two constraints the proposal did not anticipate, both found by building it:
+groups take the constructed instance rather than the state, because sibling
+mixins cannot both declare `encryptedMaps` (M0051 rejects a duplicate binding as
+readily as a duplicate type); and the shared types are referenced through
+`lib/vetkeys/Types.mo` rather than aliased locally, because a local alias makes
+the generated binding churn its `Result_N` names. The signatures `@icp-sdk/vetkeys`' client calls are
 kept exactly, so the stock client still works; everything beyond them is
 additive and needs a binding of ours.
 

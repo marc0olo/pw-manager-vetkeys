@@ -159,9 +159,23 @@ export function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [lockReason, setLockReason] = useState<LockReason | null>(null);
 
+  /// A toast clears itself after three seconds, and that timer has to be owned.
+  /// Left unowned it outlives the component: React then sets state on a tree
+  /// that is gone, which is harmless in a browser and fatal under jsdom, where
+  /// teardown removes `window` before the timer fires. That surfaced as a CI
+  /// run where all 324 tests passed and the run failed anyway.
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notify = useCallback((text: string) => {
     setToast(text);
-    setTimeout(() => setToast((current) => (current === text ? null : current)), 3000);
+    if (toastTimer.current !== null) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => {
+      toastTimer.current = null;
+      setToast((current) => (current === text ? null : current));
+    }, 3000);
+  }, []);
+
+  useEffect(() => () => {
+    if (toastTimer.current !== null) clearTimeout(toastTimer.current);
   }, []);
 
   // Resume a stored session only if it is still inside the idle window; a session
