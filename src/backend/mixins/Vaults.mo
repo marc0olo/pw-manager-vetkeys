@@ -158,42 +158,76 @@ mixin (
     List.toArray(extra);
   };
 
-  /// Claim a vault that holds nothing yet.
+  /// Claim a vault and name it, in one message.
   ///
   /// The point of the registry: an entry can be written without inserting a
-  /// value, which is what "create an empty vault" has always meant here. Until
-  /// now a vault began existing when its first secret was stored, so there was
+  /// value, which is what "create an empty vault" has always meant here. Before
+  /// it, a vault began existing when its first secret was stored, so there was
   /// no moment at which to name it or to land on it.
   ///
-  /// The caller becomes the owner — a vault *is* `(owner, mapName)`, so there
-  /// is nothing to assign. Idempotent: claiming one you already own succeeds
-  /// and changes nothing, so a retry after a failed response is safe.
+  /// One call rather than two, so it produces a *named* vault or nothing. It
+  /// used to be `create_vault` then `set_vault_name`, which meant a failure
+  /// between them left a vault labelled by its random id — and, worse, enforced
+  /// the name rules *after* the vault existed, so a duplicate label was refused
+  /// to someone who already had the vault. Every check now runs before anything
+  /// is written, which is what puts the refusal where a user expects it.
+  ///
+  /// The caller becomes the owner — a vault *is* `(owner, mapName)`, so there is
+  /// nothing to assign. Idempotent in the sense that matters: a retry of a call
+  /// that fully landed changes nothing, while a vault that is owned but unnamed
+  /// gets named, so a retry repairs rather than silently succeeding.
   ///
   /// The name is the caller's to choose and is stored in the clear, like every
   /// map name. The app generates an opaque id rather than a readable name (#13)
   /// so that renaming a vault does not leave the original in plaintext forever;
   /// that is a client concern, the same as item ids, and not something this can
   /// enforce.
-  public shared (msg) func create_vault(map_name : Shared.ByteBuf) : async Shared.Result<(), Text> {
+  public shared (msg) func create_vault(
+    map_name : Shared.ByteBuf,
+    display_name : Text,
+  ) : async Shared.Result<(), Text> {
     Cycles.watchdog(health);
     if (Principal.isAnonymous(msg.caller)) {
       return #Err("Sign in to create a vault.");
     };
     if (map_name.inner.size() == 0) {
-      return #Err("A vault needs a name.");
+      return #Err("A vault needs an id.");
     };
     if (map_name.inner.size() > VaultsLib.MAX_MAP_NAME_BYTES) {
-      return #Err("That name is too long.");
+      return #Err("That id is too long.");
     };
+
     let mine = VaultsLib.ownedBy(vaults, msg.caller);
-    if (mine.containsKey(Blob.compare, map_name.inner)) {
+    let alreadyOwned = mine.containsKey(Blob.compare, map_name.inner);
+
+    // Owned *and* named is a retry of a call that fully landed: nothing to do,
+    // and renaming on a retry would be wrong. Map names are 12 random bytes
+    // from the client, so this is the only way to reach it.
+    if (alreadyOwned and VaultsLib.namesOwnedBy(vaults, msg.caller).containsKey(Blob.compare, map_name.inner)) {
       return #Ok();
     };
-    if (Map.size(mine) >= VaultsLib.MAX_CLAIMED_VAULTS_PER_OWNER) {
+
+    // Owned but *unnamed* falls through to be named below, which is what makes
+    // "a named vault or nothing" true. A vault reaches that state by having had
+    // a value written to it — `Vaults.register` claims ownership without ever
+    // touching a name — so this is also the repair path for every vault that
+    // predates naming being part of creation.
+    if (not alreadyOwned and Map.size(mine) >= VaultsLib.MAX_CLAIMED_VAULTS_PER_OWNER) {
       return #Err("You have too many vaults.");
     };
-    vaults.owned := vaults.owned.add(Principal.compare, msg.caller, mine.add(Blob.compare, map_name.inner, ()));
-    #Ok();
+
+    switch (VaultsLib.validateName(vaults, msg.caller, map_name.inner, display_name)) {
+      case (#err(e)) { #Err(e) };
+      case (#ok(trimmed)) {
+        vaults.owned := vaults.owned.add(Principal.compare, msg.caller, mine.add(Blob.compare, map_name.inner, ()));
+        vaults.names := vaults.names.add(
+          Principal.compare,
+          msg.caller,
+          VaultsLib.namesOwnedBy(vaults, msg.caller).add(Blob.compare, map_name.inner, trimmed),
+        );
+        #Ok();
+      };
+    };
   };
 
   /// Delete a vault: its contents, its events.log, its sharing and its name.
@@ -300,7 +334,6 @@ mixin (
       return #Err("Sign in to name a vault.");
     };
 
-    let trimmed = Text.trim(display_name, #predicate(Char.isWhitespace));
     let mine = VaultsLib.namesOwnedBy(vaults, msg.caller);
 
     func store(names : Map.Map<Blob, Text>) {
@@ -311,51 +344,13 @@ mixin (
       };
     };
 
-    // No clearing. It used to revert to the map name, which was reasonable while
-    // that was something a user had chosen — but vaults are created with a
-    // random id, so "reset" now renames the vault to `a3f1b2c4…`, which is
-    // strictly worse than any name they could type. Removing the option is
-    // simpler than explaining it.
-    //
-    // `vaultLabel`'s fallback to the map name stays, because a vault can still
-    // be unnamed transiently: creating one is two calls, and a failure between
-    // them leaves a vault whose label is its id until someone renames it.
-    if (trimmed == "") {
-      return #Err("A vault needs a name.");
-    };
-
-    // Trimmed rather than rejected, unlike map names. A surrounding space in a
-    // *map* name addresses a different vault and so must never be silently
-    // repaired; a display name carries no identity, so trimming is safe and
-    // saves the user a pointless error.
-    if (Text.encodeUtf8(trimmed).size() > VaultsLib.MAX_DISPLAY_NAME_BYTES) {
-      return #Err("A vault name may be at most " # debug_show (VaultsLib.MAX_DISPLAY_NAME_BYTES) # " bytes.");
-    };
-
-    // Renaming a vault that already has a name replaces its row, so only a new
-    // one counts against the cap.
-    if (Map.size(mine) >= VaultsLib.MAX_NAMES_PER_OWNER and mine.get(Blob.compare, map_name.inner) == null) {
-      return #Err("You have named the maximum of " # debug_show (VaultsLib.MAX_NAMES_PER_OWNER) # " vaults.");
-    };
-
-    // No two of this caller's vaults may *render* the same label.
-    //
-    // Not tidiness. `EmptyVaultDialog` and `DeleteVaultDialog` arm on the typed
-    // label matching the vault's, and delete takes the values, their events.log,
-    // the trash, the sharing and the registry entry in one irreversible call.
-    // Two vaults labelled "Work" turn that confirmation into something the user
-    // is deliberate about a *name* over, rather than a vault.
-    //
-    // Impossible before vaults could be created — an owner had exactly one — so
-    // this arrives with the change that makes it reachable.
-    //
-    // Per owner, because cross-owner collision is already resolved on screen:
-    // the sidebar splits owned from shared and tags the sharer. Exact match
-    // after trimming, and deliberately neither case-insensitive nor
-    // Unicode-normalised — `Work` and `work` are visually distinct, and
-    // refusing a name for a difference the user cannot see is its own problem.
-    if (VaultsLib.labelTaken(vaults, msg.caller, map_name.inner, trimmed)) {
-      return #Err("You already have a vault called \"" # trimmed # "\".");
+    // Every rule lives in lib/Vaults so creating and renaming cannot disagree.
+    // `vaultLabel`'s fallback to the map name stays regardless: vaults created
+    // before naming became part of creation may still be unnamed, and this is
+    // the path that renames them.
+    let trimmed = switch (VaultsLib.validateName(vaults, msg.caller, map_name.inner, display_name)) {
+      case (#err(e)) { return #Err(e) };
+      case (#ok(t)) { t };
     };
 
     store(mine.add(Blob.compare, map_name.inner, trimmed));

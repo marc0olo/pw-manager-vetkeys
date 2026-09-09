@@ -94,7 +94,7 @@ export const idlFactory = ({ IDL }) => {
   const Result_3 = IDL.Variant({ 'Ok' : IDL.Vec(ByteBuf), 'Err' : IDL.Text });
   
   return IDL.Service({
-    'create_vault' : IDL.Func([ByteBuf], [Result], []),
+    'create_vault' : IDL.Func([ByteBuf, IDL.Text], [Result], []),
     'delete_vault' : IDL.Func([ByteBuf], [Result], []),
     'discard_trash' : IDL.Func([IDL.Principal, ByteBuf], [Result_2], []),
     'drop_history' : IDL.Func(

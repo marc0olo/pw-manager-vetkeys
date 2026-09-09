@@ -34,6 +34,9 @@ jobs:
       - run: npm run build
       # Needs no replica — it validates files in `public/`.
       - run: npm run check-ii-metadata
+      # Catches a doc block stranded above another — six of those in one
+      # stack, so this is the mechanism rather than the rule.
+      - run: npm run check-comments
 
   # Needs the Motoko toolchain, because it rebuilds the canister to compare the
   # committed Candid binding against what `src/backend` actually exposes.

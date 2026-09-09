@@ -1,7 +1,9 @@
 import Blob "mo:core/Blob";
+import Char "mo:core/Char";
 import Map "mo:core/pure/Map";
 import Principal "mo:core/Principal";
 import Text "mo:core/Text";
+import Result "mo:core/Result";
 import Types "../types";
 
 /// The registry of vaults this canister knows about, independent of whether the
@@ -68,6 +70,47 @@ module {
     let mine = ownedBy(vaults, owner);
     if (mine.containsKey(Blob.compare, mapName)) return;
     vaults.owned := vaults.owned.add(Principal.compare, owner, mine.add(Blob.compare, mapName, ()));
+  };
+
+  /// Every rule a display name must satisfy, in one place.
+  ///
+  /// Returns the *trimmed* name, which is what callers should store: a
+  /// surrounding space carries no identity here, unlike in a map name where it
+  /// addresses a different vault, so trimming is safe and saves the user a
+  /// pointless error.
+  ///
+  /// Shared by creating and renaming, which is the point — the two used to
+  /// enforce these separately, and creation enforced them *after* the vault
+  /// existed.
+  public func validateName(
+    vaults : Types.VaultsState,
+    owner : Principal,
+    mapName : Blob,
+    display : Text,
+  ) : Result.Result<Text, Text> {
+    let trimmed = Text.trim(display, #predicate(Char.isWhitespace));
+
+    // No clearing. It used to revert to the map name, which was reasonable
+    // while that was something a user had chosen — but vaults are created with
+    // a random id, so "reset" would rename the vault to `a3f1b2c4…`.
+    if (trimmed == "") return #err("A vault needs a name.");
+
+    if (Text.encodeUtf8(trimmed).size() > MAX_DISPLAY_NAME_BYTES) {
+      return #err("A vault name may be at most " # debug_show (MAX_DISPLAY_NAME_BYTES) # " bytes.");
+    };
+
+    // Renaming a vault that already has a name replaces its row, so only a new
+    // one counts against the cap.
+    let mine = namesOwnedBy(vaults, owner);
+    if (Map.size(mine) >= MAX_NAMES_PER_OWNER and mine.get(Blob.compare, mapName) == null) {
+      return #err("You have named the maximum of " # debug_show (MAX_NAMES_PER_OWNER) # " vaults.");
+    };
+
+    if (labelTaken(vaults, owner, mapName, trimmed)) {
+      return #err("You already have a vault called \"" # trimmed # "\".");
+    };
+
+    #ok(trimmed);
   };
 
   /// Whether another vault of this owner's already shows this label.

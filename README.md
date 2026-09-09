@@ -206,6 +206,7 @@ scripts/check-history.mjs  Verifies a writer can add versions but destroy none
 scripts/check-owned-vaults.mjs  Verifies a vault can exist holding nothing, and stays visible
 scripts/check-bindings.mjs  Fails if the committed binding or stable signature is stale
 scripts/check-ii-metadata.mjs  Validates the II app-metadata document
+scripts/check-comments.mjs  Fails if a doc block is stranded above another one
 scripts/lib/cycles.mjs     What a replica check cost, and how much headroom is left
 ```
 
@@ -379,6 +380,7 @@ npm test                      # unit tests and component transitions (no replica
 npm run test:motoko           # backend unit tests (no replica needed)
 npm run check-bindings        # the committed Candid binding still matches the canister
 npm run check-ii-metadata     # validates the II app-metadata document
+npm run check-comments        # no doc block stranded above another (TypeScript)
 
 # these need a running replica and a deployed canister
 npm run smoke-test            # crypto + access control end to end
@@ -389,7 +391,7 @@ npm run check-history         # a writer can add versions but destroy none
 npm run check-owned-vaults    # a vault exists once claimed, and survives being emptied
 ```
 
-The first four run in CI on every pull request; the replica ones do not, so
+The first five run in CI on every pull request; the replica ones do not, so
 run them locally before opening one.
 
 **Running the replica checks is what drains the canister.** Each ends with what

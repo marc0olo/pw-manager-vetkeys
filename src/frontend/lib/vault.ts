@@ -72,14 +72,13 @@ export interface VaultSummary {
 }
 
 /**
- * A deleted item, decrypted, with who removed it and when.
+ * One stored version of a secret, decrypted.
  *
  * The canister returns the ciphertext, and the key material cached from opening
- * the vault decrypts it — a trashed value was never re-encrypted, so the same
- * key works and no extra derivation is needed. Without this the dialog could
- * only offer "restore something deleted at 14:22", which is not recovery.
+ * the vault decrypts it — a superseded value was never re-encrypted, so the
+ * same key works and no extra derivation is needed. Without this the dialog
+ * could only offer "restore something from 14:22", which is not recovery.
  */
-/** One stored version of a secret, decrypted. */
 export interface ItemVersion {
   /** The event, and what `restoreVersion` takes. */
   seq: bigint;
@@ -312,12 +311,6 @@ export class VaultClient {
   }
 
   /**
-   * Every vault we can read, with all items decrypted.
-   *
-   * The canister only reports *non-empty* owned vaults, so a brand-new user has
-   * nothing to list — the caller always shows their own vault regardless.
-   */
-  /**
    * Every vault we can see, with **no decryption and no key derivation**.
    *
    * Reads through the raw canister client rather than
@@ -454,23 +447,17 @@ export class VaultClient {
   }
 
   /**
-   * Claim a new vault, and give it a display name.
+   * Create a vault under a random id, with its name.
    *
-   * Two calls rather than one: the map name is opaque, so the readable name is
-   * a display name, and that lives in a different store with its own endpoint.
-   * A failure between them leaves a vault with no display name — which renders
-   * as its map name, a hex string, and is fixable by renaming. The other order
-   * would leave a name with no vault, which nothing would ever show.
+   * One call, so it either produces a named vault or nothing. It used to be
+   * `create_vault` then `set_vault_name`: a failure between them left a vault
+   * labelled by its own id, and the duplicate-name refusal arrived *after* the
+   * vault existed. The canister now checks everything before it writes.
    */
   async createVault(displayName: string): Promise<string> {
     const name = newVaultName();
-    const created = await this.backend.create_vault({ inner: encoder.encode(name) });
+    const created = await this.backend.create_vault({ inner: encoder.encode(name) }, displayName.trim());
     if ("Err" in created) throw new Error(created.Err);
-    // Always named, never conditionally: an unnamed vault renders as its random
-    // id, so a caller passing nothing should see an error rather than end up
-    // with a vault called `a3f1b2c4…`. The dialog enforces this too.
-    const named = await this.backend.set_vault_name({ inner: encoder.encode(name) }, displayName.trim());
-    if ("Err" in named) throw new Error(named.Err);
     return name;
   }
 

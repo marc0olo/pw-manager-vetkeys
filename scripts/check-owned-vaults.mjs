@@ -65,7 +65,7 @@ const B = await connect(bobId);
 check("a new principal owns no vaults", (await owned(A)).length === 0);
 
 derivations = 0;
-check("creating one succeeds", "Ok" in (await A.api.create_vault(buf("Empty"))));
+check("creating one succeeds", "Ok" in (await A.api.create_vault(buf("Empty"), "Name Empty")));
 check("and derives no key", derivations === 0, `${derivations} derivations`);
 check("it is now owned", (await owned(A)).includes("Empty"));
 
@@ -82,7 +82,7 @@ check("per-item facts on an empty vault are empty, not an error", "Ok" in facts 
 check("its trash is empty, not an error", "Ok" in (await A.api.get_trash(me, buf("Empty"))));
 
 // ---- creating is idempotent --------------------------------------------------
-check("creating the same vault again succeeds", "Ok" in (await A.api.create_vault(buf("Empty"))));
+check("creating the same vault again succeeds", "Ok" in (await A.api.create_vault(buf("Empty"), "Name Empty")));
 check("and does not duplicate it", (await owned(A)).filter((n) => n === "Empty").length === 1);
 
 // ---- registration cannot refuse ---------------------------------------------
@@ -97,9 +97,9 @@ check("and does not duplicate it", (await owned(A)).filter((n) => n === "Empty")
 // so those writes already made the canister store the maps themselves.
 {
   const capped = await connect(Ed25519KeyIdentity.generate());
-  for (let i = 0; i < 100; i++) await capped.api.create_vault(buf(`c${i}`));
+  for (let i = 0; i < 100; i++) await capped.api.create_vault(buf(`c${i}`), `Name c${i}`);
   check("this principal is at the claim cap", (await owned(capped)).length === 100);
-  check("so claiming another is refused", "Err" in (await capped.api.create_vault(buf("Claimed"))));
+  check("so claiming another is refused", "Err" in (await capped.api.create_vault(buf("Claimed"), "Name Claimed")));
 
   // A write is not a claim, and must still register.
   await capped.maps.setValue(capped.me, enc.encode("Beyond"), enc.encode("k1"), enc.encode("worth recovering"));
@@ -162,24 +162,24 @@ check("nor owned by them", (await owned(stranger)).length === 0);
 {
   const anonModule = await import("@icp-sdk/core/agent");
   const anon = await connect(new anonModule.AnonymousIdentity());
-  check("an anonymous caller cannot create a vault", "Err" in (await anon.api.create_vault(buf("Anon"))));
+  check("an anonymous caller cannot create a vault", "Err" in (await anon.api.create_vault(buf("Anon"), "Name Anon")));
 }
-check("an empty name is refused", "Err" in (await A.api.create_vault({ inner: new Uint8Array() })));
-check("a name over 32 bytes is refused", "Err" in (await A.api.create_vault(buf("x".repeat(33)))));
-check("32 bytes exactly is accepted", "Ok" in (await A.api.create_vault(buf("x".repeat(32)))));
+check("an empty id is refused", "Err" in (await A.api.create_vault({ inner: new Uint8Array() }, "Nameless")));
+check("an id over 32 bytes is refused", "Err" in (await A.api.create_vault(buf("x".repeat(33)), "Long id")));
+check("an id of exactly 32 bytes is accepted", "Ok" in (await A.api.create_vault(buf("x".repeat(32)), "Exact id")));
 
 {
   const hoarder = await connect(Ed25519KeyIdentity.generate());
   let refusedAt = null;
   for (let i = 0; i < 105; i++) {
-    if ("Err" in (await hoarder.api.create_vault(buf(`v${i}`)))) {
+    if ("Err" in (await hoarder.api.create_vault(buf(`v${i}`), `v${i}`))) {
       refusedAt = i;
       break;
     }
   }
   check("a principal cannot claim unbounded vaults", refusedAt === 100, `refused at ${refusedAt}`);
   // Re-claiming one they already have must not be turned away by the cap.
-  check("but re-creating one they hold still succeeds", "Ok" in (await hoarder.api.create_vault(buf("v0"))));
+  check("but re-creating one they hold still succeeds", "Ok" in (await hoarder.api.create_vault(buf("v0"), "Name v0")));
 }
 
 // ---- deleting a vault takes everything with it ------------------------------
@@ -223,7 +223,7 @@ check("32 bytes exactly is accepted", "Ok" in (await A.api.create_vault(buf("x".
 
   check("deleting one that does not exist is refused", "Err" in (await D.api.delete_vault(buf("Never"))));
   // A vault claimed but never written to is still deletable.
-  await D.api.create_vault(buf("Claimed"));
+  await D.api.create_vault(buf("Claimed"), "Name Claimed");
   check("a vault holding nothing can be deleted", "Ok" in (await D.api.delete_vault(buf("Claimed"))));
 }
 
@@ -236,8 +236,8 @@ check("32 bytes exactly is accepted", "Ok" in (await A.api.create_vault(buf("x".
 // which is why the rule arrives with them.
 {
   const N = await connect(Ed25519KeyIdentity.generate());
-  await N.api.create_vault(buf("v-one"));
-  await N.api.create_vault(buf("v-two"));
+  await N.api.create_vault(buf("v-one"), "Name v-one");
+  await N.api.create_vault(buf("v-two"), "Name v-two");
   check("naming the first succeeds", "Ok" in (await N.api.set_vault_name(buf("v-one"), "Work")));
 
   const dup = await N.api.set_vault_name(buf("v-two"), "Work");
@@ -256,15 +256,55 @@ check("32 bytes exactly is accepted", "Ok" in (await A.api.create_vault(buf("x".
     "v-one has it",
   );
 
-  // A vault can still be unnamed — creating one is two calls, and a failure
-  // between them leaves the label as the id until someone renames it. Such a
-  // vault renders as its map name, so a display name equal to that collides on
-  // screen just as surely as a duplicate display name would. `v-four` is left
-  // unnamed to model exactly that.
-  await N.api.create_vault(buf("v-four"));
-  await N.api.create_vault(buf("v-five"));
+  // A vault can still be unnamed, even though `create_vault` now always names
+  // one: writing a value registers the vault without a name, which is the path
+  // every vault predating named creation came through. Such a vault renders as
+  // its map name, so a display name equal to that collides on screen just as
+  // surely as a duplicate display name would — which is why `labelTaken` keeps
+  // its map-name branch. `v-four` is registered by a write, and so unnamed.
+  await N.maps.setValue(N.me, enc.encode("v-four"), enc.encode("k1"), enc.encode("v1"));
+  await N.api.create_vault(buf("v-five"), "Name v-five");
   const asMapName = await N.api.set_vault_name(buf("v-five"), "v-four");
   check("a name equal to an unnamed vault's map name is refused", "Err" in asMapName, JSON.stringify(asMapName));
+
+  // ---- creation is atomic: a refused name leaves no vault -------------------
+  //
+  // The reason create_vault takes the name. It used to be two calls, so a
+  // duplicate label was refused *after* the vault existed, leaving one labelled
+  // by its own random id. Everything is checked before anything is written now,
+  // so the refusal has to leave the registry untouched.
+  {
+    const before = (await N.api.get_owned_vaults()).length;
+    const clash = await N.api.create_vault(buf("v-six"), "Name v-five");
+    check("creating with a label another vault holds is refused", "Err" in clash, JSON.stringify(clash));
+    const after = await N.api.get_owned_vaults();
+    check(
+      "and the refused vault was never registered",
+      after.length === before,
+      `${before} before, ${after.length} after`,
+    );
+    const named = (await N.api.get_vault_names()).some(
+      (r) => new TextDecoder().decode(Uint8Array.from(r.map_name.inner)) === "v-six",
+    );
+    check("nor did it acquire a name", named === false);
+
+    // `v-four` is owned but unnamed — registered by a value write. Creating it
+    // must *name* it rather than returning Ok and leaving it unnamed, or "a
+    // named vault or nothing" is false on the one path that can reach it.
+    const repair = await N.api.create_vault(buf("v-four"), "Recovered");
+    check("creating a vault you own but have not named succeeds", "Ok" in repair, JSON.stringify(repair));
+    const label = (await N.api.get_vault_names()).find(
+      (r) => new TextDecoder().decode(Uint8Array.from(r.map_name.inner)) === "v-four",
+    )?.display_name;
+    check("and names it, rather than leaving it unnamed", label === "Recovered", String(label));
+
+    const blank = await N.api.create_vault(buf("v-seven"), "   ");
+    check("creating with a blank name is refused", "Err" in blank, JSON.stringify(blank));
+    check(
+      "and that one was not registered either",
+      (await N.api.get_owned_vaults()).length === before,
+    );
+  }
 
   // Case-sensitive on purpose: refusing a name for a difference the user cannot
   // see is its own problem, and normalisation has no clean answer.
@@ -273,7 +313,7 @@ check("32 bytes exactly is accepted", "Ok" in (await A.api.create_vault(buf("x".
   // Per owner. Someone else calling theirs "Work" is not a collision — the
   // sidebar separates owned from shared and names the sharer.
   const other = await connect(Ed25519KeyIdentity.generate());
-  await other.api.create_vault(buf("theirs"));
+  await other.api.create_vault(buf("theirs"), "Name theirs");
   check("another principal may use the same label", "Ok" in (await other.api.set_vault_name(buf("theirs"), "Work")));
 }
 
