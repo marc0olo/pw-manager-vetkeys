@@ -53,7 +53,8 @@ const check = (label, pass, detail = "") => {
 
 const alice = Ed25519KeyIdentity.generate();
 const me = alice.getPrincipal();
-const A = (await connect(alice)).maps;
+const alicePair = await connect(alice);
+const A = alicePair.maps;
 const OWN = enc.encode("Personal");
 
 /** A realistic entry, so the byte comparison below reflects real vaults. */
@@ -68,12 +69,15 @@ const entry = (title) =>
     updatedAt: 1756300000000,
   });
 
+await alicePair.poll.create_vault({ inner: OWN }, "Own vault");
 await A.setValue(me, OWN, enc.encode("i1"), enc.encode(entry("GitHub")));
 await A.setValue(me, OWN, enc.encode("i2"), enc.encode(entry("AWS")));
 for (let i = 0; i < SHARED; i++) {
   const other = Ed25519KeyIdentity.generate();
-  const em = (await connect(other)).maps;
+  const otherPair = await connect(other);
+  const em = otherPair.maps;
   const name = enc.encode(`Team ${i}`);
+  await otherPair.poll.create_vault({ inner: name }, `Team vault ${i}`);
   await em.setValue(other.getPrincipal(), name, enc.encode(`t${i}`), enc.encode(entry(`Team${i}`)));
   await em.setUserRights(other.getPrincipal(), name, me, { Read: null });
 }
@@ -150,6 +154,7 @@ check("polling after opening still derives nothing", derivations === 0, `${deriv
   const empty = Ed25519KeyIdentity.generate();
   const E = await connect(empty);
   const name = enc.encode("Emptied");
+  await E.poll.create_vault({ inner: name }, "Emptied");
   await E.maps.setValue(empty.getPrincipal(), name, enc.encode("k"), enc.encode("v"));
   await E.maps.setUserRights(empty.getPrincipal(), name, me, { Read: null });
   await E.maps.removeMapValues(empty.getPrincipal(), name);

@@ -63,6 +63,7 @@ const me = owner.getPrincipal();
 /** A fresh vault with two items, shared with a new principal at `level`. */
 async function vaultSharedAt(level, name) {
   const mapName = enc.encode(name);
+  await O.api.create_vault({ inner: mapName }, name);
   await O.setValue(me, mapName, enc.encode("i1"), enc.encode('{"title":"one"}'));
   await O.setValue(me, mapName, enc.encode("i2"), enc.encode('{"title":"two"}'));
   const grantee = Ed25519KeyIdentity.generate();

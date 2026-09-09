@@ -22,16 +22,13 @@ module {
   /// caller. Generous enough that no real user meets it.
   public let MAX_NAMES_PER_OWNER = 100;
 
-  /// Bounds vaults *claimed* with `create_vault` — an entry with no map behind
-  /// it, which is app-only state the library does not mirror.
+  /// Bounds how many vaults one principal can own.
   ///
-  /// Registration on a write is deliberately **not** bounded by this. The
-  /// library keeps no cap of its own on maps per owner, so a caller who writes
-  /// to a thousand map names already makes the canister store a thousand maps;
-  /// an entry here is a constant-factor addition to state they have already
-  /// forced. Capping it bounded nothing and created a vault its owner could not
-  /// see — measured: past the cap a write went unregistered, and emptying that
-  /// vault then hid it while its trash survived.
+  /// `create_vault` is the only way a vault comes to exist — `ValueWrites`
+  /// refuses a write to a map name nobody created — so this bounds every vault
+  /// rather than only the ones with no values yet. It also bounds the maps the
+  /// library will store on this canister's behalf, which the library itself
+  /// does not cap.
   public let MAX_CLAIMED_VAULTS_PER_OWNER = 100;
 
   /// Bounds a map name. The library caps a map *key* at 32 bytes; a map name
@@ -53,23 +50,6 @@ module {
   /// O(rows across all users) per poll.
   public func namesOwnedBy(vaults : Types.VaultsState, owner : Principal) : Map.Map<Blob, Text> {
     vaults.names.get(Principal.compare, owner) ?? Map.empty<Blob, Text>();
-  };
-
-  /// Record that this principal owns this vault, if it is not recorded already.
-  ///
-  /// Called when a value is written, so a vault becomes permanent the moment it
-  /// holds something — and stays listed after everything in it is deleted,
-  /// which is the whole point.
-  ///
-  /// **Unconditional.** Declining to register — on a cap, or on any other
-  /// condition — produces a map with no entry, and once its values go it is a
-  /// vault its owner holds and cannot see, with its trash out of reach. That is
-  /// the one failure direction this whole design avoids, so the only safe
-  /// registration is one that cannot refuse.
-  public func register(vaults : Types.VaultsState, owner : Principal, mapName : Blob) {
-    let mine = ownedBy(vaults, owner);
-    if (mine.containsKey(Blob.compare, mapName)) return;
-    vaults.owned := vaults.owned.add(Principal.compare, owner, mine.add(Blob.compare, mapName, ()));
   };
 
   /// Every rule a display name must satisfy, in one place.

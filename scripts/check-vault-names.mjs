@@ -70,11 +70,13 @@ const me = alice.getPrincipal();
 const bob = Ed25519KeyIdentity.generate();
 const B = await connect(bob);
 
+await A.names.create_vault(bytes("Personal"), "Personal");
 await A.maps.setValue(me, enc.encode("Personal"), enc.encode("i1"), enc.encode("{}"));
 await A.maps.setUserRights(me, enc.encode("Personal"), bob.getPrincipal(), { Read: null });
 
 // ---- a rename is one write, and moves nothing ------------------------------
-check("a vault with no display name returns no row", (await A.names.get_vault_names()).length === 0);
+check("a created vault carries the name it was created with",
+  nameFor(await A.names.get_vault_names(), me, "Personal") === "Personal");
 
 const set = await A.names.set_vault_name(bytes("Personal"), "Home 🔐");
 check("the owner can name their vault", "Ok" in set, JSON.stringify(set));
