@@ -169,14 +169,14 @@ password — the vault key is derived for your Internet Identity principal.
 src/backend/main.mo        Composition root: state, and the includes. No endpoints
 src/backend/types.mo       Every type the canister exposes, plus the state records
 src/backend/mixins/        This application's own endpoint groups — value writes,
-                           vaults, history, trash, health
+                           access-control writes, vaults, history, trash, health
 src/backend/lib/Access.mo  Who may read a vault, and what a caller may do in it
 src/backend/lib/Cycles.mo  The balance thresholds and the watchdog every write runs
 src/backend/lib/Recording.mo  Appending events, and the liveness a write needs
 src/backend/lib/Vaults.mo  The owned-vault registry and the display-name rules
 src/backend/lib/Digest.mo  The vault content digest — pure, and unit-tested
 src/backend/lib/History.mo Every version of every secret — pure, and unit-tested
-src/backend/lib/vetkeys/  The five endpoint groups dfinity/vetkeys#443 proposes
+src/backend/lib/vetkeys/  The four endpoint groups dfinity/vetkeys#443 proposes
                           that this app inherits unchanged (#58)
 test/Digest.test.mo        Motoko tests: `mops test`, no replica needed
 test/History.test.mo       Append-only, per-secret expiry, liveness, pruning
@@ -203,19 +203,22 @@ scripts/check-poll-cost.mjs  Asserts a poll derives no keys and carries no ciphe
 scripts/check-capabilities.mjs  Verifies the access-level table the share dialog states
 scripts/check-vault-names.mjs  Verifies renaming moves no map and derives no key
 scripts/check-history.mjs  Verifies a writer can add versions but destroy none
-scripts/check-owned-vaults.mjs  Verifies a vault can exist holding nothing, and stays visible
+scripts/check-owned-vaults.mjs  Verifies creation is a vault's only origin, and that it survives being emptied
 scripts/check-bindings.mjs  Fails if the committed binding or stable signature is stale
 scripts/check-ii-metadata.mjs  Validates the II app-metadata document
-scripts/check-comments.mjs  Fails if a doc block is stranded above another one
+scripts/check-comments.mjs  Fails if a doc block is stranded, or if main.mo
+                           documents an endpoint it does not have
 scripts/lib/cycles.mjs     What a replica check cost, and how much headroom is left
 ```
 
 The backend no longer includes a library mixin. It builds one `EncryptedMaps`
-instance and passes it to six endpoint groups — the split proposed in
+instance and passes it to the endpoint groups — the split proposed in
 dfinity/vetkeys#443, implemented locally under `src/backend/lib/vetkeys/` to
-test those boundaries before the library commits to them (#58). Five behave
-exactly as the library's mixin did; the value **writes** are ours, because
-owning them is the only way to record a version of a secret as it is replaced.
+test those boundaries before the library commits to them (#58). Four of the
+library's six behave exactly as its mixin did. Two are ours: the value
+**writes**, because owning them is the only way to record a version of a secret
+as it is replaced, and the **access-control writes**, because a vault must exist
+before it can be shared and the library has no notion of a vault existing.
 
 Two constraints the proposal did not anticipate, both found by building it:
 groups take the constructed instance rather than the state, because sibling
@@ -380,7 +383,7 @@ npm test                      # unit tests and component transitions (no replica
 npm run test:motoko           # backend unit tests (no replica needed)
 npm run check-bindings        # the committed Candid binding still matches the canister
 npm run check-ii-metadata     # validates the II app-metadata document
-npm run check-comments        # no doc block stranded above another (TypeScript)
+npm run check-comments        # no stranded doc block, and no `///` in the composition root
 
 # these need a running replica and a deployed canister
 npm run smoke-test            # crypto + access control end to end
@@ -388,7 +391,7 @@ npm run check-capabilities    # the access-level table, and what changing someon
 npm run check-poll-cost       # a poll derives no keys and carries no ciphertext
 npm run check-vault-names     # renaming moves no map and derives no key
 npm run check-history         # a writer can add versions but destroy none
-npm run check-owned-vaults    # a vault exists once claimed, and survives being emptied
+npm run check-owned-vaults    # creation is a vault's only origin, and it survives being emptied
 ```
 
 The first five run in CI on every pull request; the replica ones do not, so
@@ -552,14 +555,20 @@ voids the whole document — so run `npm run check-ii-metadata` after editing it
 
 Some of the above, and other behaviour described earlier, is shaped by open upstream issues — all filed from this project:
 
-| Upstream | What it costs us |
-|---|---|
-| [dfinity/vetkeys#437] | A `ReadWriteManage` grantee can get the owner's vault listed twice, and ACL writes targeting the owner are accepted. The client de-duplicates. |
-| [dfinity/vetkeys#438] | A grantee cannot read their own rights, so the UI offers capabilities and adapts to a refusal instead of asking. |
-| [dfinity/vetkeys#439] | An owned vault cannot exist while empty, so the client synthesises a placeholder for it. |
-| [dfinity/vetkeys#440] | The derived-key cache holds an IndexedDB connection that never yields, so its store cannot be deleted — only cleared. The purge skips it. |
+| Upstream | State | What it costs us |
+|---|---|---|
+| [dfinity/vetkeys#437] | open | A `ReadWriteManage` grantee can get the owner's vault listed twice, and ACL writes targeting the owner are accepted. The client de-duplicates. |
+| [dfinity/vetkeys#438] | closed, unchanged | A grantee still cannot read their own rights at `ic-vetkeys` 0.6.0, and `KeyManager.mo` has no commit since #425 — so the backend reads the access list itself. Closed without explanation; worth re-asking. |
+| [dfinity/vetkeys#439] | open | An owned vault cannot exist while empty, so the canister keeps its own registry of owned vaults and unions it with the library's listing. |
+| [dfinity/vetkeys#440] | fixed, unreleased | The derived-key cache held an IndexedDB connection that never yielded. Fixed upstream in #441, absent from `@icp-sdk/vetkeys` 0.7.0, so the purge still skips a store the live client holds. |
+| [dfinity/vetkeys#442] | open | The Motoko library hardcodes the vetKD derive fee instead of querying `ic0.cost_vetkd_derive_key`. |
+| [dfinity/vetkeys#443] | open | The endpoint groups are not individually includable, so owning one endpoint means owning its whole group. This app implements the proposed split locally. |
+| [dfinity/vetkeys#444] | open | Sharing a map that was never created lists it for the grantee. The canister refuses the share, which only an adopter owning that endpoint can do. |
 
 [dfinity/vetkeys#437]: https://github.com/dfinity/vetkeys/issues/437
 [dfinity/vetkeys#438]: https://github.com/dfinity/vetkeys/issues/438
 [dfinity/vetkeys#439]: https://github.com/dfinity/vetkeys/issues/439
 [dfinity/vetkeys#440]: https://github.com/dfinity/vetkeys/issues/440
+[dfinity/vetkeys#442]: https://github.com/dfinity/vetkeys/issues/442
+[dfinity/vetkeys#443]: https://github.com/dfinity/vetkeys/issues/443
+[dfinity/vetkeys#444]: https://github.com/dfinity/vetkeys/issues/444
