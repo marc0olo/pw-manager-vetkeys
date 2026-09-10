@@ -488,18 +488,23 @@ voids the whole document — so run `npm run check-ii-metadata` after editing it
 
 Some of the above, and other behaviour described earlier, is shaped by open upstream issues — all filed from this project:
 
-State checked **2026-09-10**. Three of these changed state in a single day and
-three more were filed, so treat the column as of that date rather than as
-current. Two habits this table earned the hard way: verify a fix against the
-**shipped bundle** rather than the issue, since an issue closes when a fix
-merges and not when it ships; and check **who** closed an issue before assuming
-a maintainer did — #438 was closed by our own #35, whose body said it was not
-closing it.
+State checked **2026-09-11**. Treat the column as of that date rather than as
+current. Three habits this table earned the hard way:
+
+- Verify a fix against the **shipped bundle** rather than the issue, since an
+  issue closes when a fix merges and not when it ships.
+- Check **who** closed an issue before assuming a maintainer did.
+- **Never put a closing keyword before an issue reference in a PR title or
+  body.** GitHub's parser matches `close`/`closes`/`closed`/`fixes`/`resolves`
+  ahead of a reference regardless of grammar — a negation and a past-tense
+  narrative both fire it. A full URL is *not* an escape; the parser accepts
+  that form too. The only safe shape is no keyword before the reference:
+  reword, or put the reference first.
 
 | Upstream | State | What it costs us |
 |---|---|---|
 | [dfinity/vetkeys#437] | open | A `ReadWriteManage` grantee can get the owner's vault listed twice, and ACL writes targeting the owner are accepted. The client de-duplicates. |
-| [dfinity/vetkeys#438] | reopened | A grantee cannot read their own rights, so the backend reads the access list itself. **We closed it by accident** — #35's body said "this does not close dfinity/vetkeys#438" and GitHub's keyword parser closed it anyway, ignoring the negation. Reopened; the behaviour is unchanged at 0.6.0. |
+| [dfinity/vetkeys#438] | reopened | A grantee cannot read their own rights, so the backend reads the access list itself. **We closed it by accident twice**, both times from prose GitHub's parser read as a directive: #35's body said "this does not close dfinity/vetkeys#438", and #72's *title* said "who closed #438" — a PR whose purpose was documenting the first one. Reopened; the behaviour is unchanged at 0.6.0. |
 | [dfinity/vetkeys#439] | open | An owned vault cannot exist while empty, so the canister keeps its own registry of owned vaults and unions it with the library's listing. |
 | [dfinity/vetkeys#440] | fixed, unreleased | The derived-key cache held an IndexedDB connection that never yielded. Fixed upstream in #441, absent from `@icp-sdk/vetkeys` 0.7.0, so the purge still skips a store the live client holds. |
 | [dfinity/vetkeys#442] | open | The Motoko library hardcodes the vetKD derive fee instead of querying `ic0.cost_vetkd_derive_key`. |
