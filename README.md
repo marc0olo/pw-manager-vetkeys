@@ -320,10 +320,10 @@ it cost and how much headroom is left, measured rather than assumed:
 this run cost 20.2 B; 11.31 T left, about 559 more run(s)
 ```
 
-A `vetkd_derive_key` on `test_key_1` reserves 10 B cycles and the checks derive
-heavily, so a round of all six costs **roughly half a trillion** and a canister
-topped up to 10 T affords something like twenty. Mutation testing, which redeploys and
-re-runs them per mutant, is what actually empties one. Exact figures are not
+A `vetkd_derive_key` on `test_key_1` reserves 10 B cycles and the checks
+derive heavily, so a round of all six costs **roughly half a trillion**, and a
+canister topped up to 10 T affords something like twenty. Mutation testing,
+which redeploys and re-runs them per mutant, is what actually empties one. Exact figures are not
 listed here because each check prints its own, measured on the run you just
 did — they drift every time a check gains a case. Top up with:
 
@@ -339,10 +339,17 @@ icp canister top-up backend --amount 10000000000000
 > the app matches on.
 >
 > Measured on a local replica, on `test_key_1`: derivation still worked at
-> **482 B** and failed at **472 B**. So a derive needs a few hundred billion
-> cycles of room — nearly fifty times the 10 B it reserves — and a round of the checks costs about as much
-> again, which is why the watchdog's threshold is counted in rounds above that
-> cliff rather than as a multiple of it.
+> **482 B** and failed at **472 B**. The 10 B gap between those is exactly what
+> that key reserves; the *level* is a different question, and mostly not the
+> fee. At the idle burn recorded then, the freezing threshold accounts for
+> roughly 48 B of it, and the remainder is unattributed. The threshold was also
+> being changed to provoke `IC0406` while this was measured.
+>
+> So treat 472 B as a local observation, not a formula: it does not scale with
+> the fee, and it does not transfer to mainnet, where both the freezing reserve
+> and the key's price differ. The watchdog's threshold is counted in rounds of
+> the checks above that cliff rather than as a multiple of the fee, for the
+> same reason.
 >
 > Worth recognising because in this app it presents as data loss — unlocking
 > fails, so the secrets look gone, when nothing is gone and a top-up restores
