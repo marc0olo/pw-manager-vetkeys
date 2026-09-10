@@ -20,10 +20,14 @@
  * `restore_version`. A composition root exposes no endpoints of its own, so
  * every `///` in it describes something the interface does not have.
  *
- * `check-bindings` catches this only by luck: it compares against the committed
- * binding, so a commit that reshuffles *and* regenerates passes with the wrong
- * text baked in. That is how #62 shipped sixteen endpoints' docs onto the wrong
- * names. This checks the cause instead of the drift.
+ * moc 1.16.0 fixed the mis-binding: a `///` on an actor-body declaration is now
+ * dropped cleanly rather than landing on the next endpoint. To re-check that on
+ * a future compiler, temporarily put a `///` on one of `main.mo`'s state
+ * bindings, run `npm run bindings`, and grep `.mops/.build/backend.did` for it —
+ * on 1.16.0 it does not appear at all, where on 1.14.0 it landed on
+ * `restore_version`. This check stays for two reasons that outlive the bug. The compiler is pinned, so a downgrade brings it back; and a
+ * `///` in a composition root documents something the interface does not have,
+ * which is worth refusing whether or not it leaks.
  *
  * **The blind spot is deliberate, and closing it makes the check worse.** A
  * stranded pair on the *first* declaration of a file is not flagged, because
