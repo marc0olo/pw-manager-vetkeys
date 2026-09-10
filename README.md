@@ -488,10 +488,13 @@ voids the whole document — so run `npm run check-ii-metadata` after editing it
 
 Some of the above, and other behaviour described earlier, is shaped by open upstream issues — all filed from this project:
 
-State checked **2026-09-10**. Two of these changed during a single day's work,
-so treat the column as of that date rather than as current — and verify a fix
-against the shipped bundle rather than the issue, since an issue closes when a
-fix merges, not when it ships.
+State checked **2026-09-10**. Three of these changed state in a single day and
+three more were filed, so treat the column as of that date rather than as
+current. Two habits this table earned the hard way: verify a fix against the
+**shipped bundle** rather than the issue, since an issue closes when a fix
+merges and not when it ships; and check **who** closed an issue before assuming
+a maintainer did — #438 was closed by our own #35, whose body said it was not
+closing it.
 
 | Upstream | State | What it costs us |
 |---|---|---|
@@ -500,7 +503,10 @@ fix merges, not when it ships.
 | [dfinity/vetkeys#439] | open | An owned vault cannot exist while empty, so the canister keeps its own registry of owned vaults and unions it with the library's listing. |
 | [dfinity/vetkeys#440] | fixed, unreleased | The derived-key cache held an IndexedDB connection that never yielded. Fixed upstream in #441, absent from `@icp-sdk/vetkeys` 0.7.0, so the purge still skips a store the live client holds. |
 | [dfinity/vetkeys#442] | open | The Motoko library hardcodes the vetKD derive fee instead of querying `ic0.cost_vetkd_derive_key`. |
-| [dfinity/vetkeys#443] | open | The endpoint groups are not individually includable, so owning one endpoint means owning its whole group. This app implements the proposed split locally. |
+| [dfinity/vetkeys#443] | open | Motoko: `EncryptedMapsCanister` is the unit, so owning one endpoint means hand-writing seven. Asks for the composite to be a composition of includable parts. This app runs that split locally and owns two of the six groups. |
+| [dfinity/vetkeys#445] | open | The committed `.did` files are never checked against the canisters they describe, so the artifact the frontend declarations are generated from can drift silently. |
+| [dfinity/vetkeys#446] | open | Meta: the reports filed from this project are three clusters, not ten defects — three of them are one four-line function. Carries the sequencing constraints. |
+| [dfinity/vetkeys#447] | open | Rust: the macro generates `#[init]` and `#[post_upgrade]`, and a canister may have only one of each — so an adopter with its own state has nowhere to put its lifecycle. Split out of #443. |
 | [dfinity/vetkeys#444] | open | Sharing a map that was never created lists it for the grantee. The canister refuses the share, which only an adopter owning that endpoint can do. |
 
 [dfinity/vetkeys#437]: https://github.com/dfinity/vetkeys/issues/437
@@ -510,3 +516,6 @@ fix merges, not when it ships.
 [dfinity/vetkeys#442]: https://github.com/dfinity/vetkeys/issues/442
 [dfinity/vetkeys#443]: https://github.com/dfinity/vetkeys/issues/443
 [dfinity/vetkeys#444]: https://github.com/dfinity/vetkeys/issues/444
+[dfinity/vetkeys#445]: https://github.com/dfinity/vetkeys/issues/445
+[dfinity/vetkeys#446]: https://github.com/dfinity/vetkeys/issues/446
+[dfinity/vetkeys#447]: https://github.com/dfinity/vetkeys/issues/447
