@@ -320,12 +320,14 @@ it cost and how much headroom is left, measured rather than assumed:
 this run cost 20.2 B; 11.31 T left, about 559 more run(s)
 ```
 
-A `vetkd_derive_key` on `test_key_1` reserves 10 B cycles and the checks
-derive heavily, so a round of all six costs **roughly half a trillion**, and a
+A `vetkd_derive_key` on `test_key_1` reserves 10 B cycles and the checks derive
+heavily, so a round of all six costs **roughly half a trillion**, and a
 canister topped up to 10 T affords something like twenty. Mutation testing,
-which redeploys and re-runs them per mutant, is what actually empties one. Exact figures are not
-listed here because each check prints its own, measured on the run you just
-did — they drift every time a check gains a case. Top up with:
+which redeploys and re-runs them per mutant, is what actually empties one.
+Exact figures are not listed here because each check prints its own, measured
+on the run you just did — they drift every time a check gains a case.
+
+Top up with:
 
 ```bash
 icp canister top-up backend --amount 10000000000000
