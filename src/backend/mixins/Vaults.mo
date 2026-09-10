@@ -207,10 +207,9 @@ mixin (
     };
 
     // Owned but *unnamed* falls through to be named below, which is what makes
-    // "a named vault or nothing" true. A vault reaches that state by having had
-    // a value written to it — `Vaults.register` claims ownership without ever
-    // touching a name — so this is also the repair path for every vault that
-    // predates naming being part of creation.
+    // "a named vault or nothing" true. Unreachable while this is the only
+    // origin — it writes both maps in one message, with no await between — so
+    // it is a repair path rather than one a client can drive.
     if (not alreadyOwned and Map.size(mine) >= VaultsLib.MAX_CLAIMED_VAULTS_PER_OWNER) {
       return #Err("You have too many vaults.");
     };
