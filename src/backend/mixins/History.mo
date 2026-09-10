@@ -31,7 +31,7 @@ mixin (
   /// deliberate, and `drop_history` is the owner's remedy.
   ///
   /// Not on the poll. Values ride this because it is user-initiated and scoped
-  /// to one secret; #14's rule is that nothing automatic carries ciphertext.
+  /// to one secret — nothing automatic carries ciphertext.
   public query (msg) func get_history(
     map_owner : Principal,
     map_name : Shared.ByteBuf,
@@ -117,10 +117,10 @@ mixin (
   /// Per-item events.log facts for one vault: how much is restorable, and when the
   /// current value was actually written.
   ///
-  /// A separate query rather than fields on `get_vault_summaries`, which runs
-  /// every 15 s: #14 got the poll down to a digest and a key list, and two
-  /// numbers per item would grow it with the vault. This is read once when a
-  /// vault is opened, alongside the values themselves.
+  /// A separate query rather than fields on `get_vault_summaries`, which a
+  /// client polls: that response is a digest and a key list, and two numbers
+  /// per item would grow it with the vault. This is read once when a vault is
+  /// opened, alongside the values themselves.
   ///
   /// No ciphertext, so it costs no key derivation.
   public query (msg) func get_item_summaries(
@@ -150,7 +150,7 @@ mixin (
   /// Drop the stored versions of one secret, keeping the secret itself.
   ///
   /// The owner's way to reclaim space, or to stop keeping a secret's earlier
-  /// values, without a retention policy guessing on their behalf (#38).
+  /// values, without a retention policy guessing on their behalf.
   ///
   /// Clears the ciphertext and **keeps the events**, so "edited by X at T"
   /// survives. Otherwise pruning would be a way to launder the audit trail.

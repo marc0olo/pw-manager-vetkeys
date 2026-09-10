@@ -178,10 +178,9 @@ mixin (
   /// gets named, so a retry repairs rather than silently succeeding.
   ///
   /// The name is the caller's to choose and is stored in the clear, like every
-  /// map name. The app generates an opaque id rather than a readable name (#13)
-  /// so that renaming a vault does not leave the original in plaintext forever;
-  /// that is a client concern, the same as item ids, and not something this can
-  /// enforce.
+  /// map name. A client that wants renaming to be meaningful should pass an
+  /// opaque map name, since the map name cannot change and a readable one stays
+  /// in plaintext however often the display name is rewritten.
   public shared (msg) func create_vault(
     map_name : Shared.ByteBuf,
     display_name : Text,
@@ -232,24 +231,24 @@ mixin (
 
   /// Delete a vault: its contents, its events.log, its sharing and its name.
   ///
-  /// **Atomic**, which is worth stating because the design in #21 assumed it
-  /// could not be. That assumed the *client* would orchestrate it — wipe, then
-  /// one `remove_user` per grantee — leaving a half-deleted vault if any call
-  /// failed. Owning the endpoints makes it one update message, so it either all
-  /// happens or none of it does, and there is no partial state for the UI to
-  /// represent.
+  /// **Atomic** — one update message, so it either all happens or none of it
+  /// does, and there is no partial state for a client to represent.
   ///
-  /// **Owner only.** Revoking needs manage rights, so a `ReadWrite`
-  /// collaborator can only empty a vault — which is why the UI keeps Empty and
-  /// Delete as separate actions rather than one that quietly degrades.
+  /// **Owner only.** Revoking access needs manage rights, so a `ReadWrite`
+  /// collaborator can empty a vault but not delete it.
   ///
   /// **Not cryptographic erasure.** A vault's key derives from
   /// `(owner, mapName)`, so re-creating one with the same name yields the same
   /// key and anyone holding old ciphertext can still read it. This removes data
-  /// from the canister; it does not revoke the key. Vaults created through the
-  /// app get a random name for exactly this reason (#13), which makes reuse
-  /// effectively impossible — but the copy must not promise erasure.
+  /// from the canister; it does not revoke the key.
   public shared (msg) func delete_vault(map_name : Shared.ByteBuf) : async Shared.Result<(), Text> {
+    // Atomic only because these endpoints are ours. #21 assumed the client
+    // would orchestrate it — wipe, then one `remove_user` per grantee — which
+    // left a half-deleted vault whenever a call failed partway.
+    //
+    // Reuse of a deleted vault's name is unlikely rather than prevented:
+    // vaults created through this app get a random map name (#13). The
+    // docstring must not promise erasure on the strength of that.
     Cycles.watchdog(health);
     if (Principal.isAnonymous(msg.caller)) return #Err("unauthorized");
     let mapName = map_name.inner;

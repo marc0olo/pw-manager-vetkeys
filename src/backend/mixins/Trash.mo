@@ -35,8 +35,9 @@ mixin (
   // unreachable whether or not anything has purged it.
 
   /// What is recoverable in one vault, with each item's ciphertext so a client
-  /// can show what it was rather than only when it went. See `TrashedItem` for
-  /// why returning values here is not the thing #14 removed from the poll.
+  /// can show what it was rather than only when it went. This is user-initiated
+  /// and scoped to one vault, so it carries ciphertext where the poll does
+  /// not — see `TrashedItem`.
   ///
   /// Visible to everyone who can read the vault. What that changes differs by
   /// access level, and the difference is worth stating precisely.
