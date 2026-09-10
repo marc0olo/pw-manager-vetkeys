@@ -496,7 +496,7 @@ fix merges, not when it ships.
 | Upstream | State | What it costs us |
 |---|---|---|
 | [dfinity/vetkeys#437] | open | A `ReadWriteManage` grantee can get the owner's vault listed twice, and ACL writes targeting the owner are accepted. The client de-duplicates. |
-| [dfinity/vetkeys#438] | reopened | A grantee cannot read their own rights, so the backend reads the access list itself. Was closed as completed while the Motoko behaviour was unchanged at 0.6.0; reopened with the evidence. |
+| [dfinity/vetkeys#438] | reopened | A grantee cannot read their own rights, so the backend reads the access list itself. **We closed it by accident** — #35's body said "this does not close dfinity/vetkeys#438" and GitHub's keyword parser closed it anyway, ignoring the negation. Reopened; the behaviour is unchanged at 0.6.0. |
 | [dfinity/vetkeys#439] | open | An owned vault cannot exist while empty, so the canister keeps its own registry of owned vaults and unions it with the library's listing. |
 | [dfinity/vetkeys#440] | fixed, unreleased | The derived-key cache held an IndexedDB connection that never yielded. Fixed upstream in #441, absent from `@icp-sdk/vetkeys` 0.7.0, so the purge still skips a store the live client holds. |
 | [dfinity/vetkeys#442] | open | The Motoko library hardcodes the vetKD derive fee instead of querying `ic0.cost_vetkd_derive_key`. |
