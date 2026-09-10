@@ -16,7 +16,7 @@ module {
   /// Two measurements set it, rather than a ratio. Derivation fails somewhere
   /// near 480 B: on a local replica the last success was at 482.0 B and the
   /// next attempt failed at 471.9 B, so a derive needs a few hundred billion
-  /// cycles of *room*, not the ~26 B it reserves. And the replica checks —
+  /// cycles of *room*, not the 10 B `test_key_1` reserves. And the replica checks —
   /// which are what drains this canister — cost a few hundred billion per
   /// round. Headroom is therefore counted **to the cliff rather than to zero**;
   /// the two are most of a round apart.
@@ -24,7 +24,9 @@ module {
   /// 3 T leaves several rounds of it. The quotient is deliberately not written
   /// down: both inputs move, `scripts/lib/cycles.mjs` already measures the
   /// round cost on every run, and mainnet's vetKD price is not the local
-  /// replica's. Warning early costs one log line.
+  /// replica's — the fee follows the subnet the *key* lives on, so `key_1` on
+  /// the fiduciary subnet reserves 26.15 B against `test_key_1`'s 10 B,
+  /// wherever this canister is deployed. Warning early costs one log line.
   public let WARN_OPERATOR_BELOW = 3_000_000_000_000;
 
   /// The balance under which cycles may be named to a **user** as the cause.
