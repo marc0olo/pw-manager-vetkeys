@@ -9,156 +9,73 @@ password — the vault key is derived for your Internet Identity principal.
 
 ## Features
 
-- **Internet Identity sign-in.** No account, no master password. Auto-locks after
-  5 minutes idle, whether the app is open or closed.
+- **Internet Identity sign-in.** No account, no master password. Auto-locks
+  after 5 minutes idle, whether the app is open or closed.
 - **Items**: title, username, password, website, notes — create, edit, delete.
-- **Search** across every field except the password.
-- **Live updates.** The vault list is re-read every 15 s, so a newly shared vault,
-  a new item or a revocation appears without a reload. Listing needs no key, so
-  polling costs no derivations — and it carries no ciphertext either: the
-  canister returns one digest per vault instead of its contents, which is ~89 %
-  less on the wire and no hashing in the browser. A manual check sits beside the
-  app name.
-- **Password generator** with length, digits and symbols, plus a strength read-out.
-- **Reveal / copy.** Passwords are masked, auto-hide after 30s, and copying one
-  clears the clipboard after 45s (only if it still holds that value).
-- **Vault sharing** at three levels, and collaborators can actually use them:
-  someone granted read/write edits items in your vault, and read/write/manage
-  can re-share it. The vault key is re-encrypted for the grantee, so no secret
-  changes hands. The sidebar and the pane header both show how many people a
-  vault is shared with.
-  - Read/write is **destructive**: the canister guards "delete every item" with
-    the same write check, so there is no separate delete right. The share dialog
-    says so rather than calling it "can edit items".
+  **Search** across every field except the password.
+- **Password generator** with length, digits and symbols, and a strength
+  read-out.
+- **Reveal / copy.** Passwords are masked, auto-hide after 30 s, and copying one
+  clears the clipboard after 45 s — only if it still holds that value.
+- **Live updates.** The vault list is re-read every 15 s and on returning to the
+  tab, so a newly shared vault, a new item or a revocation appears without a
+  reload; a **check-for-changes** button only cuts the wait. Listing needs no
+  key, so polling costs no derivations, and it carries no ciphertext either —
+  the canister returns one digest per vault instead of its contents, ~89 % less
+  on the wire.
+- **Vault sharing** at three levels, and collaborators can use them: read/write
+  edits items, read/write/manage can re-share. The vault key is re-encrypted for
+  the grantee, so no secret changes hands.
+  - Read/write is **destructive** — the canister guards "delete every item" with
+    the same write check, so there is no separate delete right, and the share
+    dialog says so.
   - **One entry per person, not one per grant.** Sharing with someone who
-    already has access *replaces* their level rather than adding a second row —
-    the call even reports the level it replaced. So promoting and demoting are
-    the same operation, they take effect immediately with no key re-derivation,
-    and a demotion is not a revocation: writes are refused at once while reads
-    keep working. The dialog says which of the two you are doing, because
-    "Grant access" for both made promoting someone look like inviting a
-    stranger.
+    already has access replaces their level rather than adding a row, so
+    promoting and demoting are the same operation, effective immediately with no
+    re-derivation. A demotion is not a revocation: writes are refused at once
+    while reads keep working.
   - The library will not tell a grantee their own rights
-    ([dfinity/vetkeys#438]), so this backend does: it reads the access list it
-    already holds and reports what *you* may do, which discloses nothing about
-    anyone else. Controls match permissions from the first render, instead of a
-    read-only collaborator being shown Delete until it was refused. The
-    adapt-on-refusal path remains as a fallback — the canister is still the only
-    authority.
-- **You can see which vaults changed while you were away.** A dot on the
-  sidebar row — deliberately not a notification: it never interrupts, and it
-  clears by the action it describes, opening the vault. No count, no banner, no
-  link; the dots are the whole signal.
-  - Costs nothing on the wire. The poll already carries a content digest and a
-    trash digest per vault; this is a second reader of data that was only being
-    used to refresh the view.
-  - **And which item**, once you open that vault: a dot per row, saying whether
-    it was added or edited. Without it, "Work changed" in a two-hundred-item
-    vault is a signal you cannot act on. The timestamps come from the per-item
-    read the vault open already does, so this costs no request and nothing on
-    the poll — and from there, an item's **earlier versions** show what it used
-    to hold.
-  - **A vault seen for the first time is recorded, not flagged.** Otherwise a
-    new device, a fresh browser or cleared site data would mark everything,
-    which is the noise the feature exists to avoid. Same one level down: the
-    first time a vault is opened, its items are recorded rather than marked.
-  - **A new *item* is flagged where a new *vault* is not.** The difference is
-    deliberate: a vault appearing in the sidebar is visibly new, a row in a long
-    list is not — so leaving it unmarked would answer nothing.
-  - **Your own writes are never marked.** You know what you just typed. The
-    exemption is per write rather than per item, so a colleague changing
-    something you once edited still shows.
-  - **If everything would be marked, nothing is.** Marks that no longer match
-    any item — after a reinstall, or a vault emptied and refilled — are
-    re-recorded rather than flagging every row, because "everything changed" is
-    never the useful answer.
-  - Only contents and trash count. A rename or a new collaborator is visible in
-    the row already, so flagging it would report something you can see.
-  - The marks live in `localStorage`, per principal, and **survive a lock** —
-    unlike everything in the session state, because "since I last looked" is
-    meaningless if locking resets it.
-  - **What that puts on the device**, stated precisely because "vault names on
-    disk" would be wrong twice over. A mark is
-    `<owner principal>/<map id>` → `<digest>:<digest>`. The **display name is
-    not written**, so nothing on disk says `Divorce lawyer`; map ids are random
-    for vaults this app creates. What *is* new is that the keys carry the
-    **owner principals of vaults shared with you**, and how many vaults each
-    shares — the first time this app records other people's identifiers
-    locally. The item-level marks add random item ids and write times under
-    their own key, which grows with how much you store rather than with how
-    many vaults you have. Signing in sweeps every other principal's marks —
-    both kinds — for the same reason the key-store purge deletes stores left by
-    principals no longer recorded.
-- **Changes appear on their own.** The vault list is re-read every 15 seconds
-  and immediately on returning to the tab, so a vault someone shares with you
-  shows up without a reload. The **check-for-changes** button only cuts that
-  wait — worth having while you are watching for a share to land, and it says
-  *"Already up to date"* when nothing moved, since otherwise a click that found
-  nothing looks like a click that did nothing.
+    ([dfinity/vetkeys#438]), so this backend does — it reads the access list it
+    already holds and reports what *you* may do. Controls match permissions from
+    the first render, with the adapt-on-refusal path kept as a fallback, since
+    the canister is still the only authority.
+- **You can see which vaults changed while you were away** — a dot on the
+  sidebar row, and a dot per item once you open that vault, saying whether it
+  was added or edited. Your own writes are never marked, a vault seen for the
+  first time is recorded rather than flagged, and the marks survive a lock,
+  because "since I last looked" is meaningless if locking resets it.
 - **You do not need a vault of your own.** With none, the app shows your
-  principal and offers to copy it, so you can be shared with instead of
-  creating one — and a vault shared while you sit there appears within the poll
-  interval, no reload. Both ways out, because having no vaults does not mean
-  wanting one.
+  principal and offers to copy it, so you can be shared with instead.
 - **Create, rename and delete vaults.** As many as you like, but **no two of
   yours may show the same name** — the empty-vault and delete-vault
   confirmations arm on the typed label, so duplicates would have you confirm a
-  name rather than a vault. Per owner, since the sidebar already separates your
-  vaults from ones shared with you and names the sharer. Exact match after
-  trimming, and deliberately case-sensitive: refusing a name for a difference
-  you cannot see is its own problem. A new vault gets a
-  *random* map name and a display name beside it, because a vault **is**
-  `(owner, mapName)` and its key derives from that pair — so the map name can
-  never change, and a readable one would keep the original in plaintext however
-  often you rename it. Deleting takes the contents, every version of them, the
-  trash and the sharing, in one call; it does not destroy the key, since the key
-  is derived rather than stored, and the dialog says so.
-- **Empty vault** removes every item at once, behind a typed confirmation. The
-  vault and its sharing survive. Kept separate from Delete because revoking
-  needs manage rights, so a `ReadWrite` collaborator can only empty — one button
-  that quietly degraded would be the dishonest kind of label.
-- **Trash.** A deleted item — or a whole emptied vault — is recoverable for 90
-  days. The map key never changes, so a restored value decrypts under exactly
-  the key material it always did: nothing is re-encrypted and no client is
-  involved. The dialog shows real titles — the ciphertext comes back with the
-  listing and is decrypted in the browser under the key already cached from
-  opening the vault, so a deleted item is recognisable rather than a timestamp.
-  - **Every version is kept**, and shown. An item's detail pane says how many
-    earlier versions it has and expands to list them, newest first, with the
-    password as it was — masked until asked for, auto-hidden after 30 s, and
-    one at a time — plus who recorded each version and when. Any can be
-    restored, and copying an old password clears the clipboard on the same
-    timer as the live one. Restoring one keeps the value
-    it replaces, so nothing is lost by picking the wrong version. Trash,
-    version history and the audit trail are one append-only log: a deletion is
-    a version with nothing after it. Nothing is ever moved, so a trashed secret
-    keeps its history and a recovered one keeps it too.
-  - **"Updated" is the canister's timestamp**, not the item's own `updatedAt` —
-    that field lives inside the encrypted payload and is written by whoever
-    last saved the item, so it is the writer's to choose. A first write is
-    recorded too, so a secret nobody has edited still has an author and a time.
-  - **Who sees it.** The log belongs to the vault: everyone who can read the
-    vault reads it, and write access is what puts a version back. A member
-    added later sees earlier versions — deliberate, since they can read the
-    current value anyway.
-  - **A writer cannot destroy anything.** Editing and deleting only *append*.
-    Removing is the owner's: **Empty trash** makes a vault's deletions
-    unrecoverable, and dropping a secret's history clears the stored
-    ciphertext while keeping the events, so pruning cannot launder the record
-    of who changed what. Both are offered in the UI — Empty trash in the trash
-    view, Delete stored versions on the item. Time is the only other remover — 90 days after a
-    deletion, the secret and its history go together.
-  - **The share dialog** says how much a grantee would inherit, so the trade is
-    stated where the decision is made.
-- **Rename a vault** you own — but not un-name it: clearing the label would
-  revert it to the random map id, so there is nothing sensible to revert to.
-  A vault *is* `(owner, name)` and its vetKey derives from that pair, so the map
-  never moves: the backend stores a display
-  name beside it and a rename is one write — nothing re-encrypted, nobody
-  re-invited, collaborators see the change immediately.
-  - The original name stays in the clear and cannot be changed, which the
-    dialog says plainly. Renaming is a label, not a way to hide what a vault
-    was called.
+  name rather than a vault. Per owner, exact after trimming, and case-sensitive.
+  - A vault **is** `(owner, mapName)` and its key derives from that pair, so a
+    new vault gets a *random* map name with a display name beside it. The map
+    name can never change, which is why renaming only sets the label — the
+    original stays in the clear, and the dialog says so.
+  - Deleting takes the contents, every version of them, the trash and the
+    sharing in one call. It does not destroy the key, which is derived rather
+    than stored.
+- **Empty vault** removes every item at once behind a typed confirmation, and
+  the vault and its sharing survive. Separate from Delete because revoking needs
+  manage rights, so a `ReadWrite` collaborator can only empty.
+- **Trash.** A deleted item — or a whole emptied vault — is recoverable for
+  90 days, decrypting under exactly the key material it always had. The dialog
+  shows real titles, decrypted in the browser under the cached key.
+  - **Every version is kept**, and shown: how many an item has, newest first,
+    with the password as it was, plus who recorded each version and when. Any
+    can be restored, and restoring keeps the value it replaces. Trash, version
+    history and the audit trail are one append-only log — a deletion is a
+    version with nothing after it.
+  - **"Updated" is the canister's timestamp**, not the item's own `updatedAt`,
+    which lives inside the encrypted payload and is the writer's to choose.
+  - **Who sees it:** the log belongs to the vault, so everyone who can read the
+    vault reads it, including members added later.
+  - **A writer cannot destroy anything.** Editing and deleting only append.
+    Removing is the owner's — **Empty trash** makes deletions unrecoverable, and
+    dropping a secret's history clears the ciphertext while keeping the events,
+    so pruning cannot launder the record. Time is the only other remover.
 - **Lock** discards the derived key material. The sidebar shows both deadlines
   that end a session — the sliding idle lock and the fixed sign-in expiry — with
   whichever comes first highlighted.
@@ -169,14 +86,14 @@ password — the vault key is derived for your Internet Identity principal.
 src/backend/main.mo        Composition root: state, and the includes. No endpoints
 src/backend/types.mo       Every type the canister exposes, plus the state records
 src/backend/mixins/        This application's own endpoint groups — value writes,
-                           vaults, history, trash, health
+                           access-control writes, vaults, history, trash, health
 src/backend/lib/Access.mo  Who may read a vault, and what a caller may do in it
 src/backend/lib/Cycles.mo  The balance thresholds and the watchdog every write runs
 src/backend/lib/Recording.mo  Appending events, and the liveness a write needs
 src/backend/lib/Vaults.mo  The owned-vault registry and the display-name rules
 src/backend/lib/Digest.mo  The vault content digest — pure, and unit-tested
 src/backend/lib/History.mo Every version of every secret — pure, and unit-tested
-src/backend/lib/vetkeys/  The five endpoint groups dfinity/vetkeys#443 proposes
+src/backend/lib/vetkeys/  The four endpoint groups dfinity/vetkeys#443 proposes
                           that this app inherits unchanged (#58)
 test/Digest.test.mo        Motoko tests: `mops test`, no replica needed
 test/History.test.mo       Append-only, per-secret expiry, liveness, pruning
@@ -203,19 +120,22 @@ scripts/check-poll-cost.mjs  Asserts a poll derives no keys and carries no ciphe
 scripts/check-capabilities.mjs  Verifies the access-level table the share dialog states
 scripts/check-vault-names.mjs  Verifies renaming moves no map and derives no key
 scripts/check-history.mjs  Verifies a writer can add versions but destroy none
-scripts/check-owned-vaults.mjs  Verifies a vault can exist holding nothing, and stays visible
+scripts/check-owned-vaults.mjs  Verifies creation is a vault's only origin, and that it survives being emptied
 scripts/check-bindings.mjs  Fails if the committed binding or stable signature is stale
 scripts/check-ii-metadata.mjs  Validates the II app-metadata document
-scripts/check-comments.mjs  Fails if a doc block is stranded above another one
+scripts/check-comments.mjs  Fails if a doc block is stranded, or if main.mo
+                           documents an endpoint it does not have
 scripts/lib/cycles.mjs     What a replica check cost, and how much headroom is left
 ```
 
 The backend no longer includes a library mixin. It builds one `EncryptedMaps`
-instance and passes it to six endpoint groups — the split proposed in
+instance and passes it to the endpoint groups — the split proposed in
 dfinity/vetkeys#443, implemented locally under `src/backend/lib/vetkeys/` to
-test those boundaries before the library commits to them (#58). Five behave
-exactly as the library's mixin did; the value **writes** are ours, because
-owning them is the only way to record a version of a secret as it is replaced.
+test those boundaries before the library commits to them (#58). Four of the
+library's six behave exactly as its mixin did. Two are ours: the value
+**writes**, because owning them is the only way to record a version of a secret
+as it is replaced, and the **access-control writes**, because a vault must exist
+before it can be shared and the library has no notion of a vault existing.
 
 Two constraints the proposal did not anticipate, both found by building it:
 groups take the constructed instance rather than the state, because sibling
@@ -258,6 +178,16 @@ note under **Run it locally**, and #42.
 | Internet Identity delegation | IndexedDB (`@icp-sdk/auth`) | until the idle window lapses, capped at 8 h |
 | Derived vault key material | IndexedDB, namespaced per principal | the same — purged with the delegation |
 | Last-activity mark | `localStorage` | cleared on lock |
+| Changed-since-last-look marks | `localStorage`, per principal | survive a lock; swept for other principals on sign-in |
+
+A mark is `<owner principal>/<map id>` → `<digest>:<digest>`. The **display name
+is not written**, so nothing on disk says `Divorce lawyer`, and map ids are
+random for vaults this app creates. What the keys *do* carry is the **owner
+principals of vaults shared with you**, and how many vaults each shares — the
+only place this app records other people's identifiers locally. Item-level marks
+add random item ids and write times under their own key. Signing in sweeps every
+other principal's marks, for the same reason the key-store purge deletes stores
+left by principals no longer recorded.
 
 **One timeout governs both open and closed time.** The app auto-locks after
 `idleMinutes` of inactivity while open; a session left closed for longer than
@@ -335,27 +265,17 @@ icp deploy                    # builds the canister and the frontend, then syncs
 a Node your bundled `npm` does not support prints a warning on every command,
 and a warning you always see is a warning you stop reading.
 
-> A **reinstall is sometimes wanted even when an upgrade would work.** The
-> owned-vault registry is the example: the stable signature is compatible, but
-> a vault emptied before the registry existed has no entry and no values, so
-> nothing can reconstruct it and its trash would be stranded. That is a reason
-> to reinstall pre-production; it is not the reason below.
+> **`Candid compatibility check failed` is not a reason to reinstall.** Two
+> different things block a deploy and only one loses data:
 >
-> **`Candid compatibility check failed`** is not a reason to reinstall. Two
-> different things can block a deploy and only one of them loses data:
->
-> - **The Candid interface is no longer a subtype** — a method was removed or
->   renamed, or a signature changed. That breaks *clients*, not stored state.
+> - **The Candid interface is no longer a subtype** — a method removed, renamed
+>   or retyped. That breaks *clients*, not stored state.
 >   `icp deploy --mode upgrade -y` accepts the break and keeps every secret.
-> - **The stable signature is incompatible** — the type of a stable variable
->   changed in a way an upgrade cannot carry. Only this needs a migration, or
+> - **The stable signature is incompatible** — a stable variable's type changed
+>   in a way an upgrade cannot carry. Only this needs a migration, or
 >   `icp deploy --mode reinstall -y`, which **drops every stored secret**.
 >
-> They look the same from the error, so check rather than guess. The stable
-> signature is committed as `src/bindings/backend.most` and `check-bindings`
-> holds it current, so **a change to any stable type shows up in the pull
-> request diff** — which is the question a reviewer can act on. To answer
-> whether an upgrade is safe:
+> They look identical from the error, so check rather than guess:
 >
 > ```bash
 > "$(mops toolchain bin moc)" --stable-compatible \
@@ -363,24 +283,23 @@ and a warning you always see is a warning you stop reading.
 > # exit 0 means an upgrade carries the data
 > ```
 >
-> Two details in that command matter. **`mops toolchain bin moc`**, because there
-> is no `moc` on `PATH` — and the mops cache holds a dozen versions, where
-> picking the "last" one lexicographically lands on 1.9.0 rather than the pinned
-> 1.14.0. And **both files must come from `icp build`** (`npm run bindings` and
-> `check-bindings` do): the generated type names depend on how the file was
-> produced, so a hand-rolled `moc --stable-types` run is not comparable, and
-> without this project's build flags it does not even typecheck the same.
+> Use `mops toolchain bin moc` — there is no `moc` on `PATH`, and the cache's
+> lexically last version is 1.9.0 rather than the pinned 1.14.0. Both files must
+> come from `icp build`, since the generated type names depend on how the file
+> was produced.
 >
-> Reading a Candid failure as a state incompatibility has cost this project a
-> wrong instruction twice, in both directions — see #42 for making the answer a
-> CI check rather than a habit.
+> A reinstall is also sometimes *wanted* where an upgrade would work — to clear
+> state a new invariant assumes away, which is free pre-production. That is a
+> different question from whether an upgrade is *possible*, and conflating the
+> two has produced a wrong deploy instruction here twice, in both directions
+> (#42).
 
 ```bash
 npm test                      # unit tests and component transitions (no replica needed)
 npm run test:motoko           # backend unit tests (no replica needed)
 npm run check-bindings        # the committed Candid binding still matches the canister
 npm run check-ii-metadata     # validates the II app-metadata document
-npm run check-comments        # no doc block stranded above another (TypeScript)
+npm run check-comments        # no stranded doc block, and no `///` in the composition root
 
 # these need a running replica and a deployed canister
 npm run smoke-test            # crypto + access control end to end
@@ -388,7 +307,7 @@ npm run check-capabilities    # the access-level table, and what changing someon
 npm run check-poll-cost       # a poll derives no keys and carries no ciphertext
 npm run check-vault-names     # renaming moves no map and derives no key
 npm run check-history         # a writer can add versions but destroy none
-npm run check-owned-vaults    # a vault exists once claimed, and survives being emptied
+npm run check-owned-vaults    # creation is a vault's only origin, and it survives being emptied
 ```
 
 The first five run in CI on every pull request; the replica ones do not, so
@@ -552,14 +471,25 @@ voids the whole document — so run `npm run check-ii-metadata` after editing it
 
 Some of the above, and other behaviour described earlier, is shaped by open upstream issues — all filed from this project:
 
-| Upstream | What it costs us |
-|---|---|
-| [dfinity/vetkeys#437] | A `ReadWriteManage` grantee can get the owner's vault listed twice, and ACL writes targeting the owner are accepted. The client de-duplicates. |
-| [dfinity/vetkeys#438] | A grantee cannot read their own rights, so the UI offers capabilities and adapts to a refusal instead of asking. |
-| [dfinity/vetkeys#439] | An owned vault cannot exist while empty, so the client synthesises a placeholder for it. |
-| [dfinity/vetkeys#440] | The derived-key cache holds an IndexedDB connection that never yields, so its store cannot be deleted — only cleared. The purge skips it. |
+State checked **2026-09-10**. Two of these changed during a single day's work,
+so treat the column as of that date rather than as current — and verify a fix
+against the shipped bundle rather than the issue, since an issue closes when a
+fix merges, not when it ships.
+
+| Upstream | State | What it costs us |
+|---|---|---|
+| [dfinity/vetkeys#437] | open | A `ReadWriteManage` grantee can get the owner's vault listed twice, and ACL writes targeting the owner are accepted. The client de-duplicates. |
+| [dfinity/vetkeys#438] | reopened | A grantee cannot read their own rights, so the backend reads the access list itself. Was closed as completed while the Motoko behaviour was unchanged at 0.6.0; reopened with the evidence. |
+| [dfinity/vetkeys#439] | open | An owned vault cannot exist while empty, so the canister keeps its own registry of owned vaults and unions it with the library's listing. |
+| [dfinity/vetkeys#440] | fixed, unreleased | The derived-key cache held an IndexedDB connection that never yielded. Fixed upstream in #441, absent from `@icp-sdk/vetkeys` 0.7.0, so the purge still skips a store the live client holds. |
+| [dfinity/vetkeys#442] | open | The Motoko library hardcodes the vetKD derive fee instead of querying `ic0.cost_vetkd_derive_key`. |
+| [dfinity/vetkeys#443] | open | The endpoint groups are not individually includable, so owning one endpoint means owning its whole group. This app implements the proposed split locally. |
+| [dfinity/vetkeys#444] | open | Sharing a map that was never created lists it for the grantee. The canister refuses the share, which only an adopter owning that endpoint can do. |
 
 [dfinity/vetkeys#437]: https://github.com/dfinity/vetkeys/issues/437
 [dfinity/vetkeys#438]: https://github.com/dfinity/vetkeys/issues/438
 [dfinity/vetkeys#439]: https://github.com/dfinity/vetkeys/issues/439
 [dfinity/vetkeys#440]: https://github.com/dfinity/vetkeys/issues/440
+[dfinity/vetkeys#442]: https://github.com/dfinity/vetkeys/issues/442
+[dfinity/vetkeys#443]: https://github.com/dfinity/vetkeys/issues/443
+[dfinity/vetkeys#444]: https://github.com/dfinity/vetkeys/issues/444

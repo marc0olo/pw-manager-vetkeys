@@ -172,10 +172,15 @@ function deleteDatabase(name: string): Promise<void> {
  *
  * The root cause is upstream (dfinity/vetkeys#440): the SDK's cache is built on
  * `idb-keyval`, which registers no `onversionchange` handler, so its connection
- * never yields to another client's delete — and exposes no `close()` either. If
- * that is fixed, this skip can go and the store can be deleted again, which
+ * never yields to another client's delete — and exposes no `close()` either.
+ *
+ * **Fixed upstream, not yet released.** dfinity/vetkeys#441 opens a connection
+ * per operation and closes it on settle; `@icp-sdk/vetkeys` 0.7.0 does not
+ * carry it (its bundle has neither `close()` nor `onversionchange`). When a
+ * release does, this skip can go and the store can be deleted again — which
  * would also stop a per-principal database name recording which identities have
- * used the app on that profile.
+ * used the app on that profile. Re-check the bundle rather than the issue: the
+ * issue closed when the fix merged, which is a different event from shipping.
  *
  * Pass it only when the clear actually succeeded. If it did not, deleting is
  * the right call even at the cost of a stall: a stall is recoverable by
