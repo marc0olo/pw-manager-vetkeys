@@ -106,32 +106,24 @@ export interface _SERVICE {
    * / gets named, so a retry repairs rather than silently succeeding.
    * /
    * / The name is the caller's to choose and is stored in the clear, like every
-   * / map name. The app generates an opaque id rather than a readable name (#13)
-   * / so that renaming a vault does not leave the original in plaintext forever;
-   * / that is a client concern, the same as item ids, and not something this can
-   * / enforce.
+   * / map name. A client that wants renaming to be meaningful should pass an
+   * / opaque map name, since the map name cannot change and a readable one stays
+   * / in plaintext however often the display name is rewritten.
    */
   'create_vault' : ActorMethod<[ByteBuf, string], Result>,
   /**
    * / Delete a vault: its contents, its events.log, its sharing and its name.
    * /
-   * / **Atomic**, which is worth stating because the design in #21 assumed it
-   * / could not be. That assumed the *client* would orchestrate it — wipe, then
-   * / one `remove_user` per grantee — leaving a half-deleted vault if any call
-   * / failed. Owning the endpoints makes it one update message, so it either all
-   * / happens or none of it does, and there is no partial state for the UI to
-   * / represent.
+   * / **Atomic** — one update message, so it either all happens or none of it
+   * / does, and there is no partial state for a client to represent.
    * /
-   * / **Owner only.** Revoking needs manage rights, so a `ReadWrite`
-   * / collaborator can only empty a vault — which is why the UI keeps Empty and
-   * / Delete as separate actions rather than one that quietly degrades.
+   * / **Owner only.** Revoking access needs manage rights, so a `ReadWrite`
+   * / collaborator can empty a vault but not delete it.
    * /
    * / **Not cryptographic erasure.** A vault's key derives from
    * / `(owner, mapName)`, so re-creating one with the same name yields the same
    * / key and anyone holding old ciphertext can still read it. This removes data
-   * / from the canister; it does not revoke the key. Vaults created through the
-   * / app get a random name for exactly this reason (#13), which makes reuse
-   * / effectively impossible — but the copy must not promise erasure.
+   * / from the canister; it does not revoke the key.
    */
   'delete_vault' : ActorMethod<[ByteBuf], Result>,
   /**
@@ -159,7 +151,7 @@ export interface _SERVICE {
    * / Drop the stored versions of one secret, keeping the secret itself.
    * /
    * / The owner's way to reclaim space, or to stop keeping a secret's earlier
-   * / values, without a retention policy guessing on their behalf (#38).
+   * / values, without a retention policy guessing on their behalf.
    * /
    * / Clears the ciphertext and **keeps the events**, so "edited by X at T"
    * / survives. Otherwise pruning would be a way to launder the audit trail.
@@ -200,17 +192,17 @@ export interface _SERVICE {
    * / deliberate, and `drop_history` is the owner's remedy.
    * /
    * / Not on the poll. Values ride this because it is user-initiated and scoped
-   * / to one secret; #14's rule is that nothing automatic carries ciphertext.
+   * / to one secret — nothing automatic carries ciphertext.
    */
   'get_history' : ActorMethod<[Principal, ByteBuf, ByteBuf], Result_9>,
   /**
    * / Per-item events.log facts for one vault: how much is restorable, and when the
    * / current value was actually written.
    * /
-   * / A separate query rather than fields on `get_vault_summaries`, which runs
-   * / every 15 s: #14 got the poll down to a digest and a key list, and two
-   * / numbers per item would grow it with the vault. This is read once when a
-   * / vault is opened, alongside the values themselves.
+   * / A separate query rather than fields on `get_vault_summaries`, which a
+   * / client polls: that response is a digest and a key list, and two numbers
+   * / per item would grow it with the vault. This is read once when a vault is
+   * / opened, alongside the values themselves.
    * /
    * / No ciphertext, so it costs no key derivation.
    */
@@ -248,8 +240,9 @@ export interface _SERVICE {
   >,
   /**
    * / What is recoverable in one vault, with each item's ciphertext so a client
-   * / can show what it was rather than only when it went. See `TrashedItem` for
-   * / why returning values here is not the thing #14 removed from the poll.
+   * / can show what it was rather than only when it went. This is user-initiated
+   * / and scoped to one vault, so it carries ciphertext where the poll does
+   * / not — see `TrashedItem`.
    * /
    * / Visible to everyone who can read the vault. What that changes differs by
    * / access level, and the difference is worth stating precisely.
