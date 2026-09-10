@@ -471,6 +471,11 @@ voids the whole document — so run `npm run check-ii-metadata` after editing it
 
 Some of the above, and other behaviour described earlier, is shaped by open upstream issues — all filed from this project:
 
+State checked **2026-09-10**. Two of these changed during a single day's work,
+so treat the column as of that date rather than as current — and verify a fix
+against the shipped bundle rather than the issue, since an issue closes when a
+fix merges, not when it ships.
+
 | Upstream | State | What it costs us |
 |---|---|---|
 | [dfinity/vetkeys#437] | open | A `ReadWriteManage` grantee can get the owner's vault listed twice, and ACL writes targeting the owner are accepted. The client de-duplicates. |
