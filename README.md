@@ -320,12 +320,14 @@ it cost and how much headroom is left, measured rather than assumed:
 this run cost 20.2 B; 11.31 T left, about 559 more run(s)
 ```
 
-A `vetkd_derive_key` reserves ~26 B cycles and the checks derive heavily, so a
-round of all six costs **roughly half a trillion** and a canister topped up to
-10 T affords something like twenty. Mutation testing, which redeploys and
-re-runs them per mutant, is what actually empties one. Exact figures are not
-listed here because each check prints its own, measured on the run you just
-did — they drift every time a check gains a case. Top up with:
+A `vetkd_derive_key` on `test_key_1` reserves 10 B cycles and the checks derive
+heavily, so a round of all six costs **roughly half a trillion**, and a
+canister topped up to 10 T affords something like twenty. Mutation testing,
+which redeploys and re-runs them per mutant, is what actually empties one.
+Exact figures are not listed here because each check prints its own, measured
+on the run you just did — they drift every time a check gains a case.
+
+Top up with:
 
 ```bash
 icp canister top-up backend --amount 10000000000000
@@ -338,11 +340,18 @@ icp canister top-up backend --amount 10000000000000
 > remote call`, `could not perform self call`), which is why the code is what
 > the app matches on.
 >
-> Measured on a local replica: derivation still worked at **482 B** and failed
-> at **472 B**. So a derive needs a few hundred billion cycles of room, well
-> beyond the ~26 B it reserves — and a round of the checks costs about as much
-> again, which is why the watchdog's threshold is counted in rounds above that
-> cliff rather than as a multiple of it.
+> Measured on a local replica, on `test_key_1`: derivation still worked at
+> **482 B** and failed at **472 B**. The 10 B gap between those is exactly what
+> that key reserves; the *level* is a different question, and mostly not the
+> fee. At the idle burn recorded then, the freezing threshold accounts for
+> roughly 48 B of it, and the remainder is unattributed. The threshold was also
+> being changed to provoke `IC0406` while this was measured.
+>
+> So treat 472 B as a local observation, not a formula: it does not scale with
+> the fee, and it does not transfer to mainnet, where both the freezing reserve
+> and the key's price differ. The watchdog's threshold is counted in rounds of
+> the checks above that cliff rather than as a multiple of the fee, for the
+> same reason.
 >
 > Worth recognising because in this app it presents as data loss — unlocking
 > fails, so the secrets look gone, when nothing is gone and a top-up restores
@@ -438,6 +447,14 @@ icp deploy -e ic
 ```
 
 Before that, change `VETKD_KEY_NAME` in `icp.yaml` from `test_key_1` to `key_1`.
+
+> **The derive fee follows the key, not your canister.** It is set by the subnet
+> the vetKey lives on, so `key_1` costs
+> [26_153_846_153 cycles](https://docs.internetcomputer.org/references/cycle-costs/#vetkeys)
+> on the 34-node fiduciary subnet wherever you deploy, against 10_000_000_000
+> for `test_key_1` on its 13-node subnet. Switching keys multiplies the
+> per-derivation cost by about 2.6, so the thresholds in `lib/Cycles.mo` —
+> measured locally — are a local calibration and not a mainnet one.
 
 Internet Identity needs no configuration — a mainnet origin resolves to
 `https://id.ai/authorize` on its own. Do **not** add `derivationOrigin` for the

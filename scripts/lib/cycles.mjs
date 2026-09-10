@@ -21,8 +21,10 @@ const T = 1_000_000_000_000;
 
 /**
  * Below this, the difference between two readings is idle burn rather than the
- * run: the canister spends ~1 B a day doing nothing, so dividing the balance by
- * a few seconds of that gives a headroom figure with no meaning.
+ * run. `icp canister status` reports it as **Idle cycles burned per day** —
+ * 1.6 B at the time of writing, and it grows with stored data, so read it
+ * rather than trusting this number. Dividing the balance by a few seconds of
+ * that gives a headroom figure with no meaning.
  */
 const MEASURABLE = 100_000_000;
 
