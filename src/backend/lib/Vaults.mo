@@ -9,8 +9,9 @@ import Types "../types";
 /// The registry of vaults this canister knows about, independent of whether the
 /// library can still see them.
 ///
-/// A module because the value writes register a vault, the vault group creates
-/// and deletes them, and the poll lists them — three groups over one registry.
+/// A module because four groups read it: the vault group creates and deletes
+/// vaults, the value writes and the access-control writes gate on one
+/// existing, and the poll lists them — one registry, four callers.
 module {
   /// Bounds a single row. Display names are not key material, so this is about
   /// storage rather than correctness — but unbounded text from any caller is
@@ -65,9 +66,8 @@ module {
   ) : Result.Result<Text, Text> {
     let trimmed = Text.trim(display, #predicate(Char.isWhitespace));
 
-    // No clearing. It used to revert to the map name, which was reasonable
-    // while that was something a user had chosen — but vaults are created with
-    // a random id, so "reset" would rename the vault to `a3f1b2c4…`.
+    // No clearing, and no falling back to the map name: vaults are created
+    // with a random id, so "reset" would rename the vault to `a3f1b2c4…`.
     if (trimmed == "") return #err("A vault needs a name.");
 
     if (Text.encodeUtf8(trimmed).size() > MAX_DISPLAY_NAME_BYTES) {
