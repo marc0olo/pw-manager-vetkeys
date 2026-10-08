@@ -35,6 +35,19 @@ mixin (
   vaults : Types.VaultsState,
   health : Types.HealthState,
 ) {
+  /// The refusal for an ACL change that targets the owner.
+  ///
+  /// Authorization first, so a caller who may not manage this vault hears
+  /// `unauthorized` whoever they named — the answer must not depend on the
+  /// target. `getUserRights` is the check: it demands exactly the manage rights
+  /// an ACL change does.
+  func refuseOwnerTarget(caller : Principal, mapOwner : Principal, mapName : Blob) : Shared.Result<?VetKeys.AccessRights, Text> {
+    switch (encryptedMaps.getUserRights(caller, (mapOwner, mapName), caller)) {
+      case (#err(e)) { #Err(e) };
+      case (#ok(_)) { #Err("the owner's access cannot be changed") };
+    };
+  };
+
   public shared (msg) func set_user_rights(
     map_owner : Principal,
     map_name : Shared.ByteBuf,
@@ -50,7 +63,7 @@ mixin (
     if (not Vaults.ownedBy(vaults, map_owner).containsKey(Blob.compare, map_name.inner)) {
       return #Err("no such vault");
     };
-    if (user.equal(map_owner)) return #Err("the owner's access cannot be changed");
+    if (user.equal(map_owner)) return refuseOwnerTarget(msg.caller, map_owner, map_name.inner);
 
     switch (encryptedMaps.setUserRights(msg.caller, (map_owner, map_name.inner), user, access_rights)) {
       case (#err(e)) { #Err(e) };
@@ -68,7 +81,7 @@ mixin (
     // library says — the same answer as for a principal never granted
     // anything, so "the owner is protected" was indistinguishable from "that
     // principal had nothing".
-    if (user.equal(map_owner)) return #Err("the owner's access cannot be changed");
+    if (user.equal(map_owner)) return refuseOwnerTarget(msg.caller, map_owner, map_name.inner);
     switch (encryptedMaps.removeUser(msg.caller, (map_owner, map_name.inner), user)) {
       case (#err(e)) { #Err(e) };
       case (#ok(previous)) { #Ok(previous) };

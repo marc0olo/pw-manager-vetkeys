@@ -228,6 +228,13 @@ for (const level of ["Read", "ReadWrite", "ReadWriteManage"]) {
   check("a manager granting the owner rights is refused", granted === OWNER_REFUSAL, granted);
   const self = await attempt(() => O.setUserRights(me, mapName, me, { Read: null }));
   check("and so is the owner granting themselves rights", self === OWNER_REFUSAL, self);
+  const stranger = await connect(Ed25519KeyIdentity.generate());
+  const unauthorized = await attempt(() => stranger.removeUser(me, mapName, me));
+  check(
+    "a caller who may not manage hears unauthorized, whoever they target",
+    unauthorized === "unauthorized",
+    unauthorized,
+  );
 
   const listed = (await O.api.get_vault_summaries()).filter(
     (v) => new TextDecoder().decode(Uint8Array.from(v.map_name.inner)) === "Vault Owner",
