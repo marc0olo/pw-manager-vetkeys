@@ -228,13 +228,18 @@ for (const level of ["Read", "ReadWrite", "ReadWriteManage"]) {
   check("a manager granting the owner rights is refused", granted === OWNER_REFUSAL, granted);
   const self = await attempt(() => O.setUserRights(me, mapName, me, { Read: null }));
   check("and so is the owner granting themselves rights", self === OWNER_REFUSAL, self);
-  const stranger = await connect(Ed25519KeyIdentity.generate());
-  const unauthorized = await attempt(() => stranger.removeUser(me, mapName, me));
-  check(
-    "a caller who may not manage hears unauthorized, whoever they target",
-    unauthorized === "unauthorized",
-    unauthorized,
-  );
+  // The refusal is authorized through the library's `getUserRights`, on the
+  // premise that reading rights demands manage rights exactly as changing them
+  // does. A `Read` grantee is the case that premise decides — a stranger would
+  // be refused either way — so this fails if a library upgrade loosens it.
+  const { mapName: readName, G: reader } = await vaultSharedAt("Read", "Vault Owner Read");
+  for (const [label, op] of [
+    ["removing", () => reader.removeUser(me, readName, me)],
+    ["granting", () => reader.setUserRights(me, readName, me, { Read: null })],
+  ]) {
+    const got = await attempt(op);
+    check(`a Read grantee ${label} the owner hears unauthorized, as for anyone else`, got === "unauthorized", got);
+  }
 
   const listed = (await O.api.get_vault_summaries()).filter(
     (v) => new TextDecoder().decode(Uint8Array.from(v.map_name.inner)) === "Vault Owner",
