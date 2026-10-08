@@ -52,7 +52,7 @@ export interface VaultSummary {
    * is stale by a second must not be able to grant anything.
    */
   rights: AccessRights | null;
-  /** Who this vault is shared with (owner excluded). Owned vaults only. */
+  /** Who this vault is shared with. Never the owner, whom the canister keeps out of the ACL. */
   sharedWith: [Principal, AccessRights][];
   /** Item ids present on the canister. Plaintext map keys, so no key needed. */
   itemIds: string[];
@@ -342,7 +342,7 @@ export class VaultClient {
       ]),
     );
 
-    const summaries = maps.map((map): VaultSummary => {
+    return maps.map((map): VaultSummary => {
       const owner = map.owner;
       const isOwned = owner.compareTo(this.me) === "eq";
       const rights = map.my_rights[0] ?? null;
@@ -353,30 +353,13 @@ export class VaultClient {
         displayName: displayNames.get(vaultId({ owner, name })) ?? null,
         isOwned,
         rights: isOwned ? null : rights,
-        sharedWith: map.access_control.filter(([who]) => who.compareTo(owner) !== "eq"),
+        sharedWith: map.access_control,
         itemIds: map.item_keys.map((key) => decoder.decode(Uint8Array.from(key.inner))),
         fingerprint: hex(Uint8Array.from(map.digest.inner)),
         trashed: Number(map.trashed),
         trashFingerprint: hex(Uint8Array.from(map.trash_digest.inner)),
       };
     });
-
-    // A ReadWriteManage grantee can get the owner's own map listed twice — once
-    // from the ACL and once as owned — because an ACL mutation targeting the
-    // owner is accepted, and the canister then concatenates the two sources
-    // without de-duplicating. Both halves are dfinity/vetkeys#437 (see #10),
-    // which is also why that issue is cited for owner-targeted ACL writes in
-    // scripts/check-capabilities.mjs. Two entries with the same id would also
-    // collide as React keys.
-    const seen = new Set<string>();
-    const vaults = summaries.filter((summary) => {
-      const id = vaultId(summary);
-      if (seen.has(id)) return false;
-      seen.add(id);
-      return true;
-    });
-
-    return vaults;
   }
 
   /**

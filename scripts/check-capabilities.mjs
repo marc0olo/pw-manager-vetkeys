@@ -209,31 +209,36 @@ for (const level of ["Read", "ReadWrite", "ReadWriteManage"]) {
   );
 }
 
-// ---- a manager cannot lock the owner out -----------------------------------
+// ---- a manager cannot touch the owner's access ----------------------------
 //
-// The interesting part is *how*. Ownership is identity-derived, not an ACL
-// entry, so `removeUser` on the owner removes nothing and returns the previous
-// rights as `undefined` — the same answer as for a principal who was never
-// granted anything. `getUserRights` meanwhile synthesises the owner's rights
-// and reports `ReadWriteManage`, so the two endpoints disagree about whether
-// the owner is a member, and a caller cannot tell "the owner is protected"
-// from "that principal had nothing". Upstream dfinity/vetkeys#437 covers this:
-// the owner guard uses `&&`, so it only fires when the owner targets
-// themselves. Its suggested fix — reject any ACL mutation where `user == owner`
-// — resolves this and the duplicate listing that vault.ts de-duplicates, which
-// is why one issue number is cited for two symptoms.
+// Ownership is identity-derived, not an ACL entry, so the library's answer to
+// a manager targeting the owner was a no-op: `removeUser` removed nothing and
+// returned `undefined` — the same as for a principal never granted anything —
+// and `setUserRights` wrote a row that changed nothing but listed the vault to
+// its owner a second time, as shared with them. Both are refused by the
+// canister's own access-control group now, so the owner never enters the ACL.
 //
-// Unreachable from our UI, which filters the owner out of the share list.
+// Unreachable from our UI, which refuses to share with the owner before asking.
 {
   const { mapName, G } = await vaultSharedAt("ReadWriteManage", "Vault Owner");
-  const removed = await G.removeUser(me, mapName, me);
-  check("removing the owner removes nothing", removed === undefined, JSON.stringify(removed));
+  const OWNER_REFUSAL = "the owner's access cannot be changed";
+  const removed = await attempt(() => G.removeUser(me, mapName, me));
+  check("a manager removing the owner is refused", removed === OWNER_REFUSAL, removed);
+  const granted = await attempt(() => G.setUserRights(me, mapName, me, { Read: null }));
+  check("a manager granting the owner rights is refused", granted === OWNER_REFUSAL, granted);
+  const self = await attempt(() => O.setUserRights(me, mapName, me, { Read: null }));
+  check("and so is the owner granting themselves rights", self === OWNER_REFUSAL, self);
+
+  const listed = (await O.api.get_vault_summaries()).filter(
+    (v) => new TextDecoder().decode(Uint8Array.from(v.map_name.inner)) === "Vault Owner",
+  );
+  check("the owner's vault is listed to them once", listed.length === 1, `${listed.length} entries`);
   check(
-    "yet getUserRights reports the owner as a manager — the two disagree",
-    JSON.stringify(await G.getUserRights(me, mapName, me)) === JSON.stringify({ ReadWriteManage: null }),
+    "and its access list does not name the owner",
+    listed.length === 1 && listed[0].access_control.every(([who]) => who.compareTo(me) !== "eq"),
   );
   check(
-    "but it is a no-op: the owner can still write",
+    "the owner can still write",
     (await attempt(() => O.setValue(me, mapName, enc.encode("still"), enc.encode("{}")))) === "ok",
   );
   check(

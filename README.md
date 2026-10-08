@@ -503,7 +503,7 @@ current. Three habits this table earned the hard way:
 
 | Upstream | State | What it costs us |
 |---|---|---|
-| [dfinity/vetkeys#437] | open | A `ReadWriteManage` grantee can get the owner's vault listed twice, and ACL writes targeting the owner are accepted. The client de-duplicates. |
+| [dfinity/vetkeys#437] | open | Nothing now. A `ReadWriteManage` grantee could get the owner's vault listed to them twice, because ACL writes targeting the owner were accepted. The canister refuses those writes in its own access-control group. |
 | [dfinity/vetkeys#438] | reopened | A grantee cannot read their own rights, so the backend reads the access list itself. **We closed it by accident twice**, both times from prose GitHub's parser read as a directive: #35's body said "this does not close dfinity/vetkeys#438", and #72's *title* said "who closed #438" — a PR whose purpose was documenting the first one. Reopened; the behaviour is unchanged at 0.6.0. |
 | [dfinity/vetkeys#439] | open | An owned vault cannot exist while empty, so the canister keeps its own registry of owned vaults and unions it with the library's listing. |
 | [dfinity/vetkeys#440] | fixed, unreleased | The derived-key cache held an IndexedDB connection that never yielded. Fixed upstream in #441, absent from `@icp-sdk/vetkeys` 0.7.0, so the purge still skips a store the live client holds. |
