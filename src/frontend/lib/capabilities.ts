@@ -59,9 +59,8 @@ export function refusalMessage(error: unknown, attempted: Attempted): string | n
       // Read access was revoked while the decrypt was in flight.
       return "You no longer have access to this vault.";
     case "own":
-      // Not a capability that can be granted, so nothing is recorded — the
-      // control should not have been offered, and ownership is knowable
-      // locally rather than by asking.
+      // Ownership is knowable locally, so this control should not have been
+      // offered.
       return "Only the vault's owner can do this.";
   }
 }
