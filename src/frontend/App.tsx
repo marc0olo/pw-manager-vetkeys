@@ -327,10 +327,11 @@ export function App() {
         // wrong, and it must not surface as a banner on the lock screen.
         if (!open()) return;
         // The canister is the authority on rights, and this is it answering:
-        // the rights we were shown are stale, typically a demotion since the
-        // last poll. Say it plainly instead of surfacing "unauthorized", and
-        // re-read the vaults, so the controls follow the canister's current
-        // answer rather than waiting up to a poll interval for it.
+        // the rights we were shown are stale — a demotion since the last poll,
+        // or a revocation. Re-read the vaults, so the controls follow the
+        // canister's current answer rather than waiting up to a poll interval
+        // for it, and then say plainly what happened instead of surfacing
+        // "unauthorized".
         const refusal = attempt ? refusalMessage(caught, attempt.capability) : null;
         if (attempt && refusal) {
           patch({
@@ -341,8 +342,15 @@ export function App() {
             ...(attempt.capability === "write" ? { pane: { mode: "view" as const }, wiping: false } : {}),
             ...(attempt.capability === "manage" ? { sharing: false } : {}),
           });
-          notify(refusal);
-          void refresh({ quiet: true });
+          await refresh({ quiet: true });
+          if (!open()) return;
+          // Re-read first so the message can be true. A vault gone from the
+          // listing was revoked, not demoted, and the poll has already said
+          // so ("no longer shared with you") — "read-only access" on top would
+          // contradict it. If the re-read failed, the vault is still listed
+          // and the refusal is the best answer there is.
+          const stillListed = vaultStateRef.current.vaults?.some((v) => vaultId(v) === attempt.vault) ?? false;
+          if (stillListed) notify(refusal);
           return;
         }
         // Asking the canister is a round trip, so re-check that the session is
