@@ -73,9 +73,11 @@ export function withDenial(denials: Denials, id: string, capability: Capability)
  * Whether a failure means "you may not", as opposed to anything else.
  *
  * The library answers every refused operation with exactly `unauthorized`
- * (`KeyManager.mo`), and the SDK unwraps `#Err(text)` into `Error(text)`, so
- * this is an exact match rather than a substring search — verified against a
- * replica for write, manage and wipe at both `Read` and `ReadWrite`.
+ * (`KeyManager.mo`), and the SDK unwraps `#Err(text)` into `Error(text)` —
+ * verified against a replica for write, manage and wipe at both `Read` and
+ * `ReadWrite`. So this matches that word whole, or after a `: ` reject prefix,
+ * ignoring case and surrounding space — never as a substring, which would
+ * catch any message that merely mentions it.
  *
  * Matching narrowly is the safe direction. An unrecognised failure is reported
  * as an ordinary error and the control stays offered; treating a network blip

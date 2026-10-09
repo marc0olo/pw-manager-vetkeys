@@ -27,9 +27,11 @@ changes to `KeyManager.mo` and `Types.mo` for these, and run
   permission check. If reading rights is loosened, a non-manager gets the owner
   refusal instead of `unauthorized`. A silent change, caught only by
   `check-capabilities`.
-- **Every refusal says exactly `unauthorized`.** The frontend matches that
-  string (`src/frontend/lib/capabilities.ts`). Also caught by
-  `check-capabilities`.
+- **Every refusal says exactly `unauthorized`.** The frontend's
+  `isUnauthorized` (`src/frontend/lib/capabilities.ts`) recognises that word,
+  also behind a reject prefix such as `Reject text: unauthorized`, and nothing
+  else. A reworded refusal would read as an ordinary error. Also caught by
+  `check-capabilities`, which asserts the exact text.
 - **The ACL's internal shape.** `rightsOf` in `src/backend/lib/Access.mo` reads
   `keyManager.accessControl` directly. A change there breaks the build, which
   is the failure you want.
