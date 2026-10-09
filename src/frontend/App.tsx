@@ -14,20 +14,15 @@ import { CLIPBOARD_CLEAR_SECONDS, copyPlain, copySecret } from "./lib/clipboard"
 import { compareItems, emptyItem, matchesQuery } from "./lib/items";
 import {
   VaultClient,
+  canManage,
+  canWrite,
   defaultVaultId,
   vaultId,
   vaultLabel,
   type AccessLevel,
   type Vault,
 } from "./lib/vault";
-import {
-  type Attempted,
-  isCapability,
-  offers,
-  refusalMessage,
-  verdictFor,
-  withDenial,
-} from "./lib/capabilities";
+import { type Attempted, refusalMessage } from "./lib/capabilities";
 import { pollUpdate } from "./lib/poll";
 import { createLoadGuard, NO_VAULT_SESSION, type VaultSessionState } from "./lib/vault-session";
 import { ItemDetail } from "./components/ItemDetail";
@@ -110,7 +105,7 @@ export function App() {
   const [client, setClient] = useState<VaultClient | null>(null);
   // One object, cleared as a unit on lock — see lib/vault-session for why.
   const [vaultSession, setVaultSession] = useState<VaultSessionState>(NO_VAULT_SESSION);
-  const { vaults, openItems, selectedVaultId, selectedItemId, syncedAt, pane, query, sharing, wiping, renaming, trash, itemFacts, history, deleting, creating, deletingVault, denials } =
+  const { vaults, openItems, selectedVaultId, selectedItemId, syncedAt, pane, query, sharing, wiping, renaming, trash, itemFacts, history, deleting, creating, deletingVault } =
     vaultSession;
   // Updated synchronously by `patch` below. The poll reads state across an
   // await, and React state is not visible until the next commit — reading the
@@ -314,8 +309,9 @@ export function App() {
     async (
       action: () => Promise<void>,
       success?: string,
-      // What was attempted, so a refusal can be learned from rather than shown
-      // as a raw error. Omitted for actions that cannot be refused on rights.
+      // What was attempted, so a refusal can be worded for the user rather than
+      // shown as a raw error. Omitted for actions that cannot be refused on
+      // rights.
       attempt?: { vault: string; capability: Attempted },
     ) => {
       setBusy(true);
@@ -330,19 +326,14 @@ export function App() {
         // signature error. That is the lock working, not something the user did
         // wrong, and it must not surface as a banner on the lock screen.
         if (!open()) return;
-        // The canister is the authority on rights, and this is it answering.
-        // Record it so the control stops being offered, and say it plainly
-        // instead of surfacing "unauthorized" at the user.
+        // The canister is the authority on rights, and this is it answering:
+        // the rights we were shown are stale, typically a demotion since the
+        // last poll. Say it plainly instead of surfacing "unauthorized", and
+        // re-read the vaults, so the controls follow the canister's current
+        // answer rather than waiting up to a poll interval for it.
         const refusal = attempt ? refusalMessage(caught, attempt.capability) : null;
         if (attempt && refusal) {
           patch({
-            // Only a capability is worth remembering. Filing anything else
-            // against the vault would withdraw a control the user has — an
-            // ownership refusal recorded as a write denial is what disabled
-            // adding items after a non-owner tried to empty the trash.
-            ...(isCapability(attempt.capability)
-              ? { denials: withDenial(vaultStateRef.current.denials, attempt.vault, attempt.capability) }
-              : {}),
             // Close whatever was open to do the thing that was just refused: an
             // editor that can no longer save, or a dialog whose buttons are now
             // all dead ends, is worse than no dialog at all. An owner-only
@@ -351,6 +342,7 @@ export function App() {
             ...(attempt.capability === "manage" ? { sharing: false } : {}),
           });
           notify(refusal);
+          void refresh({ quiet: true });
           return;
         }
         // Asking the canister is a round trip, so re-check that the session is
@@ -552,14 +544,10 @@ export function App() {
   const itemsLoading = openItems === null;
 
   const selectedItem = openItems?.find((item) => item.id === selectedItemId) ?? null;
-  // Offered unless the canister has actually refused. For a shared vault our
-  // rights come back empty rather than absent (dfinity/vetkeys#438), so the
-  // alternative — inferring read-only from silence — is what made every access
-  // level behave like `Read`. Enforcement is unaffected: the canister decides.
-  const writeVerdict = summary ? verdictFor(summary, "write", denials) : "denied";
-  const manageVerdict = summary ? verdictFor(summary, "manage", denials) : "denied";
-  const writable = offers(writeVerdict);
-  const manageable = offers(manageVerdict);
+  // Offered as the canister last reported our rights. Enforcement is
+  // unaffected: the canister decides, and a refusal re-reads them.
+  const writable = summary ? canWrite(summary) : false;
+  const manageable = summary ? canManage(summary) : false;
 
   // Poll for changes so a newly shared vault, a new item or a revocation shows
   // up without a reload. Queries only, no key derivation — and deliberately not

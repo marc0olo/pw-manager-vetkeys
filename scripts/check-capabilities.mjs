@@ -4,8 +4,8 @@
  *
  * Worth a script rather than a unit test because every claim here is the
  * canister's behaviour, not ours: which operations each level permits, that a
- * refusal always says exactly `unauthorized`, and that a non-manager cannot see
- * their own rights — the defect that made every level behave like `Read`.
+ * refusal always says exactly `unauthorized`, and that each grantee is told
+ * their own rights, which the library alone would not disclose.
  *
  * If any of this drifts, the share dialog starts lying about what it grants.
  */
@@ -99,21 +99,21 @@ check(
   EXPECTED.ReadWrite.wipe === "ok",
 );
 
-// ---- the root cause: a grantee cannot see their own rights ----------------
+// ---- the library alone discloses no rights to a grantee --------------------
 {
   const { mapName, grantee, G } = await vaultSharedAt("ReadWrite", "Vault ACL");
   const maps = await G.canisterClient.get_all_accessible_encrypted_maps();
   const listed = maps.find((m) => new TextDecoder().decode(m.map_name.inner) === "Vault ACL");
   check("a writer sees the vault in their listing", listed !== undefined);
   check(
-    "but its access list comes back empty, so rights cannot be read (dfinity/vetkeys#438)",
+    "but the library's access list for it comes back empty",
     listed.access_control.length === 0,
     `${listed.access_control.length} entries`,
   );
   const inferred =
     listed.access_control.find((entry) => entry[0].compareTo(grantee.getPrincipal()) === "eq")?.[1] ??
     null;
-  check("so the old inference yields null -> read-only", inferred === null);
+  check("so reading rights from it would say read-only", inferred === null);
   check(
     "while the write it hid actually succeeds",
     (await attempt(() => G.setValue(me, mapName, enc.encode("proof"), enc.encode("{}")))) === "ok",
@@ -122,11 +122,9 @@ check(
 
 // ---- the app answers what the library will not ------------------------------
 //
-// #438 means a grantee cannot learn their own rights, so the UI used to offer
-// every control and withdraw whichever the canister refused — a read-only
-// collaborator was shown "Delete" and "Empty vault" until they tried one. The
-// backend reads the ACL it already holds and reports the caller's own rights,
-// which discloses nothing about anyone else.
+// The backend reads the ACL it already holds and reports the caller's own
+// rights in `get_vault_summaries`, which discloses nothing about anyone else.
+// The UI's controls follow this answer.
 for (const level of ["Read", "ReadWrite", "ReadWriteManage"]) {
   const { mapName, G } = await vaultSharedAt(level, `Vault Rights ${level}`);
   const summaries = await G.api.get_vault_summaries();

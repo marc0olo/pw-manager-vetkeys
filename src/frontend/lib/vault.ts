@@ -38,18 +38,13 @@ export interface VaultSummary {
   /** False for a vault someone else shared with us. */
   isOwned: boolean;
   /**
-   * What we may do here, or null if the canister will not say.
+   * What we may do on a vault shared with us, as the canister reports it.
+   * Null for an owned vault, where {@link isOwned} already says everything.
    *
-   * It used to be null for *every* shared vault: the library will not disclose
-   * a grantee's own rights (dfinity/vetkeys#438), so a read-only collaborator
-   * was shown Delete and Empty vault until one of them was refused. The backend
-   * now answers it directly — telling callers their own rights reveals nothing
-   * about anyone else — so the controls match the permissions from the first
-   * render.
-   *
-   * Still nullable, and the attempt-and-adapt path in `lib/capabilities` still
-   * exists: the canister remains the only authority, and a rights answer that
-   * is stale by a second must not be able to grant anything.
+   * The library only discloses rights to a manager, so the canister answers
+   * this itself: telling callers their own rights reveals nothing about anyone
+   * else. Controls follow it, which can lag a demotion by one poll — the
+   * canister still refuses, and the refusal re-reads it.
    */
   rights: AccessRights | null;
   /** Who this vault is shared with. Never the owner, whom the canister keeps out of the ACL. */

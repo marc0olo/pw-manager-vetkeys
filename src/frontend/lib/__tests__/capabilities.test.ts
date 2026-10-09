@@ -1,14 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Principal } from "@icp-sdk/core/principal";
-import {
-  isUnauthorized,
-  offers,
-  refusalMessage,
-  verdictFor,
-  withDenial,
-  type Denials,
-} from "../capabilities";
-import { vaultId, type VaultSummary } from "../vault";
+import { isUnauthorized, refusalMessage } from "../capabilities";
+import { canManage, canWrite, type VaultSummary } from "../vault";
 
 const me = Principal.fromText("2ibo7-dia");
 const other = Principal.fromText("aaaaa-aa");
@@ -24,82 +17,33 @@ function vault(overrides: Partial<VaultSummary> = {}): VaultSummary {
     itemIds: [],
     fingerprint: "f0",
     trashed: 0,
-  trashFingerprint: "t0",
+    trashFingerprint: "t0",
     ...overrides,
   };
 }
 
-const owned = vault({ owner: me, name: "Personal", isOwned: true });
-const shared = vault();
-const id = vaultId(shared);
-const none: Denials = [];
-
 describe("an owned vault", () => {
-  it("can do everything without asking", () => {
-    expect(verdictFor(owned, "write", none)).toBe("granted");
-    expect(verdictFor(owned, "manage", none)).toBe("granted");
-  });
-
-  it("cannot be denied, since the owner's rights are not in the list", () => {
-    const denied = withDenial(withDenial(none, vaultId(owned), "write"), vaultId(owned), "manage");
-    expect(verdictFor(owned, "write", denied)).toBe("granted");
+  it("can do everything, with no rights to consult", () => {
+    const owned = vault({ owner: me, name: "Personal", isOwned: true });
+    expect(canWrite(owned)).toBe(true);
+    expect(canManage(owned)).toBe(true);
   });
 });
 
-describe("a shared vault whose rights the canister will not disclose", () => {
-  // This is every shared vault today. Reading it as "no" is the bug in #9.
-  it("is untested, not denied", () => {
-    expect(verdictFor(shared, "write", none)).toBe("untested");
-    expect(verdictFor(shared, "manage", none)).toBe("untested");
-  });
-
-  it("still offers the controls", () => {
-    expect(offers(verdictFor(shared, "write", none))).toBe(true);
-    expect(offers(verdictFor(shared, "manage", none))).toBe(true);
-  });
-});
-
-describe("learning from a refusal", () => {
-  it("stops offering the capability that was refused", () => {
-    const denied = withDenial(none, id, "write");
-    expect(verdictFor(shared, "write", denied)).toBe("denied");
-    expect(offers(verdictFor(shared, "write", denied))).toBe(false);
-  });
-
-  it("infers that a refused write also settles manage", () => {
-    // Every level that can manage can also write, so a refused write means Read.
-    const denied = withDenial(none, id, "write");
-    expect(verdictFor(shared, "manage", denied)).toBe("denied");
-  });
-
-  it("does not infer the reverse: ReadWrite can write but not manage", () => {
-    const denied = withDenial(none, id, "manage");
-    expect(verdictFor(shared, "write", denied)).toBe("untested");
-  });
-
-  it("keeps denials to the vault they came from", () => {
-    const otherVault = vault({ name: "Second" });
-    const denied = withDenial(none, id, "write");
-    expect(verdictFor(otherVault, "write", denied)).toBe("untested");
-  });
-
-  it("does not grow on a repeated refusal", () => {
-    const once = withDenial(none, id, "write");
-    expect(withDenial(once, id, "write")).toEqual(once);
-  });
-});
-
-describe("rights the canister does disclose", () => {
-  // Unreachable until dfinity/vetkeys#438 ships, but it is the path that
-  // retires attempt-and-adapt, so it is pinned now.
+describe("a shared vault", () => {
   it.each([
-    ["Read", "denied", "denied"],
-    ["ReadWrite", "granted", "denied"],
-    ["ReadWriteManage", "granted", "granted"],
-  ] as const)("%s can write=%s, manage=%s", (level, write, manage) => {
-    const known = vault({ rights: { [level]: null } as VaultSummary["rights"] });
-    expect(verdictFor(known, "write", none)).toBe(write);
-    expect(verdictFor(known, "manage", none)).toBe(manage);
+    ["Read", false, false],
+    ["ReadWrite", true, false],
+    ["ReadWriteManage", true, true],
+  ] as const)("at %s can write=%s, manage=%s", (level, write, manage) => {
+    const shared = vault({ rights: { [level]: null } as VaultSummary["rights"] });
+    expect(canWrite(shared)).toBe(write);
+    expect(canManage(shared)).toBe(manage);
+  });
+
+  it("offers nothing beyond reading when no rights were reported", () => {
+    expect(canWrite(vault())).toBe(false);
+    expect(canManage(vault())).toBe(false);
   });
 });
 

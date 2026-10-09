@@ -114,25 +114,26 @@ describe("locking", () => {
   });
 });
 
-describe("a shared vault whose rights the canister will not disclose", () => {
-  it("offers editing, then stops once the canister refuses", async () => {
-    const client = signedInAs(ALICE, new FakeClient(ALICE, [personal, shared], {
+describe("a shared vault demoted while it is open", () => {
+  it("says so when the canister refuses, and withdraws the control", async () => {
+    const writer = vault({ ...shared, rights: toAccessRights("ReadWrite") });
+    const client = signedInAs(ALICE, new FakeClient(ALICE, [personal, writer], {
       "Team infra": [item({ id: "x", title: "Grafana" })],
     }));
     render(<App />);
 
     fireEvent.click(await screen.findByText("Team infra"));
     fireEvent.click(await screen.findByText("Grafana"));
-
-    // Offered, because "we were not told" is not "no" — #9.
     const edit = await screen.findByRole("button", { name: /^edit$/i });
 
+    // Demoted after the last poll, so the control is still on screen.
+    client.vaults = [personal, { ...writer, rights: toAccessRights("Read") }];
     client.refuse = "write";
     fireEvent.click(edit);
     fireEvent.click(await screen.findByRole("button", { name: /save/i }));
 
     expect(await screen.findByText("You have read-only access to this vault.")).toBeInTheDocument();
-    // And the control is withdrawn rather than left to fail again.
+    // Withdrawn by re-reading the canister's answer, not by waiting for a poll.
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: /^edit$/i })).not.toBeInTheDocument(),
     );
@@ -206,8 +207,8 @@ describe("a canister that cannot derive vault keys", () => {
   });
 
   it("records no loss of rights, because nothing about access changed", async () => {
-    // A denial filed here would withdraw a control the user still has — the
-    // same defect that disabled adding items after a failed trash empty.
+    // Read as a refusal, this would close the editor and tell the user they
+    // lost access they still have.
     const client = signedInAs(ALICE, new FakeClient(ALICE, [personal], {
       Personal: [item({ id: "a", title: "GitHub" })],
     }));
@@ -726,8 +727,7 @@ describe("someone else changes the trash while the dialog is open", () => {
 describe("emptying the trash is the owner's, not a writer's", () => {
   // Reported from manual testing as a `ReadWrite` grantee: Empty trash was
   // offered, the canister refused it, and the "+" button then went dead — the
-  // ownership refusal had been filed as a *write* denial. A reload cleared it,
-  // because denials are session-scoped.
+  // ownership refusal had been taken for a *write* refusal.
   const sharedWithWrite = (trash: ReturnType<typeof trashed>[]) =>
     Object.assign(
       new FakeClient(
