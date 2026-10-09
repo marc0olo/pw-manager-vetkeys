@@ -138,6 +138,37 @@ describe("a shared vault demoted while it is open", () => {
       expect(screen.queryByRole("button", { name: /^edit$/i })).not.toBeInTheDocument(),
     );
   });
+
+  it("says it was unshared, not read-only, when access was revoked outright", async () => {
+    const writer = vault({ ...shared, rights: toAccessRights("ReadWrite") });
+    const client = signedInAs(ALICE, new FakeClient(ALICE, [personal, writer], {
+      "Team infra": [item({ id: "x", title: "Grafana" })],
+    }));
+    render(<App />);
+
+    fireEvent.click(await screen.findByText("Team infra"));
+    fireEvent.click(await screen.findByText("Grafana"));
+    const edit = await screen.findByRole("button", { name: /^edit$/i });
+
+    // Revoked after the last poll: the vault leaves the listing entirely. The
+    // re-read is held open, because toasts replace each other — a wrong
+    // message shown first would be gone again by the time anything looked.
+    client.vaults = [personal];
+    client.refuse = "write";
+    let release = () => {};
+    client.listVaults.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => resolve([personal]))),
+    );
+    fireEvent.click(edit);
+    const before = client.listVaults.mock.calls.length;
+    fireEvent.click(await screen.findByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(client.listVaults.mock.calls.length).toBeGreaterThan(before));
+    expect(screen.queryByText("You have read-only access to this vault.")).not.toBeInTheDocument();
+    release();
+    expect(await screen.findByText(/no longer shared with you/)).toBeInTheDocument();
+    expect(screen.queryByText("You have read-only access to this vault.")).not.toBeInTheDocument();
+  });
 });
 
 describe("an error banner", () => {
@@ -784,8 +815,8 @@ describe("emptying the trash is the owner's, not a writer's", () => {
     fireEvent.click(screen.getByRole("button", { name: /delete permanently/i }));
 
     expect(await screen.findByText(/only the vault's owner/i)).toBeInTheDocument();
-    // The cascade. Ownership is not a capability, so refusing it must not be
-    // remembered against write — that is what killed the "+" button.
+    // An ownership refusal says nothing about writing, so nothing a write
+    // refusal withdraws may go with it — the "+" button died that way once.
     expect(screen.getByRole("button", { name: /new item/i })).not.toBeDisabled();
     // And the dialog stays usable: restoring was never what was refused.
     expect(screen.getByRole("button", { name: /^restore$/i })).toBeInTheDocument();
