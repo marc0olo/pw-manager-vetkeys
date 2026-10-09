@@ -174,8 +174,8 @@ note under **Run it locally**, and #42.
 
 | | Where | Lifetime |
 |---|---|---|
-| Internet Identity delegation | IndexedDB (`@icp-sdk/auth`) | until the idle window lapses, capped at 8 h |
-| Derived vault key material | IndexedDB, namespaced per principal | the same — purged with the delegation |
+| Internet Identity sign-in (session key, current delegation) | IndexedDB (`@icp-sdk/auth`) | until the idle window lapses, capped at 8 h — also ended at the II canister on sign-out |
+| Derived vault key material | IndexedDB, namespaced per principal | the same — purged with the sign-in |
 | Last-activity mark | `localStorage` | cleared on lock |
 | Changed-since-last-look marks | `localStorage`, per principal | survive a lock; swept for other principals on sign-in |
 
@@ -190,9 +190,10 @@ left by principals no longer recorded.
 
 **One timeout governs both open and closed time.** The app auto-locks after
 `idleMinutes` of inactivity while open; a session left closed for longer than
-that is refused on the next load, and the delegation and every cached vault key
-are purged together before anything can use them. `delegationHours` is only a
-ceiling the session cannot outlive even with continuous use.
+that is refused on the next load, and the sign-in and every cached vault key
+are purged together before anything can use them. `signInHours` is only a
+ceiling the session cannot outlive even with continuous use, and Internet
+Identity enforces it too.
 
 Both live in `SESSION_POLICY` in `src/frontend/lib/session.ts`.
 

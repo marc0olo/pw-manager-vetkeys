@@ -55,33 +55,50 @@ if (USING_LOCAL_II) {
   console.info(`[vetVault] signing in against local Internet Identity: ${IDENTITY_PROVIDER}`);
 }
 
-const SESSION_LIFETIME_NS = BigInt(SESSION_POLICY.delegationHours) * BigInt(3_600_000_000_000);
+/**
+ * The Internet Identity canister, which mints this app's delegations.
+ *
+ * The same id on a local network: icp-cli's `ii: true` installs II at its
+ * mainnet id, so only the authorize URL differs between the two.
+ */
+const II_CANISTER_ID = "rdmx6-jaaaa-aaaaa-aaadq-cai";
+
+const SIGN_IN_LIFETIME_NS = BigInt(SESSION_POLICY.signInHours) * BigInt(3_600_000_000_000);
 /** Why the vault is locked, so the lock screen can say so. */
 export type LockReason = "manual" | "idle" | "expired" | "elsewhere";
 
 export const authClient = new AuthClient({
-  identityProvider: IDENTITY_PROVIDER,
-  // The idle policy lives in ./session, which owns one activity definition for
-  // both the in-page timeout and the persisted mark. The library's IdleManager
-  // is off entirely: it is only created inside signIn()/#hydrate(), so a
-  // callback registered here would be dropped, and it is single-shot.
-  idleOptions: { disableIdle: true },
+  identityProvider: { authorizeUrl: IDENTITY_PROVIDER, canisterId: II_CANISTER_ID },
+  // The client mints its own short-lived delegations by calling the II
+  // canister, so its agent has to reach the network this app runs on — the
+  // same host and root key the backend agent uses (`VaultClient.create`).
+  agentOptions: { host: window.location.origin, rootKey: safeGetCanisterEnv()?.IC_ROOT_KEY },
 });
 
 /**
- * When the delegation stops being valid, in ms since the epoch.
+ * When the sign-in ends, in ms since the epoch, or null if nobody is signed in.
  *
- * The session ends on its own after {@link SESSION_LIFETIME_NS}; without this the
- * expiry would surface as an opaque canister rejection on the user's next action
- * instead of a clean re-lock. Returns null if the identity carries no delegation.
+ * The sign-in's own end, set by {@link SIGN_IN_LIFETIME_NS} — not the
+ * expiration of the delegation the identity holds, which is short-lived and
+ * replaced by the client as it ages. Without this the end would surface as an
+ * opaque canister rejection on the user's next action instead of a clean
+ * re-lock.
  */
-export function sessionExpiresAt(identity: Identity): number | null {
-  const delegated = identity as {
-    getDelegation?: () => { delegations: { delegation: { expiration: bigint } }[] };
-  };
-  const delegations = delegated.getDelegation?.().delegations;
-  if (!delegations?.length) return null;
-  return Math.min(...delegations.map((d) => Number(d.delegation.expiration / BigInt(1_000_000))));
+export function sessionExpiresAt(): number | null {
+  const status = authClient.getStatus();
+  return status.state === "signed-in" ? status.expiresAtMs : null;
+}
+
+/**
+ * End the stored sign-in on a refusal path, whatever the canister says.
+ *
+ * `signOut` wipes what this device holds before it reports a failed revoke at
+ * the II canister, so a failure here leaves nothing usable behind — and must
+ * not abort the load-time decision, which would lose the lock reason and show
+ * an unexplained sign-in screen. Offline is the ordinary way to get here.
+ */
+async function refuseStoredSession(): Promise<void> {
+  await signOut().catch(() => undefined);
 }
 
 /**
@@ -95,60 +112,44 @@ export function sessionExpiresAt(identity: Identity): number | null {
  * user is never shown an unexplained sign-in screen.
  */
 export async function resumeSession(): Promise<{ identity: Identity | null; lockReason: LockReason | null }> {
-  // Let the client finish restoring from storage before anything below touches
-  // it. `getIdentity()` is the only method that awaits that restore;
-  // `signOut()` does not, so the refusals below would otherwise delete storage
-  // while the constructor's restore is still reading it, and both paths would
-  // open their own IndexedDB connection (the second leaks). Both are fixed
-  // upstream in dfinity/icp-js-auth#137, merged but absent from 8.0.3 — see
-  // issue #6 for what to remove once a release carries it.
-  //
-  // The restore can also *reject*: restoreKey's storage read sits outside its
-  // try/catch, and `#initPromise` memoizes the rejection so every later
-  // `getIdentity()` rejects too. That must inform the decision, not gate it —
-  // letting it propagate would abort `resumeSession` and skip the purge, and a
-  // failing store is exactly when the purge matters most. It is also the failure
-  // mode of the very bug this workaround is for.
-  const hydrated = await authClient.getIdentity().then(
-    () => true,
-    () => false,
-  );
-
   const idleFor = idleElapsedMs();
   const hadMark = idleFor !== null;
-  // A delegation that cannot be read is not a delegation. `isAuthenticated()`
-  // only consults a localStorage mirror, so on its own it would happily report
-  // one that no longer loads.
-  const hadDelegation = hydrated && authClient.isAuthenticated();
+  // Read from the sign-in record, synchronously. An ended sign-in reads as
+  // `expired` rather than `signed-in`, so it counts as gone.
+  const signedIn = authClient.getStatus().state === "signed-in";
 
   // A missing mark is never treated as fresh: no recorded activity means no live
   // session to resume.
   if (!hadMark || idleFor > IDLE_TIMEOUT_MS) {
-    await signOut();
-    if (!hadMark && !hadDelegation) return { identity: null, lockReason: null }; // first visit
+    await refuseStoredSession();
+    if (!hadMark && !signedIn) return { identity: null, lockReason: null }; // first visit
     return { identity: null, lockReason: hadMark ? "idle" : "expired" };
   }
 
-  if (!hadDelegation) {
-    // Delegation expired or was cleared elsewhere; key material must not survive it.
-    await signOut();
+  if (!signedIn) {
+    // Sign-in expired or was cleared elsewhere; key material must not survive it.
+    await refuseStoredSession();
     return { identity: null, lockReason: "expired" };
   }
 
-  const identity = await authClient.getIdentity();
+  // Can fail although the record says signed in: a credential store that cannot
+  // be read, or a delegation that has to be minted and cannot be — offline, or
+  // the session already ended at the canister. A sign-in that cannot act is not
+  // a sign-in.
+  const identity = await authClient.getIdentity().catch(() => null);
+  if (identity === null || identity.getPrincipal().isAnonymous()) {
+    await refuseStoredSession();
+    return { identity: null, lockReason: "expired" };
+  }
   const principal = identity.getPrincipal();
-  if (principal.isAnonymous()) {
-    await signOut();
-    return { identity: null, lockReason: "expired" };
-  }
 
-  // The mark and the delegation must describe the same user. markActive
+  // The mark and the sign-in must describe the same user. markActive
   // swallows storage failures by design, so divergence is reachable — and
   // resuming on a mark that belongs to someone else is exactly the coupling
   // failure this module exists to prevent.
   const recorded = storedPrincipal();
   if (recorded !== null && recorded !== principal.toText()) {
-    await signOut();
+    await refuseStoredSession();
     return { identity: null, lockReason: "expired" };
   }
 
@@ -157,19 +158,19 @@ export async function resumeSession(): Promise<{ identity: Identity | null; lock
 
 export async function signIn(): Promise<Identity> {
   const identity = await authClient.signIn({
-    maxTimeToLive: SESSION_LIFETIME_NS,
-    // Deliberately NOT scoped with `targets`. Internet Identity does not issue
-    // canister-scoped delegations: it ignores the request and returns an
-    // unscoped chain, which @icp-sdk/signer then rejects —
-    // "Returned delegation is unscoped but scoped targets were requested" —
-    // so sign-in fails outright. Scoped delegations are an ICRC-49/57 signer
-    // feature (OISY and similar), not part of II's authorize flow.
+    maxTimeToLive: SIGN_IN_LIFETIME_NS,
+    // Not scoped to this app's canisters, and it cannot be: Internet Identity
+    // issues unscoped delegations, and `@icp-sdk/auth` no longer takes
+    // `targets` at all. (It once did, and II's unscoped answer made the signer
+    // reject it — "Returned delegation is unscoped but scoped targets were
+    // requested" — so sign-in failed outright.) Scoped delegations are an
+    // ICRC-49/57 signer feature (OISY and similar), not part of II's flow.
     //
     // Little is lost. II derives a principal per *origin*, so this principal
     // exists only for this app and holds nothing on any other canister; and the
     // IC is reverse-gas, so a leaked delegation cannot spend the user's cycles
     // by calling elsewhere. Its blast radius is already this app's own data,
-    // which is what the idle timeout and the delegation TTL bound.
+    // which is what the idle timeout and the sign-in lifetime bound.
     //
     // Revisit only if the app starts calling a canister that holds value under
     // this same principal (a ledger, say) — and note that II still could not
@@ -184,9 +185,13 @@ export async function signIn(): Promise<Identity> {
 }
 
 /**
- * Full teardown: cached vault keys first, then the delegation, then the activity
+ * Full teardown: cached vault keys first, then the sign-in, then the activity
  * mark. Every path that ends a session goes through here so key material can
  * never be left behind by one of them.
+ *
+ * Ending the sign-in also ends it at the II canister, so no delegation can be
+ * minted from it again. That call can fail after this device is already wiped,
+ * and the failure is rethrown — callers that must not stop on it catch it.
  */
 export async function signOut(options: { held?: string } = {}): Promise<void> {
   try {

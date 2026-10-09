@@ -13,6 +13,8 @@ type SignInOptions = { maxTimeToLive?: bigint; targets?: unknown[] };
 
 const authState = {
   authenticated: false,
+  /** The record names a sign-in that has ended — `getStatus()` says `expired`. */
+  expired: false,
   principal: PRINCIPAL,
   anonymous: false,
   signOutCalls: 0,
@@ -23,14 +25,18 @@ const authState = {
 
 vi.mock("@icp-sdk/auth/client", () => ({
   AuthClient: class {
-    idleManager = undefined;
     isAuthenticated() {
       return authState.authenticated;
     }
+    getStatus() {
+      if (authState.expired) return { state: "expired", expiresAtMs: Date.now() - 1 };
+      return authState.authenticated
+        ? { state: "signed-in", expiresAtMs: Date.now() + 3_600_000 }
+        : { state: "signed-out" };
+    }
     async getIdentity() {
-      // @icp-sdk/auth's #hydrate() can reject: restoreKey()'s storage read sits
-      // outside its try/catch, and #initPromise memoizes the rejection so every
-      // later call rejects too.
+      // A credential store that cannot be read, or a delegation that has to be
+      // minted and cannot be.
       if (authState.getIdentityThrows) throw new Error("The database connection is closing");
       return {
         getPrincipal: () => ({
@@ -41,8 +47,10 @@ vi.mock("@icp-sdk/auth/client", () => ({
     }
     async signOut() {
       authState.signOutCalls++;
+      // Wiped first, then a failed revoke at the canister is rethrown — the
+      // order @icp-sdk/auth uses.
       authState.authenticated = false;
-      if (authState.signOutThrows) throw new Error("storage unavailable");
+      if (authState.signOutThrows) throw new Error("revoke failed");
     }
     async signIn(options?: SignInOptions) {
       authState.signInOptions = options;
@@ -57,7 +65,7 @@ vi.mock("@icp-sdk/auth/client", () => ({
   },
 }));
 
-const { resumeSession, signIn, signOut } = await import("../auth");
+const { resumeSession, sessionExpiresAt, signIn, signOut } = await import("../auth");
 const { IDLE_TIMEOUT_MS, keyCacheName, markActive } = await import("../session");
 
 function openKeyStore(principal: string): Promise<void> {
@@ -94,6 +102,7 @@ async function given({
     window.localStorage.setItem("vetvault:last-active", String(Date.now() - markAgeMs));
   }
   authState.authenticated = authenticated;
+  authState.expired = false;
   authState.anonymous = anonymous;
   authState.principal = PRINCIPAL;
   authState.signOutCalls = 0;
@@ -180,12 +189,12 @@ describe("resumeSession", () => {
     expect(lockReason).toBeNull();
   });
 
-  // A storage failure is exactly when the purge matters most, and it is the
-  // failure mode of the unreleased upstream bug this workaround exists for
-  // (dfinity/icp-js-auth#137). It must not abort the decision.
-  it("still purges when reading the delegation store fails", async () => {
+  // Ending the sign-in also ends it at the II canister, which fails offline —
+  // after this device is wiped. It must not abort the decision, or the lock
+  // reason is lost and the user sees an unexplained sign-in screen.
+  it("still decides, and purges, when ending the sign-in at the canister fails", async () => {
     await given({ markAgeMs: 60 * 60_000, authenticated: true }); // stale mark
-    authState.getIdentityThrows = true;
+    authState.signOutThrows = true;
 
     const { identity, lockReason } = await resumeSession();
 
@@ -195,7 +204,18 @@ describe("resumeSession", () => {
     expect(window.localStorage.getItem("vetvault:last-active")).toBeNull();
   });
 
-  it("refuses rather than resuming when the delegation store cannot be read", async () => {
+  it("refuses a sign-in the record says has ended", async () => {
+    await given({ markAgeMs: 60_000, authenticated: true });
+    authState.expired = true;
+
+    const { identity, lockReason } = await resumeSession();
+
+    expect(identity).toBeNull();
+    expect(lockReason).toBe("expired");
+    expect(await keyStoreExists(PRINCIPAL)).toBe(false);
+  });
+
+  it("refuses rather than resuming when the sign-in cannot produce an identity", async () => {
     await given({ markAgeMs: 60_000, authenticated: true }); // mark is fresh
     authState.getIdentityThrows = true;
 
@@ -227,6 +247,24 @@ describe("resumeSession", () => {
   });
 });
 
+describe("sessionExpiresAt", () => {
+  // The identity's own delegation is short-lived and replaced as it ages, so
+  // reading the deadline from it would lock the vault every few minutes.
+  it("is the sign-in's end, from the sign-in record", async () => {
+    await given({ markAgeMs: 0, authenticated: true });
+    const expected = Date.now() + 3_600_000;
+
+    expect(Math.abs((sessionExpiresAt() ?? 0) - expected)).toBeLessThan(1_000);
+  });
+
+  it("is null once the sign-in has ended", async () => {
+    await given({ markAgeMs: 0, authenticated: true });
+    authState.expired = true;
+
+    expect(sessionExpiresAt()).toBeNull();
+  });
+});
+
 describe("signOut", () => {
   it("purges key material, the delegation and the mark", async () => {
     await given({ markAgeMs: 0, authenticated: true });
@@ -239,13 +277,13 @@ describe("signOut", () => {
     expect(await keyStoreExists(PRINCIPAL)).toBe(false);
   });
 
-  it("still clears the mark when the delegation store throws", async () => {
+  it("still clears the mark when ending the sign-in throws", async () => {
     // The dangerous direction is failing halfway and leaving a mark that makes a
     // dead session look live.
     await given({ markAgeMs: 0, authenticated: true });
     authState.signOutThrows = true;
 
-    await expect(signOut()).rejects.toThrow("storage unavailable");
+    await expect(signOut()).rejects.toThrow("revoke failed");
 
     expect(window.localStorage.getItem("vetvault:last-active")).toBeNull();
     expect(await keyStoreExists(PRINCIPAL)).toBe(false);
@@ -253,12 +291,10 @@ describe("signOut", () => {
 });
 
 describe("signIn", () => {
-  // Internet Identity does not issue canister-scoped delegations: it ignores a
-  // `targets` request and returns an unscoped chain, which @icp-sdk/signer then
-  // rejects with "Returned delegation is unscoped but scoped targets were
-  // requested" — sign-in fails outright. This was shipped once and only surfaced
-  // in a manual test, because the canister happily accepts a scoped delegation;
-  // it is the issuer that will not make one.
+  // Internet Identity does not issue canister-scoped delegations, and asking for
+  // one made sign-in fail outright — shipped once, and only surfaced in a manual
+  // test. `@icp-sdk/auth` no longer takes `targets`; this keeps it from coming
+  // back through an untyped call.
   it("does not request scoped targets", async () => {
     window.localStorage.clear();
     authState.anonymous = false;
@@ -269,7 +305,7 @@ describe("signIn", () => {
     expect(authState.signInOptions?.targets).toBeUndefined();
   });
 
-  it("requests the delegation lifetime from SESSION_POLICY", async () => {
+  it("requests the sign-in lifetime from SESSION_POLICY", async () => {
     const { SESSION_POLICY } = await import("../session");
     window.localStorage.clear();
     authState.anonymous = false;
@@ -277,7 +313,7 @@ describe("signIn", () => {
     await signIn();
 
     expect(authState.signInOptions?.maxTimeToLive).toBe(
-      BigInt(SESSION_POLICY.delegationHours) * BigInt(3_600_000_000_000),
+      BigInt(SESSION_POLICY.signInHours) * BigInt(3_600_000_000_000),
     );
   });
 

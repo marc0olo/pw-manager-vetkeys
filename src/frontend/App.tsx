@@ -456,7 +456,7 @@ export function App() {
   }, [identity]);
 
   // Read once: the timer below and the sidebar's read-out must agree on it.
-  const expiresAt = useMemo(() => (identity ? sessionExpiresAt(identity) : null), [identity]);
+  const expiresAt = useMemo(() => (identity ? sessionExpiresAt() : null), [identity]);
 
   // Lock exactly when the delegation stops being valid.
   useEffect(() => {

@@ -30,6 +30,7 @@ export function rejection(): Error {
   code.callContext = {
     canisterId: Principal.fromText("aaaaa-aa"),
     methodName: "get_encrypted_vetkey",
+    effectiveTarget: { canisterId: Principal.fromText("aaaaa-aa") },
     // The SDK appends the whole HTTP response, every header included, so a
     // real message runs to hundreds of characters of CBOR plumbing. Omitting
     // this is what let an unreadable banner ship: the fixture was short, so
