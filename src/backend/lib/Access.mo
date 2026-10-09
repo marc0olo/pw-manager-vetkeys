@@ -31,11 +31,11 @@ module {
 
   /// What *this caller* may do on this vault.
   ///
-  /// Reads `keyManagerState.accessControl` directly, because `get_user_rights`
-  /// requires `ReadWriteManage` — which is the upstream defect
-  /// (dfinity/vetkeys#438). That makes this a workaround rather than a fix: it
-  /// depends on the library's internal shape, so a change upstream breaks it
-  /// loudly at compile time, which is the failure mode we want.
+  /// Reads `keyManagerState.accessControl` directly, because the library's
+  /// `getUserRights` answers only a manager, so a grantee could not learn their
+  /// own rights through it. That depends on the library's internal shape, so a
+  /// change there breaks this loudly at compile time, which is the failure mode
+  /// we want.
   public func rightsOf(
     state : EncryptedMaps.EncryptedMapsState<VetKeys.AccessRights>,
     caller : Principal,

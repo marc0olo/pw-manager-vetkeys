@@ -34,11 +34,10 @@ password — the vault key is derived for your Internet Identity principal.
     promoting and demoting are the same operation, effective immediately with no
     re-derivation. A demotion is not a revocation: writes are refused at once
     while reads keep working.
-  - The library will not tell a grantee their own rights
-    ([dfinity/vetkeys#438]), so this backend does — it reads the access list it
-    already holds and reports what *you* may do. Controls match permissions from
-    the first render, with the adapt-on-refusal path kept as a fallback, since
-    the canister is still the only authority.
+  - The library only tells a manager their rights, so this backend reports
+    what *you* may do from the access list it already holds. Controls match
+    permissions from the first render. A demotion between polls is refused by
+    the canister, and the app then re-reads your rights at once.
 - **You can see which vaults changed while you were away** — a dot on the
   sidebar row, and a dot per item once you open that vault, saying whether it
   was added or edited. Your own writes are never marked, a vault seen for the

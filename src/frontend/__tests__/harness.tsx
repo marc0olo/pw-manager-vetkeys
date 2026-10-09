@@ -53,7 +53,7 @@ export class FakeClient {
   /**
    * Make derivation fail the way a canister out of cycles does, rather than
    * with a refusal. A separate flag because it is not a refusal: nothing about
-   * the user's rights has changed, and the app must not record a denial for it.
+   * the user's rights has changed, and the app must not report it as one.
    */
   outage = false;
   /** What {@link health} answers while `outage` is set. */

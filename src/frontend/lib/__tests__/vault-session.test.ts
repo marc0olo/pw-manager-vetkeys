@@ -31,10 +31,6 @@ describe("NO_VAULT_SESSION", () => {
     expect(NO_VAULT_SESSION.query).toBe("");
   });
 
-  it("remembers no refused capability, so a re-share is not shadowed by a stale denial", () => {
-    expect(NO_VAULT_SESSION.denials).toEqual([]);
-  });
-
   it("reports no sync time, so the sidebar cannot show the last session's", () => {
     expect(NO_VAULT_SESSION.syncedAt).toBeNull();
   });
@@ -70,7 +66,6 @@ describe("NO_VAULT_SESSION", () => {
       "creating",
       "deleting",
       "deletingVault",
-      "denials",
       "history",
       "itemFacts",
       "openItems",
