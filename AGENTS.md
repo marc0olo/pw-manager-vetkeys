@@ -14,3 +14,24 @@ If they are not present (hook hasn't run, or `jq` is missing), fetch them on dem
 https://skills.internetcomputer.org/llms.txt instead.
 How skills are managed here, and why: https://github.com/dfinity/icp-cli-templates/blob/main/AGENT_SKILLS.md
 <!-- ic-skills:managed:end -->
+
+## Upgrading `ic-vetkeys`
+
+The canister relies on behaviour of the Motoko `ic-vetkeys` library that its
+types do not guarantee. Before bumping it in `mops.toml`, read the release's
+changes to `KeyManager.mo` and `Types.mo` for these, and run
+`npm run check-capabilities` against a local replica afterwards:
+
+- **Reading rights needs manage rights.** `refuseOwnerTarget` in
+  `src/backend/mixins/AccessControlWrites.mo` uses `getUserRights` as its
+  permission check. If reading rights is loosened, a non-manager gets the owner
+  refusal instead of `unauthorized`. A silent change, caught only by
+  `check-capabilities`.
+- **Every refusal says exactly `unauthorized`.** The frontend's
+  `isUnauthorized` (`src/frontend/lib/capabilities.ts`) recognises that word,
+  also behind a reject prefix such as `Reject text: unauthorized`, and nothing
+  else. A reworded refusal would read as an ordinary error. Also caught by
+  `check-capabilities`, which asserts the exact text.
+- **The ACL's internal shape.** `rightsOf` in `src/backend/lib/Access.mo` reads
+  `keyManager.accessControl` directly. A change there breaks the build, which
+  is the failure you want.
