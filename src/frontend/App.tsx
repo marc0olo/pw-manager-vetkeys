@@ -6,6 +6,7 @@ import {
   sessionExpiresAt,
   signIn,
   signOut,
+  watchSignIn,
   type LockReason,
 } from "./lib/auth";
 import { lockVault } from "./lib/lock";
@@ -174,7 +175,7 @@ export function App() {
   }, []);
 
   // Resume a stored session only if it is still inside the idle window; a session
-  // left closed for longer is refused here, with its delegation and cached vault
+  // left closed for longer is refused here, with its sign-in and cached vault
   // keys purged together. See lib/session.
   useEffect(() => {
     resumeSession()
@@ -322,7 +323,7 @@ export function App() {
         await refresh();
         if (success) notify(success);
       } catch (caught) {
-        // A lock destroys the delegation, so anything in flight rejects with a
+        // A lock ends the sign-in, so anything in flight rejects with a
         // signature error. That is the lock working, not something the user did
         // wrong, and it must not surface as a banner on the lock screen.
         if (!open()) return;
@@ -383,10 +384,10 @@ export function App() {
 
   /**
    * The single way out of an unlocked vault, whether the user pressed Lock, went
-   * idle, or the delegation expired.
+   * idle, or the sign-in expired.
    *
    * Order matters and is the invariant: derived key material goes first, then the
-   * delegation, then every trace of the vault in component state. Key material
+   * sign-in, then every trace of the vault in component state. Key material
    * must never outlive the session that authorised it.
    */
   // The ref is what `lock()` reads — it must see the current session synchronously
@@ -443,22 +444,32 @@ export function App() {
   // cross-tab lock signal — see lib/session.
   useEffect(() => {
     if (!identity) return;
-    const running = startSession(identity.getPrincipal().toText(), {
+    const principal = identity.getPrincipal().toText();
+    const running = startSession(principal, {
       onIdle: () => void lockRef.current("idle"),
       onRemoteLock: () => void lockRef.current("elsewhere"),
     });
     sessionRef.current = running;
     setSession(running);
+    // The sign-in record is shared by every tab, so it can change under this
+    // one. Only while this session is the live one: `lock` clears the ref
+    // before anything else, and its own sign-out changes the record too — a
+    // second lock from that would overwrite the reason the first one gave.
+    const unwatch = watchSignIn(principal, (reason) => {
+      if (sessionRef.current === running) void lockRef.current(reason);
+    });
     return () => {
+      unwatch();
       running.stop();
       if (sessionRef.current === running) sessionRef.current = null;
     };
   }, [identity]);
 
   // Read once: the timer below and the sidebar's read-out must agree on it.
-  const expiresAt = useMemo(() => (identity ? sessionExpiresAt(identity) : null), [identity]);
+  const expiresAt = useMemo(() => (identity ? sessionExpiresAt() : null), [identity]);
 
-  // Lock exactly when the delegation stops being valid.
+  // Lock exactly when the sign-in ends — not when the short-lived delegation it
+  // currently holds does, which the client replaces before then.
   useEffect(() => {
     if (expiresAt === null) return;
     const timer = setTimeout(() => void lockRef.current("expired"), Math.max(0, expiresAt - Date.now()));

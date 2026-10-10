@@ -24,8 +24,8 @@
     "check-comments": "node scripts/check-comments.mjs"
   },
   "dependencies": {
-    "@icp-sdk/auth": "^8.0.3",
-    "@icp-sdk/core": "^5.4.0",
+    "@icp-sdk/auth": "^10.0.1",
+    "@icp-sdk/core": "^6.1.0",
     "@icp-sdk/vetkeys": "^0.7.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

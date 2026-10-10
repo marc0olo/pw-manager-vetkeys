@@ -28,8 +28,8 @@ function coarse(ms: number): string {
  * The two deadlines, both of which end in a fresh sign-in.
  *
  * They are separate because they measure different things: the idle lock slides
- * with activity, while the sign-in expiry is fixed from when the delegation was
- * issued and cannot be renewed without another Internet Identity interaction.
+ * with activity, while the sign-in expiry is fixed from when the user signed in
+ * and cannot be renewed without another Internet Identity interaction.
  * Whichever comes first is the one that fires.
  *
  * One second-interval drives both, and this is its own component so the tick

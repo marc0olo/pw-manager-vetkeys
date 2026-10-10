@@ -1,21 +1,15 @@
 /**
  * Session lifetime: one activity definition, one timeout, both halves.
  *
- * This module owns the idle policy outright rather than delegating to
- * `@icp-sdk/auth`'s `IdleManager`, for three reasons found the hard way:
+ * This module owns the idle policy rather than leaving it to Internet Identity.
+ * `@icp-sdk/auth` can end a sign-in at the II canister once it goes unused for
+ * `maxTimeToIdle`, but "unused" there means no delegation was minted — a
+ * property of the sign-in, not a measure of whether anyone is at this vault.
+ * And it ends a sign-in, not a vault: it cannot lock the UI or drop the vault
+ * keys cached on this device.
  *
- * 1. `AuthClient.idleManager` is only assigned inside `signIn()` and the async
- *    `#hydrate()`, i.e. after the constructor returns — so a callback registered
- *    at construction time is silently dropped and nothing ever locks.
- * 2. `IdleManager` is single-shot: `exit()` clears its own singleton after
- *    firing, and `signIn()` only recreates it when `idleManager` is falsy, which
- *    it no longer is. A second sign-in in one page load would get no timer.
- * 3. It listened on its own set of DOM events while this module listened on
- *    another, so the in-page timeout and the persisted mark could disagree about
- *    what "active" means.
- *
- * The page timer and the persisted mark are now fed by the *same* handler, so
- * the open-tab and closed-tab halves of the timeout cannot diverge.
+ * The page timer and the persisted mark are fed by the *same* handler, so the
+ * open-tab and closed-tab halves of the timeout cannot diverge.
  */
 
 /**
@@ -24,15 +18,16 @@
  *
  * `idleMinutes` covers **both** cases: the app auto-locks after this much
  * inactivity while open, and a session left closed for longer is refused on the
- * next load, with the delegation and cached vault keys purged together.
+ * next load, with the sign-in and cached vault keys purged together.
  *
- * `delegationHours` is only a ceiling: the delegation cannot outlive it even
- * with continuous use, so it bounds a stolen delegation regardless of the idle
- * policy.
+ * `signInHours` is only a ceiling: the sign-in cannot outlive it even with
+ * continuous use. It is passed to Internet Identity as `maxTimeToLive`, so the
+ * II canister enforces it too and mints no delegation past it, which bounds a
+ * stolen sign-in regardless of the idle policy.
  */
 export const SESSION_POLICY = {
   idleMinutes: 5,
-  delegationHours: 8,
+  signInHours: 8,
 } as const;
 
 export const IDLE_TIMEOUT_MS = SESSION_POLICY.idleMinutes * 60_000;
@@ -144,11 +139,6 @@ function deleteDatabase(name: string): Promise<void> {
       // on that name, indefinitely, which is why `purgeKeyMaterial` skips a
       // store the live client holds open. Reaching `blocked` here means we
       // decided a possible stall was better than leaving key material behind.
-      //
-      // Note that @icp-sdk/auth can leak a duplicate connection to its *own*
-      // store on concurrent first access (dfinity/icp-js-auth#137, merged but
-      // unreleased as of 8.0.3 — see issue #6); that store is not one of ours,
-      // so it cannot block these deletes.
       request.onblocked = () => resolve();
     } catch {
       resolve();
