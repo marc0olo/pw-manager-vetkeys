@@ -16,6 +16,10 @@ const authState = {
   authenticated: false,
   /** The record names a sign-in that has ended — `getStatus()` says `expired`. */
   expired: false,
+  /** Who the record names, when it names someone. */
+  recordPrincipal: PRINCIPAL,
+  /** What `subscribe()` registered, so a test can announce a change. */
+  listeners: new Set<() => void>(),
   principal: PRINCIPAL,
   anonymous: false,
   signOutCalls: 0,
@@ -32,10 +36,15 @@ vi.mock("@icp-sdk/auth/client", () => ({
       return authState.authenticated;
     }
     getStatus() {
-      if (authState.expired) return { state: "expired", expiresAtMs: Date.now() - 1 };
+      const principal = { toText: () => authState.recordPrincipal };
+      if (authState.expired) return { state: "expired", principal, expiresAtMs: Date.now() - 1 };
       return authState.authenticated
-        ? { state: "signed-in", expiresAtMs: Date.now() + 3_600_000 }
+        ? { state: "signed-in", principal, expiresAtMs: Date.now() + 3_600_000 }
         : { state: "signed-out" };
+    }
+    subscribe(listener: () => void) {
+      authState.listeners.add(listener);
+      return () => authState.listeners.delete(listener);
     }
     async getIdentity() {
       // A credential store that cannot be read, or a delegation that has to be
@@ -70,7 +79,7 @@ vi.mock("@icp-sdk/auth/client", () => ({
   },
 }));
 
-const { resumeSession, sessionExpiresAt, signIn, signOut } = await import("../auth");
+const { resumeSession, sessionExpiresAt, signIn, signOut, watchSignIn } = await import("../auth");
 const { IDLE_TIMEOUT_MS, keyCacheName, markActive } = await import("../session");
 
 function openKeyStore(principal: string): Promise<void> {
@@ -108,6 +117,8 @@ async function given({
   }
   authState.authenticated = authenticated;
   authState.expired = false;
+  authState.recordPrincipal = PRINCIPAL;
+  authState.listeners.clear();
   authState.anonymous = anonymous;
   authState.principal = PRINCIPAL;
   authState.signOutCalls = 0;
@@ -282,6 +293,52 @@ describe("sessionExpiresAt", () => {
     authState.expired = true;
 
     expect(sessionExpiresAt()).toBeNull();
+  });
+});
+
+describe("watchSignIn", () => {
+  /** Change the record, then tell subscribers — as another tab would. */
+  const announce = (change: () => void) => {
+    change();
+    for (const listener of [...authState.listeners]) listener();
+  };
+
+  async function watching() {
+    await given({ markAgeMs: 0, authenticated: true });
+    const lost = vi.fn();
+    const stop = watchSignIn(PRINCIPAL, lost);
+    return { lost, stop };
+  }
+
+  it("stays quiet while the record still names this tab's account", async () => {
+    const { lost } = await watching();
+    announce(() => {});
+    expect(lost).not.toHaveBeenCalled();
+  });
+
+  it("reports a sign-in as another account in another tab", async () => {
+    const { lost } = await watching();
+    announce(() => (authState.recordPrincipal = OTHER));
+    expect(lost).toHaveBeenCalledWith("elsewhere");
+  });
+
+  it("reports a sign-out elsewhere", async () => {
+    const { lost } = await watching();
+    announce(() => (authState.authenticated = false));
+    expect(lost).toHaveBeenCalledWith("elsewhere");
+  });
+
+  it("reports a sign-in that ended as expired", async () => {
+    const { lost } = await watching();
+    announce(() => (authState.expired = true));
+    expect(lost).toHaveBeenCalledWith("expired");
+  });
+
+  it("stops when told to", async () => {
+    const { lost, stop } = await watching();
+    stop();
+    announce(() => (authState.recordPrincipal = OTHER));
+    expect(lost).not.toHaveBeenCalled();
   });
 });
 

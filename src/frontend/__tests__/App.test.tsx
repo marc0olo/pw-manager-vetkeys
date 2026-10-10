@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
   signIn: vi.fn(),
   signOut: vi.fn(),
   createClient: vi.fn(),
+  /** What the app registered with `watchSignIn`, so a test can report a change. */
+  signInLost: null as ((reason: "expired" | "elsewhere") => void) | null,
 }));
 
 vi.mock("../lib/auth", async (importOriginal) => ({
@@ -25,6 +27,12 @@ vi.mock("../lib/auth", async (importOriginal) => ({
   signIn: h.signIn,
   signOut: h.signOut,
   sessionExpiresAt: () => Date.now() + 8 * 60 * 60 * 1000,
+  watchSignIn: (_principal: string, onLost: (reason: "expired" | "elsewhere") => void) => {
+    h.signInLost = onLost;
+    return () => {
+      if (h.signInLost === onLost) h.signInLost = null;
+    };
+  },
 }));
 
 vi.mock("../lib/vault", async (importOriginal) => ({
@@ -67,6 +75,36 @@ beforeEach(() => {
 });
 
 describe("locking", () => {
+  it("locks when another tab signs in as someone else", async () => {
+    // Every tab reads one sign-in record, so it can change under this one.
+    signedInAs(ALICE);
+    render(<App />);
+    await screen.findByText("GitHub");
+
+    act(() => h.signInLost?.("elsewhere"));
+
+    expect(await screen.findByText("Locked in another tab")).toBeInTheDocument();
+    expect(screen.queryByText("GitHub")).not.toBeInTheDocument();
+  });
+
+  it("keeps the reason of a lock already under way", async () => {
+    // A lock signs out, and that changes the shared record too. Answered with a
+    // second lock, the reason on screen would flip to "another tab". The
+    // listener is the one registered before the lock: nothing guarantees React
+    // has unsubscribed it by the time the sign-out announces the change.
+    signedInAs(ALICE);
+    render(<App />);
+    await screen.findByText("GitHub");
+    const registered = h.signInLost;
+    expect(registered).not.toBeNull();
+    h.signOut.mockImplementationOnce(async () => registered?.("elsewhere"));
+
+    fireEvent.click(screen.getByRole("button", { name: /lock vault/i }));
+
+    expect(await screen.findByText("Vault locked")).toBeInTheDocument();
+    expect(screen.queryByText("Locked in another tab")).not.toBeInTheDocument();
+  });
+
   it("leaves no decrypted secret on screen for the next principal", async () => {
     signedInAs(ALICE);
     render(<App />);

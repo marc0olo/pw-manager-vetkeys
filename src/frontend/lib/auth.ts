@@ -89,6 +89,26 @@ export function sessionExpiresAt(): number | null {
   return status.state === "signed-in" ? status.expiresAtMs : null;
 }
 
+/**
+ * Calls `onLost` once this tab's sign-in is no longer the one it unlocked with.
+ *
+ * Every tab of this origin reads one sign-in record, so it can change under an
+ * unlocked tab: signed out elsewhere, ended, or replaced by a sign-in as a
+ * different account. That last case would otherwise leave this tab's calls
+ * failing rather than locking it. A sign-out elsewhere also arrives through
+ * the app's own lock broadcast; whichever is first locks, and the caller must
+ * ignore the other.
+ *
+ * @returns A function that stops watching.
+ */
+export function watchSignIn(principal: string, onLost: (reason: LockReason) => void): () => void {
+  return authClient.subscribe(() => {
+    const status = authClient.getStatus();
+    if (status.state === "signed-in" && status.principal.toText() === principal) return;
+    onLost(status.state === "expired" ? "expired" : "elsewhere");
+  });
+}
+
 /** Whether a failure is the network's, rather than anything about the sign-in. */
 function isUnreachable(error: unknown): boolean {
   return error instanceof AgentError && error.kind === ErrorKindEnum.Transport;

@@ -6,6 +6,7 @@ import {
   sessionExpiresAt,
   signIn,
   signOut,
+  watchSignIn,
   type LockReason,
 } from "./lib/auth";
 import { lockVault } from "./lib/lock";
@@ -443,13 +444,22 @@ export function App() {
   // cross-tab lock signal — see lib/session.
   useEffect(() => {
     if (!identity) return;
-    const running = startSession(identity.getPrincipal().toText(), {
+    const principal = identity.getPrincipal().toText();
+    const running = startSession(principal, {
       onIdle: () => void lockRef.current("idle"),
       onRemoteLock: () => void lockRef.current("elsewhere"),
     });
     sessionRef.current = running;
     setSession(running);
+    // The sign-in record is shared by every tab, so it can change under this
+    // one. Only while this session is the live one: `lock` clears the ref
+    // before anything else, and its own sign-out changes the record too — a
+    // second lock from that would overwrite the reason the first one gave.
+    const unwatch = watchSignIn(principal, (reason) => {
+      if (sessionRef.current === running) void lockRef.current(reason);
+    });
     return () => {
+      unwatch();
       running.stop();
       if (sessionRef.current === running) sessionRef.current = null;
     };
