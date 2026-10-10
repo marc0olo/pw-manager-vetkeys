@@ -23,7 +23,7 @@ const LOCK_STATE: Record<LockReason, { title: string; detail: string }> = {
   idle: { title: `Locked after ${IDLE_TIMEOUT_LABEL} of inactivity`, detail: SAFE_TO_LEAVE },
   expired: {
     title: "Your sign-in expired",
-    detail: "Sign in again to unlock. Nothing was left on this device in the meantime.",
+    detail: "Sign in again to unlock. The decryption keys are gone from this browser.",
   },
   elsewhere: {
     title: "Locked in another tab",
@@ -32,7 +32,7 @@ const LOCK_STATE: Record<LockReason, { title: string; detail: string }> = {
   unreachable: {
     title: "Could not reach Internet Identity",
     detail:
-      "Resuming your sign-in needed Internet Identity, which could not be reached, so this browser was signed out. Sign in again once you are back online. Nothing was left on this device in the meantime.",
+      "Resuming your sign-in needed Internet Identity, which could not be reached, so this browser was signed out. Sign in again once you are back online. The decryption keys are gone from this browser.",
   },
 };
 
