@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { HttpFetchErrorCode, TransportError } from "@icp-sdk/core/agent";
 
 /**
  * The load-time gate: which stored sessions may be resumed, and that a refusal
@@ -21,6 +22,8 @@ const authState = {
   signOutThrows: false,
   signInOptions: undefined as SignInOptions | undefined,
   getIdentityThrows: false,
+  /** What `getIdentity()` rejects with, when it does. */
+  getIdentityError: null as Error | null,
 };
 
 vi.mock("@icp-sdk/auth/client", () => ({
@@ -37,7 +40,9 @@ vi.mock("@icp-sdk/auth/client", () => ({
     async getIdentity() {
       // A credential store that cannot be read, or a delegation that has to be
       // minted and cannot be.
-      if (authState.getIdentityThrows) throw new Error("The database connection is closing");
+      if (authState.getIdentityThrows) {
+        throw authState.getIdentityError ?? new Error("The database connection is closing");
+      }
       return {
         getPrincipal: () => ({
           toText: () => authState.principal,
@@ -108,6 +113,7 @@ async function given({
   authState.signOutCalls = 0;
   authState.signOutThrows = false;
   authState.getIdentityThrows = false;
+  authState.getIdentityError = null;
   await openKeyStore(PRINCIPAL);
 }
 
@@ -224,6 +230,20 @@ describe("resumeSession", () => {
     // A delegation that cannot be read is not a delegation.
     expect(identity).toBeNull();
     expect(lockReason).toBe("expired");
+    expect(await keyStoreExists(PRINCIPAL)).toBe(false);
+  });
+
+  // Resuming mints a new delegation once the stored one has run out, and offline
+  // that fails in transport. Still refused — but "expired" would be untrue.
+  it("says Internet Identity was unreachable when the renewal fails in transport", async () => {
+    await given({ markAgeMs: 60_000, authenticated: true });
+    authState.getIdentityThrows = true;
+    authState.getIdentityError = TransportError.fromCode(new HttpFetchErrorCode(new Error("Failed to fetch")));
+
+    const { identity, lockReason } = await resumeSession();
+
+    expect(identity).toBeNull();
+    expect(lockReason).toBe("unreachable");
     expect(await keyStoreExists(PRINCIPAL)).toBe(false);
   });
 

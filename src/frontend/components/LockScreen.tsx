@@ -29,6 +29,11 @@ const LOCK_STATE: Record<LockReason, { title: string; detail: string }> = {
     title: "Locked in another tab",
     detail: "Tabs lock together, so this one locked too. Sign in again to unlock it.",
   },
+  unreachable: {
+    title: "Could not reach Internet Identity",
+    detail:
+      "Resuming your sign-in needed Internet Identity, which could not be reached, so this browser was signed out. Sign in again once you are back online. Nothing was left on this device in the meantime.",
+  },
 };
 
 // The concept page, linked from the term itself. Point it at a how-to guide

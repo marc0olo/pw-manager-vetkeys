@@ -1,5 +1,5 @@
 import { AuthClient } from "@icp-sdk/auth/client";
-import type { Identity } from "@icp-sdk/core/agent";
+import { AgentError, ErrorKindEnum, type Identity } from "@icp-sdk/core/agent";
 import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
 import {
   SESSION_POLICY,
@@ -65,7 +65,7 @@ const II_CANISTER_ID = "rdmx6-jaaaa-aaaaa-aaadq-cai";
 
 const SIGN_IN_LIFETIME_NS = BigInt(SESSION_POLICY.signInHours) * BigInt(3_600_000_000_000);
 /** Why the vault is locked, so the lock screen can say so. */
-export type LockReason = "manual" | "idle" | "expired" | "elsewhere";
+export type LockReason = "manual" | "idle" | "expired" | "elsewhere" | "unreachable";
 
 export const authClient = new AuthClient({
   identityProvider: { authorizeUrl: IDENTITY_PROVIDER, canisterId: II_CANISTER_ID },
@@ -87,6 +87,11 @@ export const authClient = new AuthClient({
 export function sessionExpiresAt(): number | null {
   const status = authClient.getStatus();
   return status.state === "signed-in" ? status.expiresAtMs : null;
+}
+
+/** Whether a failure is the network's, rather than anything about the sign-in. */
+function isUnreachable(error: unknown): boolean {
+  return error instanceof AgentError && error.kind === ErrorKindEnum.Transport;
 }
 
 /**
@@ -133,13 +138,19 @@ export async function resumeSession(): Promise<{ identity: Identity | null; lock
   }
 
   // Can fail although the record says signed in: a credential store that cannot
-  // be read, or a delegation that has to be minted and cannot be — offline, or
-  // the session already ended at the canister. A sign-in that cannot act is not
-  // a sign-in.
-  const identity = await authClient.getIdentity().catch(() => null);
+  // be read, the session already ended at the canister, or a delegation that has
+  // to be minted and cannot be. A stored delegation with life left is adopted
+  // without a call, so that last case is a reload after it ran out — offline, or
+  // with II unreachable. A sign-in that cannot act is not a sign-in either way,
+  // but "expired" would misstate that one, so it gets its own reason.
+  let failure: unknown = null;
+  const identity = await authClient.getIdentity().catch((error: unknown) => {
+    failure = error;
+    return null;
+  });
   if (identity === null || identity.getPrincipal().isAnonymous()) {
     await refuseStoredSession();
-    return { identity: null, lockReason: "expired" };
+    return { identity: null, lockReason: isUnreachable(failure) ? "unreachable" : "expired" };
   }
   const principal = identity.getPrincipal();
 
